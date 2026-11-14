@@ -20,6 +20,7 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac memory show ID       read one stored exchange or topic in full
   almanac memory recent        the latest conversations, by project
   almanac memory forget        delete stored conversations (--project NAME | --conversation ID | --all)
+  almanac semantic [install|status|index|on|off]   search memory by meaning (optional model)
   almanac projects             projects seen; `projects merge FROM INTO`, `projects rename NAME NEW`
   almanac status               settings, files and recent activity
   almanac doctor               check that everything needed is in place
@@ -214,6 +215,62 @@ def _memory(rest):
     return 0
 
 
+def _semantic(rest):
+    from . import semantic
+
+    cmd = rest[0] if len(rest) == 1 else ""
+    if cmd in ("on", "off"):
+        config.set_value("memory.semantic", "true" if cmd == "on" else "false")
+        print(f"memory.semantic = {'true' if cmd == 'on' else 'false'}")
+    elif cmd == "install":
+        if semantic.missing():
+            print(f"almanac: missing packages: {', '.join(semantic.missing())}\n"
+                  'Install them with: pip install "getalmanac[semantic]"', file=sys.stderr)
+            return 1
+        if semantic.present():
+            print("The model is already downloaded.")
+        else:
+            print(f"Downloading {semantic.MODEL} (about 90 MB) from huggingface.co, once. This is the only time Almanac "
+                  "contacts a host other than the upstream. No conversation text is sent.", flush=True)
+            try:
+                print(f"Downloaded {semantic.download() / 1e6:.0f} MB.")
+            except Exception as exc:  # no network, a proxy, a full disk
+                print(f"almanac: the download failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+                return 1
+        if not semantic.load():
+            print("almanac: the model is there but would not load; search stays keyword-based.", file=sys.stderr)
+            return 1
+        print("Ready. New exchanges get a vector as they are stored; `almanac semantic index` does the stored ones now.")
+    elif cmd == "status":
+        cfg, memory = config.load(), _memory_handle()
+        found, model = semantic.missing(), semantic.present()
+        done, waiting = memory.dense_counts(semantic.NAME)
+        print(f"  packages   {'all installed' if not found else 'missing: ' + ', '.join(found)}")
+        print(f"  model      {'downloaded' if model else 'not downloaded (almanac semantic install)'}")
+        print(f"  setting    memory.semantic is {'on' if cfg['memory']['semantic'] else 'off'}")
+        print(f"  searching  {'by meaning (' + semantic.NAME + ') and words' if semantic.active() else 'by words only (hashed vectors)'}")
+        print(f"  vectors    {done} exchange(s) have one, {waiting} waiting")
+    elif cmd == "index":
+        if not semantic.active():
+            print("almanac: no model is active. See `almanac semantic status`.", file=sys.stderr)
+            return 1
+        memory = _memory_handle()
+        done, waiting = memory.dense_counts(semantic.NAME)
+        made = 0
+        while made < waiting:
+            step = memory.embed_pending(32)
+            if not step:
+                break
+            made += step
+            print(f"\rembedded {made} of {waiting}", end="", flush=True)
+        print(f"\rembedded {made} of {waiting} exchange(s)")
+        return 0 if made >= waiting else 1
+    else:
+        print("usage: almanac semantic [install | status | index | on | off]", file=sys.stderr)
+        return 2
+    return 0
+
+
 def _projects(rest):
     memory = _memory_handle()
     if rest[:1] == ["merge"] and len(rest) == 3:
@@ -263,7 +320,7 @@ def _version(_rest):
 
 
 COMMANDS = {"serve": _serve, "report": _report, "status": _status, "doctor": _doctor, "config": _config,
-            "version": _version, "memory": _memory, "projects": _projects, "mcp": _mcp}
+            "version": _version, "memory": _memory, "projects": _projects, "mcp": _mcp, "semantic": _semantic}
 
 
 def main(argv=None):

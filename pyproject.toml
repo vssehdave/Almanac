@@ -26,6 +26,9 @@ classifiers = [
 ]
 dependencies = []
 
+[project.optional-dependencies]
+semantic = ["onnxruntime", "tokenizers", "numpy", "huggingface_hub"]
+
 [project.urls]
 Homepage = "https://github.com/vssehdave/Almanac"
 Issues = "https://github.com/vssehdave/Almanac/issues"

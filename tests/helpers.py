@@ -9,7 +9,10 @@ import time
 import warnings
 
 warnings.simplefilter("ignore", ResourceWarning)
-os.environ.setdefault("ALMANAC_HOME", tempfile.mkdtemp(prefix="almanac-test-"))
+if "ALMANAC_HOME" not in os.environ:  # tests search by words; the ones for search by meaning say otherwise
+    os.environ["ALMANAC_HOME"] = tempfile.mkdtemp(prefix="almanac-test-")
+    with open(os.path.join(os.environ["ALMANAC_HOME"], "config.json"), "w") as _handle:
+        json.dump({"memory": {"semantic": False}}, _handle)
 for _name in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy", "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS"):
     os.environ.pop(_name, None)  # the machine's own proxy must not change what the tests connect to
 
