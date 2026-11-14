@@ -190,6 +190,15 @@ class IndexTest(Case):
         record = exchange([human(f"my key is sk-{'x' * 30}"), said("noted")])
         self.assertNotIn("x" * 30, record["text"])
 
+    def test_prune_removes_only_old_conversations(self):
+        key = self.memory.projects.see(self.alpha)
+        self.memory.index("lane-old", "s1", key, self.convo(), reply("Added it."))
+        self.memory.index("lane-new", "s2", key, [human("a fresh question about proxies")], reply("fresh answer"))
+        self.store.run("update convo set updated = updated - 400 * 86400 where lane = 'lane-old'")
+        self.assertEqual(self.memory.prune(0), 0)
+        self.assertEqual(self.memory.prune(365), 1)
+        self.assertEqual(self.memory.counts()["convos"], 1)
+
     def test_forget(self):
         key = self.memory.projects.see(self.alpha)
         self.memory.index("lane-1", "s1", key, self.convo(), reply("Added it."))

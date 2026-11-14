@@ -18,6 +18,7 @@ create table if not exists used (
 create index if not exists used_project on used (kind, project, ts);
 """
 STATE_DAYS = 45
+VERSION = 1
 
 
 class Store:
@@ -31,6 +32,8 @@ class Store:
             self.db.execute("pragma journal_mode=wal")
             self.db.execute("pragma synchronous=normal")
             self.db.executescript(SCHEMA)
+            if not self.db.execute("pragma user_version").fetchone()[0]:
+                self.db.execute(f"pragma user_version = {VERSION}")  # for migrations in later releases
             self.db.execute("delete from state where ts < ?", (time.time() - STATE_DAYS * 86400,))
 
     def run(self, sql, args=()):

@@ -366,6 +366,13 @@ class Memory:
                 self._drop_nodes([r["id"] for r in self.store.run("select id from node where project = ?", (project,))])
             return len(rows)
 
+    def prune(self, days: int) -> int:
+        """Delete conversations untouched for more than `days`. Returns how many."""
+        if not days or days <= 0:
+            return 0
+        old = self.store.run("select id from convo where updated < ?", (time.time() - days * 86400,))
+        return sum(self.forget(convo_id=row["id"]) for row in old)
+
     def merge_projects(self, source, target):
         with self.store.lock:
             self.projects.merge(source, target)
