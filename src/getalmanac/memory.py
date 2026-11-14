@@ -12,6 +12,7 @@ same project that match its first message are added to that message once, and
 kept byte for byte from then on.
 """
 import hashlib
+import json
 import re
 import time
 
@@ -33,8 +34,10 @@ create table if not exists node (
 create index if not exists node_convo on node (convo, kind, seq);
 create index if not exists node_project on node (project, kind, ts);
 create virtual table if not exists node_fts using fts5(title, text, tokenize='porter unicode61');
+create table if not exists detail (node integer primary key, text text not null);
 """
 TOPIC_BAR = 0.22  # cosine above which an exchange joins an existing topic
+DETAIL_LIMIT = 30000  # most characters of one exchange's full transcript kept for reading back
 BACKFILL = 400  # most exchanges indexed from one resumed conversation
 _TAG = re.compile(r"</?[a-zA-Z][\w-]{0,40}>")
 _SECRETS = [
@@ -91,7 +94,37 @@ def exchange(group) -> dict:
     if files:
         notes.append("Files: " + ", ".join(files[:12]))
     text = f"Asked: {human}\n\nAnswer: {answer}" + ("\n\n" + ". ".join(notes) if notes else "")
-    return {"title": _first_line(human), "text": text, "mark": hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()}
+    return {"title": _first_line(human), "text": text, "answer": answer, "notes": ". ".join(notes),
+            "mark": hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()}
+
+
+def transcript(group, limit=DETAIL_LIMIT, result_chars=1500) -> str:
+    """One exchange as readable text: what was typed, each reply, each tool call and its result."""
+    lines = []
+    for msg in group:
+        if msg.get("role") == "user" and not rq.is_tool_result(msg):
+            typed = clean(rq.human_text(msg))
+            if typed:
+                lines.append("User: " + typed)
+            continue
+        for block in rq.blocks(msg):
+            kind = block.get("type")
+            if kind == "text" and (block.get("text") or "").strip() and msg.get("role") == "assistant":
+                lines.append("Assistant: " + clean(block["text"]))
+            elif kind == "tool_use":
+                lines.append(f"[tool {block.get('name')}] " + clean(json.dumps(block.get("input"), ensure_ascii=False))[:600])
+            elif kind == "tool_result":
+                inner = block.get("content")
+                if isinstance(inner, list):
+                    inner = "\n".join(x.get("text") or "" for x in inner if isinstance(x, dict) and x.get("type") == "text")
+                inner = clean(str(inner or ""))
+                if len(inner) > result_chars:
+                    inner = inner[:result_chars] + f" ... ({len(inner) - result_chars} more characters not kept)"
+                lines.append("[result] " + inner)
+    text = "\n".join(lines)
+    if len(text) > limit:  # keep the start and the end: the request and how it finished
+        text = text[: limit // 3] + "\n... (middle of this exchange not kept) ...\n" + text[-(2 * limit // 3):]
+    return text
 
 
 def snippet(text: str, terms: set, limit=230) -> str:
@@ -124,6 +157,7 @@ class Memory:
     def _drop_nodes(self, ids):
         for node_id in ids:
             self.store.run("delete from node_fts where rowid = ?", (node_id,))
+            self.store.run("delete from detail where node = ?", (node_id,))
             self.store.run("delete from node where id = ?", (node_id,))
 
     def _add_node(self, convo, project, parent, kind, seq, title, text, mark, vec) -> int:
@@ -159,12 +193,16 @@ class Memory:
                 best, score = topic["id"], similarity
         return best or self._add_node(convo_id, project, None, "topic", seq, title, "", "", vec)
 
-    def index(self, lane, session, project, messages, reply=None) -> int:
-        """Store the finished exchanges of a conversation. Returns how many were written."""
+    def index(self, lane, session, project, messages, reply=None, finished=False) -> int:
+        """Store the finished exchanges of a conversation. Returns how many were written.
+
+        The last exchange counts as finished when `reply` ended the turn, or when the
+        caller says so (the messages stop just before a new human turn).
+        """
         turns = rq.human_turns(messages)
         if not turns:
             return 0
-        finished = reply is not None and reply.get("stop_reason") != "tool_use"
+        finished = finished or (reply is not None and reply.get("stop_reason") != "tool_use")
         with self.store.lock:
             convo = self._convo(lane, session, project, _first_line(clean(rq.human_text(messages[turns[0]]))))
             stale = [r["id"] for r in self.store.run(
@@ -183,7 +221,7 @@ class Memory:
                 if last and not finished:
                     break
                 end = turns[seq + 1] if not last else len(messages)
-                group = messages[turns[seq]:end] + ([{"role": "assistant", "content": reply["content"]}] if last else [])
+                group = messages[turns[seq]:end] + ([{"role": "assistant", "content": reply["content"]}] if last and reply else [])
                 record = exchange(group)
                 last_project = self.projects.for_turn(group, last_project)
                 old = self.store.run("select id, mark, parent from node where convo = ? and kind = 'leaf' and seq = ?",
@@ -195,7 +233,8 @@ class Memory:
                     touched.add(old[0]["parent"])
                 vec = embed.embed(record["title"] + "\n" + record["text"])
                 topic = self._topic_for(convo["id"], last_project, seq, record["title"], vec)
-                self._add_node(convo["id"], last_project, topic, "leaf", seq, record["title"], record["text"], record["mark"], vec)
+                leaf = self._add_node(convo["id"], last_project, topic, "leaf", seq, record["title"], record["text"], record["mark"], vec)
+                self.store.run("insert or replace into detail (node, text) values (?, ?)", (leaf, transcript(group)))
                 touched.add(topic)
                 written += 1
             for topic in touched - {None}:
@@ -242,6 +281,16 @@ class Memory:
         if exclude_lane:
             sql, args = sql + " and lane != ?", args + [exclude_lane]
         return [dict(r) for r in self.store.run(sql + " order by updated desc limit ?", args + [limit])]
+
+    def detail(self, node_id: int) -> str:
+        """The full transcript kept for an exchange, or ""."""
+        rows = self.store.run("select text from detail where node = ?", (node_id,))
+        return rows[0]["text"] if rows else ""
+
+    def leaves(self, lane: str) -> dict:
+        """seq -> node id for the stored exchanges of one conversation."""
+        return {r["seq"]: r["id"] for r in self.store.run(
+            "select n.seq, n.id from node n join convo c on c.id = n.convo where c.lane = ? and n.kind = 'leaf'", (lane,))}
 
     def read(self, node_id: int):
         """One node with what is under it: a topic's exchanges, or an exchange's full text."""

@@ -23,7 +23,9 @@ TOOLS = [
     {"name": "memory_read",
      "description": "Read one stored item in full by id: an exchange (the question, the final answer, tools and "
                     "files), or a topic with the exchanges under it.",
-     "inputSchema": {"type": "object", "required": ["id"], "properties": {"id": {"type": "integer"}}}},
+     "inputSchema": {"type": "object", "required": ["id"], "properties": {
+         "id": {"type": "integer"},
+         "full": {"type": "boolean", "description": "Also return the exchange's transcript: every reply, tool call and result that was kept"}}}},
     {"name": "memory_projects",
      "description": "List the projects Almanac has memory for, and each one's most recent conversations.",
      "inputSchema": {"type": "object", "properties": {}}},
@@ -75,7 +77,11 @@ def call(memory, name, args, cwd) -> str:
         return render_hits(memory.search(str(args.get("query") or ""), project=project,
                                          limit=max(1, min(20, int(args.get("limit") or 8)))))
     if name == "memory_read":
-        return render_node(memory, memory.read(int(args.get("id") or 0)))
+        node_id = int(args.get("id") or 0)
+        text = render_node(memory, memory.read(node_id))
+        if args.get("full") and memory.detail(node_id):
+            text += "\n\nTranscript:\n" + memory.detail(node_id)
+        return text
     if name == "memory_projects":
         return render_projects(memory)
     raise KeyError(name)
