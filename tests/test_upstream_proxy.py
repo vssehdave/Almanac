@@ -290,7 +290,7 @@ class LauncherTest(unittest.TestCase):
 
     @unittest.skipUnless(tls.find_openssl(), "needs the openssl program")
     def test_https_mode_still_starts_behind_an_http_proxy(self):
-        with mock.patch.dict(os.environ, self.PARENT):
+        with mock.patch.dict(os.environ, {**self.PARENT, "PATH": os.environ.get("PATH", "")}):  # openssl is found on PATH
             session = launcher.https_session({**config.load(), "remote_control": True})
         self.assertIsNotNone(session)
         session.close()
