@@ -193,12 +193,44 @@ itself. It does that as narrowly as it can:
   cannot use it.
 
 It needs the `openssl` program (Git for Windows, macOS and Linux ship it) and
-steps aside with a one-line notice if you already use a proxy.
+steps aside with a one-line notice if you use a proxy it cannot go through
+(see below). A corporate `http://` proxy is fine: Almanac keeps using it.
 
 **Status:** tested as far as a model request going through the mode and
 `/remote-control` appearing in the command menu. A Remote Control session
 driven from a phone has not been tested yet, which is why the mode is off by
 default.
+
+## Behind a corporate proxy
+
+If your network sends outbound traffic through an HTTP proxy, Almanac goes
+through it too. It looks for the proxy in this order:
+
+1. The `upstream_proxy` setting.
+2. `HTTPS_PROXY`, then `ALL_PROXY`, from the environment you start `almanac` in.
+
+`NO_PROXY` is honoured, so a host listed there is reached directly. Almanac
+does not use the proxy for Claude Code's own traffic to Almanac. It adds
+`localhost` and `127.0.0.1` to `NO_PROXY` for Claude Code.
+
+```bash
+almanac config set upstream_proxy http://proxy.example.com:3128
+```
+
+- Only `http://` proxies (the usual CONNECT kind) work. `socks5://` and
+  `https://` proxies are reported by `almanac doctor` as not supported.
+- A login in the URL (`http://user:pass@host:3128`) is sent as basic proxy
+  authentication. It is kept in memory only. Almanac never writes it to its
+  store or logs, and prints the proxy as `host:port`. Setting it in the
+  environment keeps it out of `config.json` as well.
+- Basic authentication only. NTLM and Kerberos proxies are not supported.
+- If the proxy re-signs HTTPS traffic with a company certificate, Almanac must
+  trust that certificate. It trusts the file named by `upstream_ca`,
+  `SSL_CERT_FILE` or `NODE_EXTRA_CA_CERTS` (the one Claude Code reads) as well
+  as the system's. Verification is never turned off.
+- `almanac doctor` shows which proxy is used and where it came from, whether
+  an extra certificate file loaded, and whether a connection through the proxy
+  works.
 
 ## Commands
 
@@ -240,6 +272,8 @@ default.
 | `remote_control` | `false` | Run sessions in HTTPS-proxy mode |
 | `port` | `8787` | Where `almanac serve` listens |
 | `upstream` | `https://api.anthropic.com` | Where requests are sent |
+| `upstream_proxy` | `""` | Corporate `http://` proxy to reach the upstream through. Empty uses `HTTPS_PROXY` |
+| `upstream_ca` | `""` | Extra certificate file to trust for the upstream |
 
 For one run, `ALMANAC_DISABLE=skills,tools,memory,compaction` (or `all`) turns
 layers off, and `ALMANAC_HOME` moves the files.
@@ -286,7 +320,9 @@ While it runs, `almanac` shares it. Other clients can use it by setting
 
 - Matching and memory search are keyword-based. There is no semantic search yet.
 - Summaries are written by rule, so they are plainer than model-written ones.
-- A corporate HTTPS proxy between you and Anthropic is not supported yet.
+- Corporate proxies must be plain `http://` ones with no login or a basic login. A company certificate
+  that re-signs HTTPS is trusted only if you point to its file. That setup is
+  tested with a fake proxy, not a real company network.
 - Tested on Windows with a Claude subscription login. The test suite also runs
   on macOS and Linux, but live sessions there have not been tried.
 - Claude Code's request format is not a published contract. Almanac looks for
