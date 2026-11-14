@@ -4,8 +4,9 @@
 
 An exchange is one thing the person asked plus how it ended (the final answer,
 the tools used, the files touched). Exchanges on the same subject are grouped
-under a topic by similarity. Everything is written by rule, with no model, and
-lives in the SQLite file on this machine.
+under a topic by similarity. Everything is first written by rule; summarize.py
+later replaces an exchange's title and adds a short summary written by a small
+model. It all lives in the SQLite file on this machine.
 
 When a new conversation starts, the exchanges from earlier conversations in the
 same project that match its first message are added to that message once, and
@@ -29,7 +30,7 @@ create table if not exists convo (
 create table if not exists node (
     id integer primary key, convo integer not null, project text not null, parent integer,
     kind text not null, seq integer not null, ts real not null, title text not null, text text not null,
-    mark text not null default '', vec blob
+    mark text not null default '', vec blob, summary text not null default '', tries integer not null default 0
 );
 create index if not exists node_convo on node (convo, kind, seq);
 create index if not exists node_project on node (project, kind, ts);
@@ -144,6 +145,10 @@ class Memory:
         self.store = store
         with store.lock:
             store.db.executescript(SCHEMA)
+            have = {r["name"] for r in store.run("pragma table_info(node)")}
+            for column, ddl in (("summary", "text not null default ''"), ("tries", "integer not null default 0")):
+                if column not in have:  # a database written before model summaries
+                    store.run(f"alter table node add column {column} {ddl}")
         self.projects = Projects(store)
 
     # ---- writing -------------------------------------------------------------
@@ -170,13 +175,13 @@ class Memory:
 
     def _refresh_topic(self, topic_id):
         """Rebuild a topic's text and vector from the exchanges under it; drop it when empty."""
-        leaves = self.store.run("select title, text, vec from node where parent = ? order by seq", (topic_id,))
+        leaves = self.store.run("select title, text, vec, summary from node where parent = ? order by seq", (topic_id,))
         if not leaves:
             return self._drop_nodes([topic_id])
         lines = []
         for leaf in leaves:
             answer = leaf["text"].split("\n\nAnswer: ", 1)[-1].split("\n\n", 1)[0]
-            lines.append(f"- {leaf['title']}: {_first_line(answer, 160)}")
+            lines.append(f"- {leaf['title']}: {_first_line(leaf['summary'] or answer, 160)}")
         text = "\n".join(lines)[:1800]
         vec = embed.mean([embed.unpack(leaf["vec"]) for leaf in leaves])
         title = leaves[0]["title"]
@@ -184,6 +189,18 @@ class Memory:
                        (title, text, embed.pack(vec), time.time(), topic_id))
         self.store.run("delete from node_fts where rowid = ?", (topic_id,))
         self.store.run("insert into node_fts (rowid, title, text) values (?, ?, ?)", (topic_id, title, text))
+
+    def set_summary(self, node_id, title, summary):
+        """Give an exchange a model-written title and summary. The summary joins its searchable text."""
+        with self.store.lock:
+            rows = self.store.run("select parent, text from node where id = ? and kind = 'leaf' and summary = ''", (node_id,))
+            if not rows:  # gone (the conversation was rewound) or already done
+                return
+            text = "Summary: " + summary + "\n\n" + rows[0]["text"]
+            self.store.run("update node set title = ?, text = ?, summary = ? where id = ?", (title, text, summary, node_id))
+            self.store.run("delete from node_fts where rowid = ?", (node_id,))
+            self.store.run("insert into node_fts (rowid, title, text) values (?, ?, ?)", (node_id, title, text))
+            self._refresh_topic(rows[0]["parent"])
 
     def _topic_for(self, convo_id, project, seq, title, vec) -> int:
         best, score = None, TOPIC_BAR
@@ -291,6 +308,12 @@ class Memory:
         """seq -> node id for the stored exchanges of one conversation."""
         return {r["seq"]: r["id"] for r in self.store.run(
             "select n.seq, n.id from node n join convo c on c.id = n.convo where c.lane = ? and n.kind = 'leaf'", (lane,))}
+
+    def summaries(self, lane: str) -> dict:
+        """seq -> (title, summary) for the exchanges of one conversation that a model has summarized."""
+        return {r["seq"]: (r["title"], r["summary"]) for r in self.store.run(
+            "select n.seq, n.title, n.summary from node n join convo c on c.id = n.convo "
+            "where c.lane = ? and n.kind = 'leaf' and n.summary != ''", (lane,))}
 
     def read(self, node_id: int):
         """One node with what is under it: a topic's exchanges, or an exchange's full text."""

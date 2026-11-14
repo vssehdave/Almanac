@@ -32,6 +32,8 @@ DEFAULTS = {
         "recall_chars": 2400,  # most characters of memory added to a new conversation
         "tools": True,  # give Claude Code the memory_search / memory_read tools
         "keep_days": 365,  # conversations untouched for longer are deleted; 0 keeps everything
+        "summary_model": "claude-haiku-5-5",  # writes each exchange's title and summary in the background; "" keeps rule-written text
+        "summary_daily_calls": 300,  # most summary calls per day
     },
     "compaction": {
         "enabled": True,

@@ -125,9 +125,20 @@ message are added to that message, along with the titles of the project's most
 recent conversations. Claude Code also gets three read-only tools to look
 further: `memory_search`, `memory_read` and `memory_projects`.
 
-Summaries are built by rule. No model writes them, so nothing extra is sent
-anywhere and nothing extra is billed. Obvious secrets (API keys, tokens, private
-keys, `password=` values) are removed before text is stored.
+Each exchange is first stored with a title and text written by rule. In the
+background, a small model (`memory.summary_model`, Haiku by default) then
+replaces the title and adds a one to three sentence summary of what was done,
+what was decided or found, and which files were touched. The call goes to the
+same upstream as your session, with the login your session already uses. It
+costs a little of your allowance: a few hundred tokens per exchange, at most
+`memory.summary_daily_calls` calls a day. Nothing goes to any other host. If a
+call fails, the rule-written text stays, and each exchange is tried at most
+three times. A rate-limit or login error pauses summary calls for an hour. Set
+`memory.summary_model` to `""` to turn this off. `almanac status` shows how many
+exchanges have a model-written summary and what today's calls used.
+
+Obvious secrets (API keys, tokens, private keys, `password=` values) are removed
+before text is stored, including from model-written summaries.
 
 ### 3. Compaction that keeps the cache
 
@@ -143,9 +154,10 @@ Anthropic's prompt cache keeps hitting. It is rebuilt only after the
 conversation has grown a good deal again, and thrown away if you rewind or edit
 the covered messages.
 
-The summary is written by rule, not by a model, so it is plainer than what
-`/compact` produces. To make up for that, each exchange's transcript is kept in
-the local memory and Claude can read any of them back by number. Compaction
+The outline of earlier exchanges is built from the stored summaries: the
+model-written ones when they exist, the rule-written ones otherwise. It is
+plainer than what `/compact` produces, so each exchange's transcript is also
+kept in the local memory and Claude can read any of them back by number. Compaction
 happens only when you send a message. During a long tool loop Claude Code's own
 compaction still applies. If your model has a larger window, raise the trigger:
 
@@ -266,6 +278,8 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `memory.recall` | `true` | Add related memory to a new conversation |
 | `memory.tools` | `true` | Give Claude Code the memory tools |
 | `memory.keep_days` | `365` | Delete conversations untouched this long (`0` keeps all) |
+| `memory.summary_model` | `claude-haiku-5-5` | Model that writes exchange summaries in the background (`""` turns it off) |
+| `memory.summary_daily_calls` | `300` | Most summary calls per day |
 | `compaction.enabled` | `true` | Compact long conversations |
 | `compaction.trigger_tokens` | `150000` | Size that starts a compaction |
 | `compaction.target_tokens` | `40000` | Most the summary may take |
@@ -319,7 +333,9 @@ While it runs, `almanac` shares it. Other clients can use it by setting
 ## Limits
 
 - Matching and memory search are keyword-based. There is no semantic search yet.
-- Summaries are written by rule, so they are plainer than model-written ones.
+- Summaries are written by a small model in the background, so a new exchange
+  has its rule-written text until the call finishes, and a failed call leaves it.
+  Summary calls use a little of your allowance.
 - Corporate proxies must be plain `http://` ones with no login or a basic login. A company certificate
   that re-signs HTTPS is trusted only if you point to its file. That setup is
   tested with a fake proxy, not a real company network.
