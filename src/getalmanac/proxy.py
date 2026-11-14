@@ -33,10 +33,14 @@ UPSTREAM_TIMEOUT = 900
 
 
 class Ctx:
-    """What the layers know about one request. Holds no credentials."""
+    """What the layers know about one request.
 
-    def __init__(self, proxy, headers, kind):
-        self.cfg, self.store, self.kind = proxy.cfg, proxy.store, kind
+    `headers` holds the request's own headers, login included, for background jobs that call
+    the upstream as the same user. It lives in memory until the job ends and is never written.
+    """
+
+    def __init__(self, proxy, headers, kind, sent=None):
+        self.cfg, self.store, self.kind, self.proxy, self.headers = proxy.cfg, proxy.store, kind, proxy, dict(sent or {})
         self.session = headers.get("x-claude-code-session-id") or ""
         self.agent = headers.get("x-claude-code-agent-id") or headers.get("x-claude-code-parent-agent-id") or ""
         self.klass = headers.get("x-claude-code-request-class") or ""
@@ -152,7 +156,7 @@ class Proxy:
                 self._jobs.task_done()
 
     def drain(self, timeout=10.0):
-        """Wait for background work (indexing) to finish. For shutdown and tests."""
+        """Wait for background work (indexing, summaries) to finish. For shutdown and tests."""
         end = time.time() + timeout
         while self._jobs.unfinished_tasks and time.time() < end:
             time.sleep(0.02)
@@ -335,7 +339,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         kind = ROUTES.get(route) if self.command == "POST" else None
         marks = {k.lower(): v for k, v in self.headers.items() if k.lower().startswith("x-claude-code-")}
         # Only Claude Code's own model requests are touched; they always carry a session id.
-        ctx = Ctx(proxy, marks, kind) if kind and marks.get("x-claude-code-session-id") else None
+        ctx = Ctx(proxy, marks, kind, self.headers.items()) if kind and marks.get("x-claude-code-session-id") else None
         started = time.time()
         sent, orig = proxy.rewrite(raw, ctx) if ctx else (raw, None)
         try:
@@ -410,11 +414,12 @@ def build(cfg=None) -> Proxy:
     from .memory import Memory, MemoryLayer, ProjectLayer
     from .startup import SkillsLayer, ToolsLayer
     from .store import Store
+    from .summarize import SummaryLayer
 
     cfg = cfg or config.load()
     store = Store(config.home() / "almanac.db")
     memory = Memory(store)
     memory.prune(cfg["memory"]["keep_days"])
     # Order matters: the project first, then the history is settled, then the parts inside it.
-    layers = [ProjectLayer(memory), CompactLayer(memory), MemoryLayer(memory), SkillsLayer(), ToolsLayer()]
+    layers = [ProjectLayer(memory), CompactLayer(memory), MemoryLayer(memory), SkillsLayer(), ToolsLayer(), SummaryLayer(memory)]
     return Proxy(cfg or config.load(), store=store, layers=layers)

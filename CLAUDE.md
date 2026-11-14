@@ -9,18 +9,22 @@ body, in three ways:
    schemas are deferred. Each loads in full when a message needs it.
 2. **Project memory.** Conversations are indexed into a local SQLite tree,
    grouped by project. The project is worked out from the files a conversation
-   touches, not only from the folder it started in.
+   touches, not only from the folder it started in. Summaries start out written
+   by rule; a small model then rewrites them in the background through the same
+   upstream and login, using a little of the user's allowance.
 3. **Compaction.** Near the context limit the history is compressed once and
    the compressed prefix is kept byte for byte, so the prompt cache keeps
-   hitting.
+   hitting. Its outline is built from the stored summaries.
 
 ## Rules that hold everywhere
 
 - **Fully local.** The only network peer is the upstream the user's Claude Code
   already talks to. No other host receives conversation content. Never add a
-  hosted service or telemetry.
+  hosted service or telemetry. Summary calls go to that same upstream, and
+  `memory.summary_model` set to `""` turns them off.
 - **Never read, store or log credentials.** Auth headers are forwarded as
-  received and never written anywhere.
+  received and never written anywhere. A background summary call holds them in
+  memory for the length of the job only.
 - **Fail open.** If a transform raises, or the upstream rejects a transformed
   body, the original request goes out unchanged.
 - **Deterministic rewrites.** The same request must always be rewritten to the

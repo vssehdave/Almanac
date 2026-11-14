@@ -8,7 +8,7 @@ import sys
 import time
 from urllib.parse import urlsplit
 
-from . import __version__, config, launcher, report, upstream
+from . import __version__, config, launcher, report, summarize, upstream
 
 USAGE = """almanac: a local proxy for Claude Code
 
@@ -86,8 +86,10 @@ def _status(_rest):
               f"about {totals['saved_tokens']:,} input tokens kept out")
     else:
         print("  no requests recorded yet")
-    counts = _memory_handle().counts()
+    memory = _memory_handle()
+    counts = memory.counts()
     print(f"  memory     {counts['convos']} conversation(s), {counts['exchanges']} exchange(s), {counts['topics']} topic(s)")
+    print(f"  summaries  {summarize.line(memory, cfg)}")
     return 0
 
 

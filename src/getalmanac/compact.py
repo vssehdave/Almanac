@@ -13,8 +13,9 @@ followed by the messages that came after it, so the prompt cache keeps hitting.
 It is rebuilt only when the conversation outgrows the trigger again, and dropped
 if the covered messages change (a rewind or an edit).
 
-The summary is written by rule, with no model. What it leaves out stays
-readable: each exchange's transcript is in the local memory, one tool call away.
+The outline is built from the stored titles and summaries: a small model's when
+it has written them (see summarize.py), the rule-written ones otherwise. What it
+leaves out stays readable: each exchange's transcript is in the local memory, one tool call away.
 Compaction happens only at a human turn. Inside a long tool loop Claude Code's
 own compaction still applies.
 """
@@ -28,7 +29,7 @@ from .memory import _first_line, exchange, transcript
 
 CHARS_PER_TOKEN = 3.0  # conservative: real text runs a little over 3 characters a token
 HEADER = ("Almanac compacted this conversation to keep it inside the context window. The messages before this "
-          "point were replaced by the summary below, which was written by rule and can miss detail. Each earlier "
+          "point were replaced by the summary below, which was condensed from the exchanges and can miss detail. Each earlier "
           "exchange is stored on this machine: when a detail matters, read it with the almanac memory tools "
           "(load them with ToolSearch; memory_read with full=true returns an exchange's transcript by its number "
           "in brackets). Tell the user once, in one short line, that earlier messages were compacted.")
@@ -68,8 +69,9 @@ def _groups(messages, turns):
         yield seq, messages[start:end]
 
 
-def build_prefix(messages, covered, ids, budget_chars) -> list:
-    """The messages that stand in for `messages[:covered]`."""
+def build_prefix(messages, covered, ids, budget_chars, told=None) -> list:
+    """The messages that stand in for `messages[:covered]`. `told` maps seq -> (title, summary) written by a model."""
+    told = told or {}
     old = messages[:covered]
     turns = rq.human_turns(old)
     groups = list(_groups(old, turns))
@@ -91,7 +93,8 @@ def build_prefix(messages, covered, ids, budget_chars) -> list:
     outline, room = [], budget_chars - used - len(HEADER) - 400
     for seq, group in reversed(groups[:first_full]):
         record = exchange(group)
-        line = f"- {tag(seq)}{record['title']} -> {_first_line(record['answer'], 200)}"
+        title, said = told.get(seq) or (record["title"], _first_line(record["answer"], 200))
+        line = f"- {tag(seq)}{title} -> {said}"
         if record["notes"]:
             line += f" ({_first_line(record['notes'], 160)})"
         if len(line) > room:
@@ -173,11 +176,11 @@ class CompactLayer:
                                    "prefix_chars": len(json.dumps(state["prefix"], ensure_ascii=False))}
 
     def _compact(self, ctx, messages, covered, cfg) -> dict:
-        ids = {}
+        ids, told = {}, {}
         if ctx.cfg["memory"]["enabled"]:  # make sure every covered exchange can be read back
             self.memory.index(ctx.lane, ctx.session, ctx.project, messages[:covered], finished=True)
-            ids = self.memory.leaves(ctx.lane)
-        prefix = build_prefix(messages, covered, ids, int(cfg["target_tokens"] * CHARS_PER_TOKEN))
+            ids, told = self.memory.leaves(ctx.lane), self.memory.summaries(ctx.lane)
+        prefix = build_prefix(messages, covered, ids, int(cfg["target_tokens"] * CHARS_PER_TOKEN), told)
         state = {"covered": covered, "hash": fingerprint(messages[:covered]), "prefix": prefix, "ts": time.time()}
         ctx.store.put(f"compact:{ctx.lane}", state)
         ctx.store.run("delete from state where key = ?", (f"usage:{ctx.lane}",))  # the old count no longer describes it

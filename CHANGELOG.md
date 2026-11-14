@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Model-written summaries.** A small model (`memory.summary_model`, Haiku by
+  default) now writes each stored exchange's title and a short summary in the
+  background. The call uses the same upstream and the login the session already
+  carries, and that login is never stored. It uses a little of your allowance:
+  at most `memory.summary_daily_calls` calls a day, paused for an hour on a
+  rate-limit or login error. A failed call keeps the rule-written text.
+  Compaction outlines and recall use the new text. Set `memory.summary_model`
+  to `""` to turn it off. `almanac status` shows the counts.
 - **Corporate proxy.** Almanac now reaches the upstream through an `http://`
   proxy: the new `upstream_proxy` setting, else `HTTPS_PROXY` or `ALL_PROXY`,
   with `NO_PROXY` honoured. A login in the URL is sent as basic proxy
