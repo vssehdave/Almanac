@@ -23,7 +23,7 @@ DEFAULTS = {
         "enabled": True,
         "recall": True,
         "recall_chars": 2400,  # most characters of memory added to a new conversation
-        "embedder": "auto",  # auto | hash | onnx
+        "tools": True,  # give Claude Code the memory_search / memory_read tools
     },
     "compaction": {
         "enabled": True,

@@ -276,8 +276,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 def build(cfg=None) -> Proxy:
     """A proxy with every layer attached. Each layer reads its own on/off setting."""
+    from .memory import Memory, MemoryLayer, ProjectLayer
     from .startup import SkillsLayer, ToolsLayer
     from .store import Store
 
     store = Store(config.home() / "almanac.db")
-    return Proxy(cfg or config.load(), store=store, layers=[SkillsLayer(), ToolsLayer()])
+    memory = Memory(store)
+    layers = [ProjectLayer(memory), MemoryLayer(memory), SkillsLayer(), ToolsLayer()]
+    return Proxy(cfg or config.load(), store=store, layers=layers)

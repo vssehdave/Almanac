@@ -15,6 +15,11 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac claude [arguments]   the same, for arguments that clash with a command below
   almanac serve [--port N]     run only the proxy, for clients you start yourself
   almanac report [--json]      where the latest session's context went, and what was kept out
+  almanac memory search WORDS  search stored conversations (--project NAME, --all)
+  almanac memory show ID       read one stored exchange or topic in full
+  almanac memory recent        the latest conversations, by project
+  almanac memory forget        delete stored conversations (--project NAME | --conversation ID | --all)
+  almanac projects             projects seen; `projects merge FROM INTO`, `projects rename NAME NEW`
   almanac status               settings, files and recent activity
   almanac doctor               check that everything needed is in place
   almanac config [set KEY VALUE | path]
@@ -74,6 +79,8 @@ def _status(_rest):
               f"about {totals['saved_tokens']:,} input tokens kept out")
     else:
         print("  no requests recorded yet")
+    counts = _memory_handle().counts()
+    print(f"  memory     {counts['convos']} conversation(s), {counts['exchanges']} exchange(s), {counts['topics']} topic(s)")
     return 0
 
 
@@ -130,13 +137,105 @@ def _config(rest):
     return 0
 
 
+def _memory_handle():
+    from .memory import Memory
+    from .store import Store
+
+    return Memory(Store(config.home() / "almanac.db"))
+
+
+def _memory(rest):
+    import os
+
+    from . import mcp
+
+    parser = argparse.ArgumentParser(prog="almanac memory")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    search = sub.add_parser("search")
+    search.add_argument("words", nargs="+")
+    search.add_argument("--project")
+    search.add_argument("--all", action="store_true")
+    search.add_argument("--limit", type=int, default=8)
+    sub.add_parser("show").add_argument("id", type=int)
+    sub.add_parser("recent")
+    forget = sub.add_parser("forget")
+    group = forget.add_mutually_exclusive_group(required=True)
+    group.add_argument("--project")
+    group.add_argument("--conversation", type=int)
+    group.add_argument("--all", action="store_true")
+    args = parser.parse_args(rest)
+    memory = _memory_handle()
+
+    def project_key(word):
+        key = memory.projects.find(word)
+        if not key:
+            print(f"almanac: no project is called {word!r}; see `almanac projects`", file=sys.stderr)
+            raise SystemExit(2)
+        return key
+
+    if args.cmd == "search":
+        project = None if args.all else (project_key(args.project) if args.project else memory.projects.see(os.getcwd(), touch=False))
+        _print(mcp.render_hits(memory.search(" ".join(args.words), project=project, limit=args.limit)))
+    elif args.cmd == "show":
+        _print(mcp.render_node(memory, memory.read(args.id)))
+    elif args.cmd == "recent":
+        _print(mcp.render_projects(memory))
+    else:
+        count = memory.forget(project=project_key(args.project) if args.project else None, convo_id=args.conversation)
+        print(f"forgot {count} conversation(s)")
+    return 0
+
+
+def _projects(rest):
+    memory = _memory_handle()
+    if rest[:1] == ["merge"] and len(rest) == 3:
+        source, target = (memory.projects.find(word) for word in rest[1:])
+        if not source or not target or source == target:
+            print("almanac: name two different known projects; see `almanac projects`", file=sys.stderr)
+            return 2
+        memory.merge_projects(source, target)
+        print(f"merged {source} into {target}")
+    elif rest[:1] == ["rename"] and len(rest) == 3:
+        key = memory.projects.find(rest[1])
+        if not key:
+            print(f"almanac: no project is called {rest[1]!r}", file=sys.stderr)
+            return 2
+        memory.projects.rename(key, rest[2])
+        print(f"{key} is now called {rest[2]}")
+    elif not rest:
+        counts = {r["project"]: r["n"] for r in memory.store.run("select project, count(*) n from convo group by project")}
+        rows = memory.projects.listing()
+        if not rows:
+            print("No projects seen yet.")
+        for row in rows:
+            _print(f"{row['name']:<24} {counts.get(row['key'], 0):>4} conversation(s)   {row['key']}   {row['root']}")
+    else:
+        print("usage: almanac projects [merge FROM INTO | rename NAME NEW]", file=sys.stderr)
+        return 2
+    return 0
+
+
+def _mcp(_rest):
+    from . import mcp
+
+    return mcp.serve()
+
+
+def _print(text):
+    """Print text that may hold characters the console cannot show."""
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        print(text.encode(sys.stdout.encoding or "ascii", "replace").decode(sys.stdout.encoding or "ascii"))
+
+
 def _version(_rest):
     print(f"almanac {__version__}")
     return 0
 
 
-COMMANDS = {"serve": _serve, "report": _report, "status": _status, "doctor": _doctor,
-            "config": _config, "version": _version}
+COMMANDS = {"serve": _serve, "report": _report, "status": _status, "doctor": _doctor, "config": _config,
+            "version": _version, "memory": _memory, "projects": _projects, "mcp": _mcp}
 
 
 def main(argv=None):
@@ -147,5 +246,7 @@ def main(argv=None):
     if argv[:1] == ["claude"]:
         return launcher.run(argv[1:], config.load())
     if argv and argv[0] in COMMANDS:
+        if argv[0] != "mcp" and hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # stored text is not always ASCII
         return COMMANDS[argv[0]](argv[1:])
     return launcher.run(argv, config.load())
