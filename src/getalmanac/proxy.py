@@ -58,6 +58,19 @@ class Proxy:
         cls = http.client.HTTPSConnection if self.secure else http.client.HTTPConnection
         return cls(self.netloc, timeout=UPSTREAM_TIMEOUT)
 
+    def is_fused(self, lane: str) -> bool:
+        if lane not in self.fused and self.store is not None:
+            kept = self.store.get(f"fused:{lane}")
+            if kept:
+                self.fused[lane] = kept
+        return lane in self.fused
+
+    def fuse(self, lane: str, why: str):
+        """Stop rewriting one conversation, for good: the upstream refused its rewritten form."""
+        self.fused[lane] = why
+        if self.store is not None:
+            self.store.put(f"fused:{lane}", why)
+
     def rewrite(self, raw: bytes, ctx: Ctx):
         """Return (bytes to send, parsed original or None)."""
         try:
@@ -69,7 +82,8 @@ class Proxy:
         ctx.model = str(orig.get("model") or "")
         ctx.lane = rq.lane_key(ctx.session, ctx.agent, orig["messages"])
         ctx.cwd = rq.working_dir(orig)
-        if not self.layers or ctx.lane in self.fused:
+        ctx.after = None
+        if not self.layers or self.is_fused(ctx.lane):
             return raw, orig
         work = json.loads(raw)
         try:
@@ -258,11 +272,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
             resp = self._send(sent, identity=ctx is not None)
             if ctx and sent is not raw and resp.status == 400:
                 detail = resp.read()[:400].decode("utf-8", "replace")
-                resp = self._send(raw, identity=True)  # the rewrite was refused: send the original
                 ctx.stats["fallback"] = detail
-                if resp.status < 400:
-                    proxy.fused[ctx.lane] = detail
-                sent, ctx.after = raw, None
+                retry = raw
+                if "compaction" in ctx.stats and proxy.store is not None:
+                    # Compaction changes the most, so drop it first and keep the other savings.
+                    proxy.store.put(f"nocompact:{ctx.lane}", detail)
+                    del ctx.stats["compaction"]
+                    retry, _ = proxy.rewrite(raw, ctx)
+                    resp = self._send(retry, identity=True)
+                    if retry is not raw and resp.status == 400:
+                        resp.read()
+                        retry = raw
+                if retry is raw:  # the rewrite was refused: send the original
+                    resp = self._send(raw, identity=True)
+                    if resp.status < 400:
+                        proxy.fuse(ctx.lane, detail)
+                    ctx.after = None
+                sent = retry
         except (OSError, http.client.HTTPException) as exc:
             self._drop()
             message = f"almanac could not reach the upstream: {type(exc).__name__}: {exc}"
@@ -276,11 +302,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 def build(cfg=None) -> Proxy:
     """A proxy with every layer attached. Each layer reads its own on/off setting."""
+    from .compact import CompactLayer
     from .memory import Memory, MemoryLayer, ProjectLayer
     from .startup import SkillsLayer, ToolsLayer
     from .store import Store
 
     store = Store(config.home() / "almanac.db")
     memory = Memory(store)
-    layers = [ProjectLayer(memory), MemoryLayer(memory), SkillsLayer(), ToolsLayer()]
+    # Order matters: the project first, then the history is settled, then the parts inside it.
+    layers = [ProjectLayer(memory), CompactLayer(memory), MemoryLayer(memory), SkillsLayer(), ToolsLayer()]
     return Proxy(cfg or config.load(), store=store, layers=layers)

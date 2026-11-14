@@ -27,9 +27,8 @@ DEFAULTS = {
     },
     "compaction": {
         "enabled": True,
-        "trigger": 0.75,  # share of the context window that starts a compaction
-        "target": 0.3,  # share of the window the compacted history aims for
-        "window_tokens": 0,  # 0 = work it out from the model
+        "trigger_tokens": 150000,  # a conversation this large is compacted at its next message
+        "target_tokens": 40000,  # most tokens the summary that replaces it may take
     },
 }
 
