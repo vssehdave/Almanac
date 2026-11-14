@@ -9,6 +9,10 @@ DEFAULTS = {
     "port": 8787,  # where `almanac serve` listens, and where `almanac` looks for one to share
     # true runs sessions in HTTPS-proxy mode, which keeps Remote Control available (see tls.py)
     "remote_control": False,
+    # a corporate proxy to reach the upstream through: http://host:port, or http://user:pass@host:port.
+    # "" uses HTTPS_PROXY / ALL_PROXY from the environment (NO_PROXY is honoured either way)
+    "upstream_proxy": "",
+    "upstream_ca": "",  # a CA file to trust for the upstream, for a proxy that re-signs TLS
     "skills": {
         "enabled": True,
         "stub_chars": 90,  # characters of description kept for a collapsed skill

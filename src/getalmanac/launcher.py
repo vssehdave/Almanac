@@ -35,6 +35,9 @@ def child_env(url: str, parent=None) -> dict:
     # a gateway. This relay changes none of them, so say it is the first-party API.
     env["_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL"] = "1"
     env["ALMANAC_PROXY"] = url
+    # Behind a corporate proxy Claude Code would send its requests for this loopback address to that proxy.
+    keep = (env.pop("no_proxy", "") + "," + env.get("NO_PROXY", "")).replace(" ", "").split(",")
+    env["NO_PROXY"] = ",".join(dict.fromkeys([h for h in keep if h] + ["localhost", "127.0.0.1", "::1"]))
     return env
 
 
@@ -59,10 +62,11 @@ def https_session(cfg):
         return None
     from urllib.parse import urlsplit
 
-    from . import tls
+    from . import tls, upstream
 
-    if any(os.environ.get(name) for name in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy")):
-        reason = "a proxy is already set in the environment"
+    hop = upstream.find(cfg, urlsplit(cfg["upstream"]).hostname or "")  # the user's own proxy, before the child's is set
+    if hop and not hop.supported:
+        reason = f"the {hop.scheme}:// proxy from {hop.source} is not supported"
     elif urlsplit(cfg["upstream"]).scheme != "https":
         reason = "the upstream is not https"
     else:

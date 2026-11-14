@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- **Corporate proxy.** Almanac now reaches the upstream through an `http://`
+  proxy: the new `upstream_proxy` setting, else `HTTPS_PROXY` or `ALL_PROXY`,
+  with `NO_PROXY` honoured. A login in the URL is sent as basic proxy
+  authentication and is never stored, logged or printed. Other connections in
+  HTTPS-proxy mode use the proxy too, and that mode no longer turns itself off
+  because a proxy is set.
+- **Company certificates.** The new `upstream_ca` setting, `SSL_CERT_FILE` and
+  `NODE_EXTRA_CA_CERTS` add trusted CA files for the upstream. Verification
+  stays on.
+- **Doctor.** `almanac doctor` shows the proxy and its source, the extra
+  certificate files, and whether a connection through the proxy works.
+- **Fix.** With a proxy in the environment, Claude Code sent its requests for
+  Almanac's loopback address to that proxy. `localhost` and `127.0.0.1` are now
+  added to its `NO_PROXY`.
+
 ## 0.1.0 (2026-11-14)
 
 First release.

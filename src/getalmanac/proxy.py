@@ -8,6 +8,7 @@ the original bytes are sent instead.
 import http.client
 import http.server
 import json
+import os
 import queue
 import socket
 import ssl
@@ -19,6 +20,7 @@ from urllib.parse import urlsplit
 from . import config
 from . import request as rq
 from . import sse
+from . import upstream
 from .report import Log, sections
 
 REQUEST_SKIP = {"host", "connection", "keep-alive", "transfer-encoding", "te", "upgrade",
@@ -51,15 +53,30 @@ class Proxy:
         self.cfg, self.store, self.layers = cfg, store, list(layers)
         self.log = log or Log(config.home() / "logs" / "requests.jsonl")
         self.secure, self.netloc, self.base = up.scheme == "https", up.netloc, up.path.rstrip("/")
+        self.host, self.port = up.hostname, up.port or (443 if self.secure else 80)
+        # The environment as launched: HTTPS-proxy mode later points the child's proxy at this process.
+        self.env = dict(os.environ)
+        self.hop = self.hop_for(self.host)
+        self.ctx = upstream.context(cfg, self.env) if self.secure else None
         self.fused = {}  # lane -> why its rewrites were switched off
         self.tls = None  # a tls.Session when running as an HTTPS proxy
         self.started, self.count = time.time(), 0
         self._jobs = queue.Queue()
         threading.Thread(target=self._work, daemon=True).start()
 
+    def hop_for(self, host):
+        """The corporate proxy to reach `host` through, or None to connect directly."""
+        hop = upstream.find(self.cfg, host, self.env)
+        return hop if hop and hop.supported else None
+
     def connect(self):
         cls = http.client.HTTPSConnection if self.secure else http.client.HTTPConnection
-        return cls(self.netloc, timeout=UPSTREAM_TIMEOUT)
+        kw = {"context": self.ctx} if self.secure else {}
+        if not self.hop:
+            return cls(self.netloc, timeout=UPSTREAM_TIMEOUT, **kw)
+        conn = cls(self.hop.host, self.hop.port, timeout=UPSTREAM_TIMEOUT, **kw)
+        conn.set_tunnel(self.host, self.port, self.hop.headers)
+        return conn
 
     def is_fused(self, lane: str) -> bool:
         if lane not in self.fused and self.store is not None:
@@ -280,7 +297,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 pass
             return
         try:
-            far = socket.create_connection((host, int(port)), timeout=30)
+            far = upstream.open_socket(proxy.hop_for(host), host, int(port))
         except (OSError, ValueError) as exc:
             return self._reply(502, {"error": f"almanac could not reach {self.path}: {exc}"})
         self.send_response_only(200, "Connection established")
@@ -291,9 +308,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         """A protocol switch (WebSocket) inside the tunnel: pass the bytes both ways, unread."""
         proxy = self.server.proxy
         try:
-            far = socket.create_connection((proxy.netloc.rsplit(":", 1)[0], 443 if proxy.secure else 80), timeout=30)
+            far = upstream.open_socket(proxy.hop, proxy.host, proxy.port)
             if proxy.secure:
-                far = ssl.create_default_context().wrap_socket(far, server_hostname=proxy.netloc.rsplit(":", 1)[0])
+                far = proxy.ctx.wrap_socket(far, server_hostname=proxy.host)
         except OSError as exc:
             return self._reply(502, {"error": f"almanac could not reach the upstream: {exc}"})
         head = f"{self.command} {proxy.base + self.path} {self.request_version}\r\n"
@@ -344,7 +361,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 sent = retry
         except (OSError, http.client.HTTPException) as exc:
             self._drop()
-            message = f"almanac could not reach the upstream: {type(exc).__name__}: {exc}"
+            via = f" through the proxy {proxy.hop.label}" if proxy.hop else ""
+            message = f"almanac could not reach the upstream{via}: {type(exc).__name__}: {exc}"
             return self._reply(502, {"type": "error", "error": {"type": "api_error", "message": message}})
         tee = self._pipe(resp, tee=ctx is not None)
         if ctx:

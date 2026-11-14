@@ -10,6 +10,8 @@ import warnings
 
 warnings.simplefilter("ignore", ResourceWarning)
 os.environ.setdefault("ALMANAC_HOME", tempfile.mkdtemp(prefix="almanac-test-"))
+for _name in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy", "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS"):
+    os.environ.pop(_name, None)  # the machine's own proxy must not change what the tests connect to
 
 from getalmanac import config, proxy as proxy_mod  # noqa: E402
 from getalmanac.report import Log  # noqa: E402

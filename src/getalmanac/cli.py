@@ -3,11 +3,12 @@ import argparse
 import json
 import socket
 import sqlite3
+import ssl
 import sys
 import time
 from urllib.parse import urlsplit
 
-from . import __version__, config, launcher, report
+from . import __version__, config, launcher, report, upstream
 
 USAGE = """almanac: a local proxy for Claude Code
 
@@ -114,9 +115,26 @@ def _doctor(_rest):
     except sqlite3.Error as exc:
         check("SQLite full-text search", False, f"FTS5 is missing: {exc}")
     up = urlsplit(cfg["upstream"])
+    host, port = up.hostname or "", up.port or (443 if up.scheme == "https" else 80)
+    ctx = ssl.create_default_context()
+    loaded, failed = upstream.load_cas(ctx, cfg)
+    check("extra CA file", not failed, f"could not load {', '.join(failed)}" if failed else
+          ", ".join(loaded) if loaded else "none set (upstream_ca, SSL_CERT_FILE, NODE_EXTRA_CA_CERTS)")
+    hop = upstream.find(cfg, host)
+    if hop and not hop.supported:
+        check("upstream proxy", False, f"the {hop.scheme}:// proxy from {hop.source} is not supported; "
+              "only http:// proxies are. Connecting directly")
+    elif hop:
+        check("upstream proxy", True, f"{hop.label} (from {hop.source})")
+    else:
+        check("upstream proxy", True, "none; connecting directly")
+    hop = hop if hop and hop.supported else None
     try:
-        socket.create_connection((up.hostname, up.port or (443 if up.scheme == "https" else 80)), timeout=5).close()
-        check("upstream", True, cfg["upstream"])
+        sock = upstream.open_socket(hop, host, port, 5)
+        if up.scheme == "https":
+            ctx.wrap_socket(sock, server_hostname=host)
+        sock.close()
+        check("upstream", True, cfg["upstream"] + (f" (CONNECT through {hop.label} works)" if hop else ""))
     except OSError as exc:
         check("upstream", False, f"{cfg['upstream']} is unreachable: {exc}")
     return 0 if ok else 1
@@ -134,9 +152,11 @@ def _config(rest):
         except TypeError as exc:
             print(f"almanac: {exc}", file=sys.stderr)
             return 2
-        print(f"{rest[1]} = {json.dumps(value)}")
+        print(f"{rest[1]} = {json.dumps(upstream.hide(value) if rest[1] == 'upstream_proxy' else value)}")
     elif not rest:
-        print(json.dumps(config.load(), indent=2))
+        cfg = config.load()
+        cfg["upstream_proxy"] = upstream.hide(cfg["upstream_proxy"])  # its login is never printed
+        print(json.dumps(cfg, indent=2))
     else:
         print("usage: almanac config [set KEY VALUE | path]", file=sys.stderr)
         return 2
