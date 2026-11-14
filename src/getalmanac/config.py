@@ -8,7 +8,7 @@ DEFAULTS = {
     "upstream": "https://api.anthropic.com",
     "skills": {
         "enabled": True,
-        "stub_chars": 80,  # characters of description kept for a collapsed skill
+        "stub_chars": 90,  # characters of description kept for a collapsed skill
         "max_full": 6,  # most skills shown in full per message on a match
         "always_full": [],  # skill names never collapsed
     },

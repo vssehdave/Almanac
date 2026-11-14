@@ -36,7 +36,7 @@ class Ctx:
         self.session = headers.get("x-claude-code-session-id") or ""
         self.agent = headers.get("x-claude-code-agent-id") or headers.get("x-claude-code-parent-agent-id") or ""
         self.klass = headers.get("x-claude-code-request-class") or ""
-        self.lane = self.model = self.cwd = ""
+        self.lane = self.model = self.cwd = self.project = ""
         self.stats = {}
         self.after = None  # the rewritten body, when a layer changed it
 
@@ -275,5 +275,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 def build(cfg=None) -> Proxy:
-    """A proxy with every enabled layer attached."""
-    return Proxy(cfg or config.load())
+    """A proxy with every layer attached. Each layer reads its own on/off setting."""
+    from .startup import SkillsLayer, ToolsLayer
+    from .store import Store
+
+    store = Store(config.home() / "almanac.db")
+    return Proxy(cfg or config.load(), store=store, layers=[SkillsLayer(), ToolsLayer()])
