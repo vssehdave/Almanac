@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "getalmanac"
+version = "0.1.0"
+description = "A local proxy for Claude Code: smaller startup context and per-project memory, with nothing leaving your machine (stdlib only)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Veertej Sehdave" }]
+keywords = ["claude-code", "proxy", "context", "memory", "developer-tools"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/vssehdave/Almanac"
+Issues = "https://github.com/vssehdave/Almanac/issues"
+
+[project.scripts]
+almanac = "getalmanac.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
