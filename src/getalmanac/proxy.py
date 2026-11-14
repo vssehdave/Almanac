@@ -9,6 +9,8 @@ import http.client
 import http.server
 import json
 import queue
+import socket
+import ssl
 import sys
 import threading
 import time
@@ -50,6 +52,7 @@ class Proxy:
         self.log = log or Log(config.home() / "logs" / "requests.jsonl")
         self.secure, self.netloc, self.base = up.scheme == "https", up.netloc, up.path.rstrip("/")
         self.fused = {}  # lane -> why its rewrites were switched off
+        self.tls = None  # a tls.Session when running as an HTTPS proxy
         self.started, self.count = time.time(), 0
         self._jobs = queue.Queue()
         threading.Thread(target=self._work, daemon=True).start()
@@ -163,6 +166,7 @@ class Server(http.server.ThreadingHTTPServer):
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     _conn = None
+    tunneled = False
 
     def log_message(self, *args):
         pass
@@ -253,12 +257,61 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.close_connection = True
         return b"".join(kept)
 
+    def _connect(self):
+        """HTTPS-proxy mode: end TLS for the upstream host, tunnel everything else untouched."""
+        proxy = self.server.proxy
+        tls = proxy.tls
+        self.close_connection = True
+        if tls is None:
+            return self._reply(405, {"error": "this almanac proxy is not running in HTTPS-proxy mode"})
+        if not tls.authorized(self.headers.get("proxy-authorization")):
+            return self._reply(407, {"error": "this proxy belongs to another session"})
+        host, _, port = self.path.rpartition(":")
+        if host.lower() == tls.host and port == "443":
+            self.send_response_only(200, "Connection established")
+            self.end_headers()
+            try:
+                inner = tls.context.wrap_socket(self.connection, server_side=True)
+            except (ssl.SSLError, OSError):
+                return
+            try:
+                Tunneled(inner, self.client_address, self.server)  # serves the requests inside the tunnel
+            except (ssl.SSLError, OSError):
+                pass
+            return
+        try:
+            far = socket.create_connection((host, int(port)), timeout=30)
+        except (OSError, ValueError) as exc:
+            return self._reply(502, {"error": f"almanac could not reach {self.path}: {exc}"})
+        self.send_response_only(200, "Connection established")
+        self.end_headers()
+        relay(self.connection, far)
+
+    def _upgrade(self, raw: bytes):
+        """A protocol switch (WebSocket) inside the tunnel: pass the bytes both ways, unread."""
+        proxy = self.server.proxy
+        try:
+            far = socket.create_connection((proxy.netloc.rsplit(":", 1)[0], 443 if proxy.secure else 80), timeout=30)
+            if proxy.secure:
+                far = ssl.create_default_context().wrap_socket(far, server_hostname=proxy.netloc.rsplit(":", 1)[0])
+        except OSError as exc:
+            return self._reply(502, {"error": f"almanac could not reach the upstream: {exc}"})
+        head = f"{self.command} {proxy.base + self.path} {self.request_version}\r\n"
+        head += "".join(f"{k}: {v}\r\n" for k, v in self.headers.items() if not k.lower().startswith("proxy-"))
+        far.sendall(head.encode("latin-1") + b"\r\n" + raw)
+        self.close_connection = True
+        relay(self.connection, far)
+
     def _handle(self):
         proxy = self.server.proxy
+        if self.command == "CONNECT":
+            return self._connect()
         host = (self.headers.get("host") or "").rsplit(":", 1)[0].lower()
-        if host not in LOOPBACK:  # a web page must not reach this server through a DNS trick
+        if not self.tunneled and host not in LOOPBACK:  # a web page must not reach this server through a DNS trick
             return self._reply(403, {"error": "almanac only answers loopback requests"})
         raw = self._body()
+        if self.tunneled and self.headers.get("upgrade"):
+            return self._upgrade(raw)
         route = self.path.split("?", 1)[0]
         if route == "/almanac/health":
             return self._reply(200, proxy.health())
@@ -297,7 +350,40 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if ctx:
             proxy.finish(ctx, orig, raw, sent, resp.status, tee, started)
 
-    do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = do_HEAD = do_OPTIONS = _handle
+    do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = do_HEAD = do_OPTIONS = do_CONNECT = _handle
+
+
+class Tunneled(Handler):
+    """Requests arriving inside a TLS tunnel this proxy ended (HTTPS-proxy mode)."""
+
+    tunneled = True
+
+
+def relay(a, b):
+    """Copy bytes both ways between two sockets until either side closes."""
+    def pump(src, dst):
+        try:
+            while True:
+                data = src.recv(65536)
+                if not data:
+                    break
+                dst.sendall(data)
+        except OSError:
+            pass
+        finally:
+            for sock in (src, dst):
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+    for sock in (a, b):
+        sock.settimeout(None)
+    back = threading.Thread(target=pump, args=(b, a), daemon=True)
+    back.start()
+    pump(a, b)
+    back.join(timeout=5)
+    b.close()
 
 
 def build(cfg=None) -> Proxy:
@@ -307,8 +393,10 @@ def build(cfg=None) -> Proxy:
     from .startup import SkillsLayer, ToolsLayer
     from .store import Store
 
+    cfg = cfg or config.load()
     store = Store(config.home() / "almanac.db")
     memory = Memory(store)
+    memory.prune(cfg["memory"]["keep_days"])
     # Order matters: the project first, then the history is settled, then the parts inside it.
     layers = [ProjectLayer(memory), CompactLayer(memory), MemoryLayer(memory), SkillsLayer(), ToolsLayer()]
     return Proxy(cfg or config.load(), store=store, layers=layers)

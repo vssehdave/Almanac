@@ -6,6 +6,9 @@ from pathlib import Path
 
 DEFAULTS = {
     "upstream": "https://api.anthropic.com",
+    "port": 8787,  # where `almanac serve` listens, and where `almanac` looks for one to share
+    # true runs sessions in HTTPS-proxy mode, which keeps Remote Control available (see tls.py)
+    "remote_control": False,
     "skills": {
         "enabled": True,
         "stub_chars": 90,  # characters of description kept for a collapsed skill
@@ -24,6 +27,7 @@ DEFAULTS = {
         "recall": True,
         "recall_chars": 2400,  # most characters of memory added to a new conversation
         "tools": True,  # give Claude Code the memory_search / memory_read tools
+        "keep_days": 365,  # conversations untouched for longer are deleted; 0 keeps everything
     },
     "compaction": {
         "enabled": True,

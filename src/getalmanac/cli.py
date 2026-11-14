@@ -32,15 +32,21 @@ already uses, with Claude Code's own login.
 
 def _serve(rest):
     parser = argparse.ArgumentParser(prog="almanac serve")
-    parser.add_argument("--port", type=int, default=8787)
+    parser.add_argument("--port", type=int, help="default: the `port` setting (8787)")
     args = parser.parse_args(rest)
     from . import proxy
 
-    server = proxy.build(config.load()).serve(port=args.port)
+    cfg = config.load()
+    try:
+        server = proxy.build(cfg).serve(port=args.port or cfg["port"])
+    except OSError as exc:
+        print(f"almanac: cannot listen on port {args.port or cfg['port']}: {exc}", file=sys.stderr)
+        return 1
     url = f"http://127.0.0.1:{server.server_address[1]}"
     print(f"almanac is listening on {url}\n"
-          f"Start a client with:\n  ANTHROPIC_BASE_URL={url}\n  _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1\n"
-          "Press Ctrl+C to stop.")
+          "While it runs, `almanac` shares it. Other clients can use it with:\n"
+          f"  ANTHROPIC_BASE_URL={url}\n  _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1\n"
+          "Press Ctrl+C to stop.", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

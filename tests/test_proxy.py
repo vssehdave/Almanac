@@ -213,5 +213,20 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(rig.upstream.requests[-1]["path"], "/api/hello")
 
 
+class SharedProxyTest(unittest.TestCase):
+    def test_a_running_proxy_of_this_version_is_found(self):
+        rig = Rig()
+        self.addCleanup(rig.close)
+        self.assertEqual(launcher.shared(rig.port), f"http://127.0.0.1:{rig.port}")
+
+    def test_nothing_listening_and_other_servers_are_ignored(self):
+        rig = Rig()
+        self.addCleanup(rig.close)
+        other = rig.upstream.server.server_address[1]  # answers, but is not an almanac proxy
+        self.assertIsNone(launcher.shared(other))
+        rig.close()
+        self.assertIsNone(launcher.shared(rig.port))
+
+
 if __name__ == "__main__":
     unittest.main()

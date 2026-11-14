@@ -1,4 +1,5 @@
 """Start the proxy, then run Claude Code pointed at it."""
+import http.client
 import json
 import os
 import shutil
@@ -51,6 +52,59 @@ def with_memory_tools(args, cfg):
     return ["--mcp-config", str(path), *args]
 
 
+def https_session(cfg):
+    """A tls.Session when this launch should run in HTTPS-proxy mode, else None (and says why)."""
+    asked = os.environ.get("ALMANAC_HTTPS", "").lower()
+    if asked in ("0", "false", "no", "off") or not (cfg["remote_control"] or asked in ("1", "true", "yes", "on")):
+        return None
+    from urllib.parse import urlsplit
+
+    from . import tls
+
+    if any(os.environ.get(name) for name in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy")):
+        reason = "a proxy is already set in the environment"
+    elif urlsplit(cfg["upstream"]).scheme != "https":
+        reason = "the upstream is not https"
+    else:
+        try:
+            return tls.Session(urlsplit(cfg["upstream"]).hostname, extra_ca=os.environ.get("NODE_EXTRA_CA_CERTS"))
+        except (RuntimeError, OSError) as exc:
+            reason = str(exc)
+    print(f"almanac: HTTPS-proxy mode is off for this session ({reason}); Remote Control will not be offered.",
+          file=sys.stderr)
+    return None
+
+
+def https_env(session, port: int, parent=None) -> dict:
+    """Claude Code's environment in HTTPS-proxy mode: its base URL untouched, this proxy as HTTPS_PROXY."""
+    env = dict(os.environ if parent is None else parent)
+    for name in ("ANTHROPIC_BASE_URL", "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL", "https_proxy", "no_proxy"):
+        env.pop(name, None)
+    env["HTTPS_PROXY"] = session.proxy_url(port)
+    env["NODE_EXTRA_CA_CERTS"] = str(session.bundle)
+    # Local servers (MCP, memory workers) are reached directly; nothing may bypass the proxy for the upstream.
+    current = (os.environ if parent is None else parent).get("NO_PROXY") or ""
+    keep = [h for h in current.replace(" ", "").split(",") if h and h != "*" and not session.host.endswith(h.lstrip("*."))]
+    env["NO_PROXY"] = ",".join(dict.fromkeys(keep + ["localhost", "127.0.0.1", "::1"]))
+    env["ALMANAC_PROXY"] = f"http://127.0.0.1:{port}"
+    return env
+
+
+def shared(port: int):
+    """The address of a running `almanac serve` of this version on `port`, or None."""
+    from . import __version__
+
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=0.5)
+    try:
+        conn.request("GET", "/almanac/health")
+        answer = json.loads(conn.getresponse().read())
+    except (OSError, ValueError, http.client.HTTPException):
+        return None
+    finally:
+        conn.close()
+    return f"http://127.0.0.1:{port}" if answer.get("almanac") == __version__ else None
+
+
 def start(cfg):
     """Start a proxy on a free loopback port. Returns (proxy, server, url)."""
     proxy = proxy_mod.build(cfg)
@@ -69,13 +123,24 @@ def run(args, cfg) -> int:
     outer = os.environ.get("ANTHROPIC_BASE_URL")
     if outer and not os.environ.get("ALMANAC_UPSTREAM"):
         cfg["upstream"] = outer
-    proxy, server, url = start(cfg)
+    # A proxy already running (`almanac serve`) is shared: it outlives this command, so
+    # background sessions started from Claude Code keep a working address.
+    session = https_session(cfg) if not outer else None
+    url = shared(cfg["port"]) if not (outer or session) else None
+    proxy = server = None
+    if not url:
+        proxy, server, url = start(cfg)
+        proxy.tls = session
+    env = https_env(session, server.server_address[1]) if session else child_env(url)
     args = with_memory_tools(list(args), cfg)
     # Ctrl+C belongs to Claude Code. A handler (not SIG_IGN) so the child does not inherit it.
     previous = signal.signal(signal.SIGINT, lambda *_: None)
     try:
-        return subprocess.call([exe, *args], env=child_env(url))
+        return subprocess.call([exe, *args], env=env)
     finally:
         signal.signal(signal.SIGINT, previous)
-        proxy.drain()
-        server.shutdown()
+        if proxy:
+            proxy.drain()
+            server.shutdown()
+        if session:
+            session.close()
