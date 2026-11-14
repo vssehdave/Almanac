@@ -1,4 +1,5 @@
 """Start the proxy, then run Claude Code pointed at it."""
+import json
 import os
 import shutil
 import signal
@@ -36,6 +37,20 @@ def child_env(url: str, parent=None) -> dict:
     return env
 
 
+def with_memory_tools(args, cfg):
+    """Add the memory tools' MCP server to Claude Code's arguments, unless turned off."""
+    if not (cfg["memory"]["enabled"] and cfg["memory"]["tools"]) or "--strict-mcp-config" in args:
+        return args
+    from . import config, mcp
+
+    path = config.home() / "mcp.json"
+    try:
+        path.write_text(json.dumps(mcp.client_config(), indent=2), encoding="utf-8")
+    except OSError:
+        return args
+    return ["--mcp-config", str(path), *args]
+
+
 def start(cfg):
     """Start a proxy on a free loopback port. Returns (proxy, server, url)."""
     proxy = proxy_mod.build(cfg)
@@ -55,6 +70,7 @@ def run(args, cfg) -> int:
     if outer and not os.environ.get("ALMANAC_UPSTREAM"):
         cfg["upstream"] = outer
     proxy, server, url = start(cfg)
+    args = with_memory_tools(list(args), cfg)
     # Ctrl+C belongs to Claude Code. A handler (not SIG_IGN) so the child does not inherit it.
     previous = signal.signal(signal.SIGINT, lambda *_: None)
     try:
