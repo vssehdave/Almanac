@@ -6,7 +6,9 @@ An exchange is one thing the person asked plus how it ended (the final answer,
 the tools used, the files touched). Exchanges on the same subject are grouped
 under a topic by similarity. Everything is first written by rule; summarize.py
 later replaces an exchange's title and adds a short summary written by a small
-model. It all lives in the SQLite file on this machine.
+model. It all lives in the SQLite file on this machine. When the optional
+semantic.py model is installed, each exchange also gets a vector from it, and
+search finds exchanges by meaning as well as by words.
 
 When a new conversation starts, the exchanges from earlier conversations in the
 same project that match its first message are added to that message once, and
@@ -17,7 +19,7 @@ import json
 import re
 import time
 
-from . import embed
+from . import embed, semantic
 from . import request as rq
 from .match import STOP, tokens
 from .project import Projects, tool_paths
@@ -30,7 +32,8 @@ create table if not exists convo (
 create table if not exists node (
     id integer primary key, convo integer not null, project text not null, parent integer,
     kind text not null, seq integer not null, ts real not null, title text not null, text text not null,
-    mark text not null default '', vec blob, summary text not null default '', tries integer not null default 0
+    mark text not null default '', vec blob, summary text not null default '', tries integer not null default 0,
+    dvec blob, dname text not null default ''
 );
 create index if not exists node_convo on node (convo, kind, seq);
 create index if not exists node_project on node (project, kind, ts);
@@ -40,6 +43,10 @@ create table if not exists detail (node integer primary key, text text not null)
 TOPIC_BAR = 0.22  # cosine above which an exchange joins an existing topic
 DETAIL_LIMIT = 30000  # most characters of one exchange's full transcript kept for reading back
 BACKFILL = 400  # most exchanges indexed from one resumed conversation
+DENSE_PASS = 16  # most exchanges embedded by one background pass: new ones first, then older ones that wait
+DENSE_MIN = 0.3  # least cosine for an exchange to count as near a query by meaning
+DENSE_TOP = 30  # most near exchanges that go into a search
+RRF_K = 60  # reciprocal rank fusion: a hit at rank r adds 1 / (RRF_K + r)
 _TAG = re.compile(r"</?[a-zA-Z][\w-]{0,40}>")
 _SECRETS = [
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S), "[private key removed]"),
@@ -146,8 +153,9 @@ class Memory:
         with store.lock:
             store.db.executescript(SCHEMA)
             have = {r["name"] for r in store.run("pragma table_info(node)")}
-            for column, ddl in (("summary", "text not null default ''"), ("tries", "integer not null default 0")):
-                if column not in have:  # a database written before model summaries
+            for column, ddl in (("summary", "text not null default ''"), ("tries", "integer not null default 0"),
+                                ("dvec", "blob"), ("dname", "text not null default ''")):
+                if column not in have:  # a database written before model summaries or semantic search
                     store.run(f"alter table node add column {column} {ddl}")
         self.projects = Projects(store)
 
@@ -197,10 +205,37 @@ class Memory:
             if not rows:  # gone (the conversation was rewound) or already done
                 return
             text = "Summary: " + summary + "\n\n" + rows[0]["text"]
-            self.store.run("update node set title = ?, text = ?, summary = ? where id = ?", (title, text, summary, node_id))
+            self.store.run("update node set title = ?, text = ?, summary = ?, dvec = null, dname = '' where id = ?",
+                           (title, text, summary, node_id))  # the vector is made again from the new text
             self.store.run("delete from node_fts where rowid = ?", (node_id,))
             self.store.run("insert into node_fts (rowid, title, text) values (?, ?, ?)", (node_id, title, text))
             self._refresh_topic(rows[0]["parent"])
+
+    def embed_pending(self, limit=DENSE_PASS) -> int:
+        """Give up to `limit` exchanges a vector from the active model, newest first: the ones that have none,
+        or only one from another model. Returns how many. Runs in the background worker, never for a waiting request."""
+        model = semantic.active()
+        if not model:
+            return 0
+        rows = self.store.run("select id, title, text, summary from node where kind = 'leaf' and (dvec is null or dname != ?) "
+                              "order by ts desc, id desc limit ?", (model.name, limit))
+        if not rows:
+            return 0
+        try:
+            blobs = model.encode([f"{r['title']}\n{r['summary'] or r['text']}"[:semantic.MAX_TEXT] for r in rows])
+        except Exception:  # a failing model leaves them waiting, and search falls back to words
+            return 0
+        with self.store.lock:
+            for row, blob in zip(rows, blobs):  # the summary guard drops a vector made from text that has since changed
+                self.store.run("update node set dvec = ?, dname = ? where id = ? and summary = ?",
+                               (blob, model.name, row["id"], row["summary"]))
+        return len(rows)
+
+    def dense_counts(self, name) -> tuple:
+        """(exchanges with a vector from the model called `name`, exchanges waiting for one)."""
+        row = self.store.run("select count(*) total, coalesce(sum(dname = ? and dvec is not null), 0) done "
+                             "from node where kind = 'leaf'", (name,))[0]
+        return row["done"], row["total"] - row["done"]
 
     def _topic_for(self, convo_id, project, seq, title, vec) -> int:
         best, score = None, TOPIC_BAR
@@ -265,11 +300,38 @@ class Memory:
 
     # ---- reading -------------------------------------------------------------
 
+    def _near(self, query, project, exclude_lane) -> list:
+        """[(id, cosine)] of the exchanges nearest to `query` by meaning, nearest first; [] when that search is off."""
+        model = semantic.active()
+        if not model:
+            return []
+        sql, args = ("select n.id, n.dvec from node n join convo c on c.id = n.convo "
+                     "where n.kind = 'leaf' and n.dname = ? and n.dvec is not null"), [model.name]
+        if project:
+            sql, args = sql + " and n.project = ?", args + [project]
+        if exclude_lane:
+            sql, args = sql + " and c.lane != ?", args + [exclude_lane]
+        # shortcut: reads every vector of the project for each search, fine to about 20,000 exchanges; past that, use a vector index
+        rows = self.store.run(sql, args)
+        if not rows:
+            return []
+        try:
+            scores = semantic.cosines(model.encode([query])[0], [r["dvec"] for r in rows])
+        except Exception:
+            return []
+        near = [(r["id"], round(score, 4)) for r, score in zip(rows, scores) if score >= DENSE_MIN]
+        return sorted(near, key=lambda p: (-p[1], p[0]))[:DENSE_TOP]
+
     def search(self, query, project=None, exclude_lane=None, limit=8, kind="leaf") -> list:
-        """Stored exchanges that match `query`, best first. Needs two of its words (one if it has one)."""
+        """Stored exchanges that match `query`, best first. Needs two of its words (one if it has one).
+
+        With a model installed, exchanges near the query by meaning are added, and the two rankings are
+        merged by reciprocal rank fusion.
+        """
         words = sorted({w for w in re.findall(r"[a-z0-9_]{2,}", query.lower()) if w not in STOP})[:24]
         terms = set(tokens(query))
-        if not words or not terms:
+        near = self._near(query, project, exclude_lane) if kind == "leaf" else []
+        if (not words or not terms) and not near:
             return []
         sql = ("select n.id, n.kind, n.title, n.text, n.ts, n.vec, n.project, n.convo, c.title ctitle, "
                "bm25(node_fts, 3.0, 1.0) rank from node_fts join node n on n.id = node_fts.rowid "
@@ -280,7 +342,7 @@ class Memory:
         if exclude_lane:
             sql, args = sql + " and c.lane != ?", args + [exclude_lane]
         vector, need, hits = embed.embed(query), min(2, len(terms)), []
-        for row in self.store.run(sql + " order by rank limit 60", args):
+        for row in self.store.run(sql + " order by rank limit 60", args) if words and terms else []:
             overlap = len(terms & set(tokens(row["title"] + " " + row["text"])))
             if overlap < need:
                 continue
@@ -289,6 +351,20 @@ class Memory:
         hits.sort(key=lambda h: (-h["score"], -h["ts"]))
         for hit in hits:
             hit.pop("vec", None)
+        if not near:
+            return hits[:limit]
+        fused = {hit["id"]: 1 / (RRF_K + rank) for rank, hit in enumerate(hits, 1)}
+        for rank, (node_id, _) in enumerate(near, 1):
+            fused[node_id] = fused.get(node_id, 0) + 1 / (RRF_K + rank)
+        known = {hit["id"] for hit in hits}
+        extra = [n for n, _ in near if n not in known]
+        for row in self.store.run("select n.id, n.kind, n.title, n.text, n.ts, n.project, n.convo, c.title ctitle "
+                                  "from node n join convo c on c.id = n.convo "
+                                  f"where n.id in ({','.join('?' * len(extra))})", extra) if extra else []:
+            hits.append(dict(row, snippet=snippet(row["text"], terms)))
+        for hit in hits:
+            hit["score"] = round(fused[hit["id"]], 5)
+        hits.sort(key=lambda h: (-h["score"], -h["ts"], h["id"]))
         return hits[:limit]
 
     def recent(self, project=None, exclude_lane=None, limit=3) -> list:
@@ -448,3 +524,4 @@ class MemoryLayer:
         if not ctx.cfg["memory"]["enabled"] or not self._main_thread(orig, ctx):
             return
         self.memory.index(ctx.lane, ctx.session, ctx.project, orig["messages"], reply)
+        self.memory.embed_pending()

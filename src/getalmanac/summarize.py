@@ -100,11 +100,12 @@ class SummaryLayer:
         for row in rows:
             used = today(store)
             if paused_until(store) or used["calls"] >= cfg["summary_daily_calls"]:
-                return
+                break
             store.run("update node set tries = tries + 1 where id = ?", (row["id"],))
             used["calls"] += 1
             store.put("summary:day", used)
             self._ask(ctx, orig, row["id"], cfg["summary_model"], used)
+        self.memory.embed_pending()  # a new summary clears its exchange's vector; make it again from the summary
 
     def _ask(self, ctx, orig, node_id, model, used):
         """One summary call for one exchange. Any failure leaves the rule-written text."""

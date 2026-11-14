@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Search by meaning.** The new optional extra `getalmanac[semantic]` and the
+  command `almanac semantic install` add a small embedding model that runs on
+  your machine (all-MiniLM-L6-v2, about 90 MB). With it, `almanac memory
+  search`, the `memory_search` tool and the memory note for a new conversation
+  find exchanges by meaning as well as by words. The download is the only time
+  a host other than the upstream is contacted, and no conversation text is
+  sent. Vectors are made in the background, again after a summary is written,
+  and are tagged with the model that made them. Without the packages or the
+  model, or with `memory.semantic` set to `false`, search is unchanged. New
+  commands: `almanac semantic install | status | index | on | off`.
 - **Model-written summaries.** A small model (`memory.summary_model`, Haiku by
   default) now writes each stored exchange's title and a short summary in the
   background. The call uses the same upstream and the login the session already

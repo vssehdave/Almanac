@@ -413,6 +413,7 @@ def build(cfg=None) -> Proxy:
     from .compact import CompactLayer
     from .memory import Memory, MemoryLayer, ProjectLayer
     from .startup import SkillsLayer, ToolsLayer
+    from . import semantic
     from .store import Store
     from .summarize import SummaryLayer
 
@@ -420,6 +421,7 @@ def build(cfg=None) -> Proxy:
     store = Store(config.home() / "almanac.db")
     memory = Memory(store)
     memory.prune(cfg["memory"]["keep_days"])
+    threading.Thread(target=semantic.active, daemon=True).start()  # the first recall should not wait a second for the model
     # Order matters: the project first, then the history is settled, then the parts inside it.
     layers = [ProjectLayer(memory), CompactLayer(memory), MemoryLayer(memory), SkillsLayer(), ToolsLayer(), SummaryLayer(memory)]
     return Proxy(cfg or config.load(), store=store, layers=layers)

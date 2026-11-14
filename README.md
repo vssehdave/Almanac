@@ -3,7 +3,8 @@
 A local proxy for Claude Code. It makes each session start with less context,
 gives every project a memory, and keeps long conversations inside the context
 window. Nothing leaves your machine except the requests Claude Code was already
-sending to Anthropic.
+sending to Anthropic. (The one exception is a model you choose to download, see
+[Search by meaning](#search-by-meaning).)
 
 ```
 Claude Code  ──▶  almanac (127.0.0.1)  ──▶  api.anthropic.com
@@ -11,7 +12,7 @@ Claude Code  ──▶  almanac (127.0.0.1)  ──▶  api.anthropic.com
                      └── ~/.almanac/   SQLite memory, settings, a sizes-only log
 ```
 
-- **No account, no server, no telemetry.** One Python package with no dependencies.
+- **No account, no server, no telemetry.** One Python package with no required dependencies.
 - **Your login is untouched.** Claude Code keeps its own sign-in. Almanac forwards
   the headers it receives and never reads, stores or logs a credential.
 - **It fails open.** If anything in Almanac goes wrong, your request is sent
@@ -140,6 +141,45 @@ exchanges have a model-written summary and what today's calls used.
 Obvious secrets (API keys, tokens, private keys, `password=` values) are removed
 before text is stored, including from model-written summaries.
 
+#### Search by meaning
+
+By default, memory search matches words. Ask for "the bill is off by a penny"
+and it will not find an exchange about "invoice totals a cent short".
+
+An optional extra fixes that. It adds a small embedding model that runs on your
+machine (all-MiniLM-L6-v2, about 90 MB, CPU only):
+
+```bash
+pip install "getalmanac[semantic]"
+almanac semantic install
+```
+
+`almanac semantic install` downloads the model from huggingface.co. That is the
+only time Almanac contacts a host other than the upstream, and no conversation
+text is sent. The model is never downloaded without that command.
+
+Once the packages and the model are there, the background worker gives each
+exchange a vector after it is stored, and again after its summary is written.
+It also catches up on older exchanges a few at a time, and `almanac semantic
+index` does all of them at once. Search (`almanac memory search`, the
+`memory_search` tool and the note added to a new conversation) then merges the
+keyword matches with the nearest exchanges by meaning. Exchanges that are not
+close enough are left out.
+
+- The vectors live in the same SQLite file, tagged with the model that made
+  them. If the model ever changes, old vectors are ignored and made again.
+- The note added to a new conversation is still chosen once and kept byte for
+  byte, so a vector made later never changes it. Working out the query vector
+  for it takes about 20 milliseconds once the model is loaded.
+- Loading the model takes about a second. `almanac serve` and `almanac` load it
+  in the background as they start.
+- If the packages or the model are missing, or loading fails, search quietly
+  stays keyword-based. `almanac semantic off` does the same on purpose, and
+  `almanac semantic on` undoes it. `almanac semantic status` shows what is in
+  use and how many exchanges have a vector or are waiting.
+- The model reads English best and takes about the first 256 tokens of each
+  exchange.
+
 ### 3. Compaction that keeps the cache
 
 When a conversation passes `compaction.trigger_tokens` (150,000 by default) and
@@ -257,6 +297,10 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac memory show ID` | Read one stored exchange or topic |
 | `almanac memory recent` | The latest conversations, by project |
 | `almanac memory forget` | Delete conversations (`--project NAME`, `--conversation ID`, `--all`) |
+| `almanac semantic install` | Download the model for search by meaning (needs `getalmanac[semantic]`) |
+| `almanac semantic status` | Whether the packages and model are there, and how many exchanges have a vector |
+| `almanac semantic index` | Make vectors for every stored exchange that is waiting |
+| `almanac semantic on \| off` | Use the model when it is there, or stay keyword-based |
 | `almanac projects` | Projects seen. `projects merge FROM INTO`, `projects rename NAME NEW` |
 | `almanac config [set KEY VALUE \| path]` | Show or change settings |
 | `almanac serve [--port N]` | Run only the proxy, for clients you start yourself |
@@ -280,6 +324,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `memory.keep_days` | `365` | Delete conversations untouched this long (`0` keeps all) |
 | `memory.summary_model` | `claude-haiku-5-5` | Model that writes exchange summaries in the background (`""` turns it off) |
 | `memory.summary_daily_calls` | `300` | Most summary calls per day |
+| `memory.semantic` | `true` | Search by meaning when the packages and the model are installed |
 | `compaction.enabled` | `true` | Compact long conversations |
 | `compaction.trigger_tokens` | `150000` | Size that starts a compaction |
 | `compaction.target_tokens` | `40000` | Most the summary may take |
@@ -332,7 +377,9 @@ While it runs, `almanac` shares it. Other clients can use it by setting
 
 ## Limits
 
-- Matching and memory search are keyword-based. There is no semantic search yet.
+- Skill and tool matching is keyword-based. Memory search works by meaning only
+  after you install the optional `semantic` extra and its model. Its search reads
+  every vector of the project, which is fine up to about 20,000 exchanges.
 - Summaries are written by a small model in the background, so a new exchange
   has its rule-written text until the call finishes, and a failed call leaves it.
   Summary calls use a little of your allowance.

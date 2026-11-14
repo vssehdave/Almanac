@@ -11,7 +11,9 @@ body, in three ways:
    grouped by project. The project is worked out from the files a conversation
    touches, not only from the folder it started in. Summaries start out written
    by rule; a small model then rewrites them in the background through the same
-   upstream and login, using a little of the user's allowance.
+   upstream and login, using a little of the user's allowance. With the optional
+   `semantic` extra, a local model also gives each exchange a vector, so search
+   finds exchanges by meaning.
 3. **Compaction.** Near the context limit the history is compressed once and
    the compressed prefix is kept byte for byte, so the prompt cache keeps
    hitting. Its outline is built from the stored summaries.
@@ -20,8 +22,10 @@ body, in three ways:
 
 - **Fully local.** The only network peer is the upstream the user's Claude Code
   already talks to. No other host receives conversation content. Never add a
-  hosted service or telemetry. Summary calls go to that same upstream, and
-  `memory.summary_model` set to `""` turns them off.
+  hosted service or telemetry. The one other host is Hugging Face, contacted only
+  by `almanac semantic install` to download a model, with no conversation content.
+  Summary calls go to that same upstream, and `memory.summary_model` set to `""`
+  turns them off.
 - **Never read, store or log credentials.** Auth headers are forwarded as
   received and never written anywhere. A background summary call holds them in
   memory for the length of the job only.
