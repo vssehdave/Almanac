@@ -19,7 +19,7 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac memory search WORDS  search stored conversations (--project NAME, --all)
   almanac memory show ID       read one stored exchange or topic in full
   almanac memory recent        the latest conversations, by project
-  almanac memory forget        delete stored conversations (--project NAME | --conversation ID | --all)
+  almanac memory forget        delete stored conversations (--project NAME | --conversation ID | --all; --force for open ones)
   almanac semantic [install|status|index|on|off]   search memory by meaning (optional model)
   almanac projects             projects seen; `projects merge FROM INTO`, `projects rename NAME NEW`
   almanac status               settings, files and recent activity
@@ -44,15 +44,22 @@ def _serve(rest):
     except OSError as exc:
         print(f"almanac: cannot listen on port {args.port or cfg['port']}: {exc}", file=sys.stderr)
         return 1
-    url = f"http://127.0.0.1:{server.server_address[1]}"
-    print(f"almanac is listening on {url}\n"
-          "While it runs, `almanac` shares it. Other clients can use it with:\n"
+    port, token = server.server_address[1], server.proxy.token
+    url = f"http://127.0.0.1:{port}/{token}"
+    try:
+        launcher.publish(port, token, server.proxy.key)
+    except OSError as exc:
+        print(f"almanac: could not write {launcher.serve_file()}, so `almanac` will not share this proxy: {exc}", file=sys.stderr)
+    print(f"almanac is listening on 127.0.0.1:{port}\n"
+          "While it runs, `almanac` shares it. Other clients need this address, which carries a secret:\n"
           f"  ANTHROPIC_BASE_URL={url}\n  _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1\n"
           "Press Ctrl+C to stop.", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        launcher.unpublish(token)
     return 0
 
 
@@ -192,6 +199,7 @@ def _memory(rest):
     group.add_argument("--project")
     group.add_argument("--conversation", type=int)
     group.add_argument("--all", action="store_true")
+    forget.add_argument("--force", action="store_true", help="also delete conversations changed in the last hour")
     args = parser.parse_args(rest)
     memory = _memory_handle()
 
@@ -210,8 +218,11 @@ def _memory(rest):
     elif args.cmd == "recent":
         _print(mcp.render_projects(memory))
     else:
-        count = memory.forget(project=project_key(args.project) if args.project else None, convo_id=args.conversation)
+        count = memory.forget(project=project_key(args.project) if args.project else None, convo_id=args.conversation,
+                              force=args.force)
         print(f"forgot {count} conversation(s)")
+        if memory.kept:
+            print(f"kept {memory.kept} open conversation(s) (changed in the last hour); close them and run forget again, or add --force")
     return 0
 
 
@@ -225,7 +236,7 @@ def _semantic(rest):
     elif cmd == "install":
         if semantic.missing():
             print(f"almanac: missing packages: {', '.join(semantic.missing())}\n"
-                  'Install them with: pip install "getalmanac[semantic]"', file=sys.stderr)
+                  'Install them with: pip install "getalmanac[semantic] @ git+https://github.com/vssehdave/Almanac"', file=sys.stderr)
             return 1
         if semantic.present():
             print("The model is already downloaded.")

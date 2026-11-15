@@ -202,6 +202,7 @@ class IndexTest(Case):
     def test_forget(self):
         key = self.memory.projects.see(self.alpha)
         self.memory.index("lane-1", "s1", key, self.convo(), reply("Added it."))
+        self.store.run("update convo set updated = updated - 7200")  # closed: not changed in the last hour
         self.assertEqual(self.memory.forget(project=key), 1)
         self.assertEqual(self.memory.counts(), {"convos": 0, "exchanges": 0, "topics": 0})
         self.assertEqual(self.memory.search("proxy cache"), [])

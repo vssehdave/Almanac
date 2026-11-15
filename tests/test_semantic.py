@@ -289,7 +289,7 @@ class CommandTest(Case):
         with mock.patch.object(semantic, "missing", lambda: ["numpy"]):
             code, _, err = self.run_cli("install")
         self.assertEqual(code, 1)
-        self.assertIn('pip install "getalmanac[semantic]"', err)
+        self.assertIn('pip install "getalmanac[semantic] @ git+https://github.com/vssehdave/Almanac"', err)
         with mock.patch.object(semantic, "missing", lambda: []), mock.patch.object(semantic, "present", lambda: False), \
                 mock.patch.object(semantic, "download", lambda: 90_000_000):
             code, out, _ = self.run_cli("install")

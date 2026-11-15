@@ -6,16 +6,18 @@ is ever changed, and if a layer fails or the upstream rejects the changed body,
 the original bytes are sent instead.
 """
 import http.client
+import hmac
 import http.server
 import json
 import os
 import queue
+import secrets
 import socket
 import ssl
 import sys
 import threading
 import time
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from . import config
 from . import request as rq
@@ -62,6 +64,8 @@ class Proxy:
         self.env = dict(os.environ)
         self.hop = self.hop_for(self.host)
         self.ctx = upstream.context(cfg, self.env) if self.secure else None
+        self.token = secrets.token_urlsafe(16)  # the first path segment every client request must carry
+        self.key = secrets.token_urlsafe(32)  # proves this process to `almanac`; never sent in any request
         self.fused = {}  # lane -> why its rewrites were switched off
         self.tls = None  # a tls.Session when running as an HTTPS proxy
         self.started, self.count = time.time(), 0
@@ -93,33 +97,41 @@ class Proxy:
         """Stop rewriting one conversation, for good: the upstream refused its rewritten form."""
         self.fused[lane] = why
         if self.store is not None:
-            self.store.put(f"fused:{lane}", why)
+            try:
+                self.store.put(f"fused:{lane}", why)
+            except Exception:  # the mark only outlasts this run; a store error must not drop this reply
+                pass
 
     def rewrite(self, raw: bytes, ctx: Ctx):
         """Return (bytes to send, parsed original or None)."""
         try:
             orig = json.loads(raw)
-        except ValueError:
+        except (ValueError, RecursionError):
             return raw, None
         if not isinstance(orig, dict) or not isinstance(orig.get("messages"), list):
             return raw, None
-        ctx.model = str(orig.get("model") or "")
-        ctx.lane = rq.lane_key(ctx.session, ctx.agent, orig["messages"])
-        ctx.cwd = rq.working_dir(orig)
-        ctx.after = None
-        if not self.layers or self.is_fused(ctx.lane):
-            return raw, orig
-        work = json.loads(raw)
+        try:
+            ctx.model = str(orig.get("model") or "")
+            ctx.lane = rq.lane_key(ctx.session, ctx.agent, orig["messages"])
+            ctx.cwd = rq.working_dir(orig)
+            ctx.after = None
+            if not self.layers or self.is_fused(ctx.lane):
+                return raw, orig
+            work = json.loads(raw)
+        except Exception as exc:  # fail open before any layer runs; nothing is indexed under a half-known lane
+            ctx.stats["error"] = f"{type(exc).__name__}: {exc}"[:300]
+            return raw, None
         try:
             for layer in self.layers:
                 layer.transform(work, ctx)
+            if work == orig:
+                return raw, orig
+            sent = rq.dumps(work)
         except Exception as exc:  # fail open: a broken layer must never block a turn
             ctx.stats["error"] = f"{type(exc).__name__}: {exc}"[:300]
             return raw, orig
-        if work == orig:
-            return raw, orig
         ctx.after = work
-        return rq.dumps(work), orig
+        return sent, orig
 
     def finish(self, ctx, orig, raw, sent, status, tee, started):
         reply = sse.parse(tee) if status == 200 and ctx.kind == "messages" and tee else None
@@ -161,11 +173,14 @@ class Proxy:
         while self._jobs.unfinished_tasks and time.time() < end:
             time.sleep(0.02)
 
-    def health(self) -> dict:
+    def health(self, challenge="") -> dict:
         from . import __version__
-        return {"almanac": __version__, "upstream": ("https://" if self.secure else "http://") + self.netloc + self.base,
+        info = {"almanac": __version__, "upstream": ("https://" if self.secure else "http://") + self.host,  # no login, path or secret
                 "requests": self.count, "uptime_s": int(time.time() - self.started),
                 "layers": [type(layer).__name__ for layer in self.layers], "fused_lanes": len(self.fused)}
+        if challenge:  # proves this process holds the key without sending it (see launcher.shared)
+            info["proof"] = hmac.new(self.key.encode(), challenge.encode(), "sha256").hexdigest()
+        return info
 
     def serve(self, host="127.0.0.1", port=0):
         server = Server((host, port), Handler)
@@ -175,6 +190,12 @@ class Proxy:
 
 class Server(http.server.ThreadingHTTPServer):
     daemon_threads = True
+
+    def server_bind(self):
+        if os.name == "nt":  # no other program may bind this port while it is in use
+            self.allow_reuse_address = False
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
     def handle_error(self, request, client_address):
         exc = sys.exc_info()[1]
@@ -186,6 +207,7 @@ class Server(http.server.ThreadingHTTPServer):
 
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    timeout = 960  # an idle or stalled local client must not hold a thread for ever
     _conn = None
     tunneled = False
 
@@ -201,13 +223,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
             out = bytearray()
             while True:
                 size = int(self.rfile.readline().split(b";")[0].strip() or b"0", 16)
+                if size < 0:
+                    raise ValueError("negative chunk size")
                 if not size:
                     while self.rfile.readline().strip():
                         pass
                     return bytes(out)
                 out += self.rfile.read(size)
                 self.rfile.readline()
-        return self.rfile.read(int(self.headers.get("content-length") or 0))
+        size = int(self.headers.get("content-length") or 0)
+        if size < 0:
+            raise ValueError("negative content-length")
+        return self.rfile.read(size)
 
     def _drop(self):
         if self._conn is not None:
@@ -221,6 +248,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def _refuse(self, status, why, message):
+        """Answer without forwarding anything, and log it (never the token or the query)."""
+        self.close_connection = True  # the request body is left unread
+        proxy = self.server.proxy
+        path = self.path.split("?", 1)[0]
+        # A wrong token may be another proxy's real one: log the path without its first segment.
+        path = ("/<?>/" + path[1:].partition("/")[2] if why == "token" else path.replace(proxy.token, "<token>"))[:80]
+        proxy.log.write({"ts": round(time.time(), 3), "kind": "refused", "why": why, "method": self.command, "path": path})
+        self._reply(status, {"error": message})
 
     def _send(self, body: bytes, identity: bool):
         """Send this request upstream with its own headers. Returns the response."""
@@ -327,21 +364,38 @@ class Handler(http.server.BaseHTTPRequestHandler):
         proxy = self.server.proxy
         if self.command == "CONNECT":
             return self._connect()
-        host = (self.headers.get("host") or "").rsplit(":", 1)[0].lower()
-        if not self.tunneled and host not in LOOPBACK:  # a web page must not reach this server through a DNS trick
-            return self._reply(403, {"error": "almanac only answers loopback requests"})
-        raw = self._body()
+        route = self.path.split("?", 1)[0]
+        if not self.tunneled:
+            if self.headers.get("origin") is not None or self.command == "OPTIONS":  # a web page must not drive this server
+                return self._refuse(403, "browser request", "almanac does not answer browser requests")
+            host = (self.headers.get("host") or "").rsplit(":", 1)[0].lower()
+            if host not in LOOPBACK:  # nor reach it through a DNS trick
+                return self._refuse(403, "host", "almanac only answers loopback requests")
+            if route != "/almanac/health":  # every other request carries the secret as its first path segment
+                seg, _, rest = self.path[1:].partition("/")
+                if not hmac.compare_digest(seg.encode("latin-1"), proxy.token.encode()):
+                    return self._refuse(403, "token", "the address is missing its secret or has an old one. Use the address almanac printed. "
+                                 "If `almanac serve` was restarted, start Claude Code again: it gets a new secret each time.")
+                self.path = "/" + rest  # the upstream never sees the token
+                route = "/" + rest.split("?", 1)[0]
+        try:
+            raw = self._body()
+        except ValueError:
+            return self._refuse(400, "framing", "bad request length")
         if self.tunneled and self.headers.get("upgrade"):
             return self._upgrade(raw)
-        route = self.path.split("?", 1)[0]
         if route == "/almanac/health":
-            return self._reply(200, proxy.health())
+            challenge = (parse_qs(urlsplit(self.path).query).get("challenge") or [""])[0][:128]
+            return self._reply(200, proxy.health(challenge))
         kind = ROUTES.get(route) if self.command == "POST" else None
         marks = {k.lower(): v for k, v in self.headers.items() if k.lower().startswith("x-claude-code-")}
         # Only Claude Code's own model requests are touched; they always carry a session id.
         ctx = Ctx(proxy, marks, kind, self.headers.items()) if kind and marks.get("x-claude-code-session-id") else None
         started = time.time()
-        sent, orig = proxy.rewrite(raw, ctx) if ctx else (raw, None)
+        try:
+            sent, orig = proxy.rewrite(raw, ctx) if ctx else (raw, None)
+        except Exception:  # fail open, whatever went wrong
+            sent, orig = raw, None
         try:
             resp = self._send(sent, identity=ctx is not None)
             if ctx and sent is not raw and resp.status == 400:
@@ -350,7 +404,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 retry = raw
                 if "compaction" in ctx.stats and proxy.store is not None:
                     # Compaction changes the most, so drop it first and keep the other savings.
-                    proxy.store.put(f"nocompact:{ctx.lane}", detail)
+                    try:
+                        proxy.store.put(f"nocompact:{ctx.lane}", detail)
+                    except Exception:  # without the mark the retry may compact again, be refused again, and go out raw
+                        pass
                     del ctx.stats["compaction"]
                     retry, _ = proxy.rewrite(raw, ctx)
                     resp = self._send(retry, identity=True)

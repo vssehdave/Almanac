@@ -2,6 +2,62 @@
 
 ## Unreleased
 
+- **Security: web pages cannot use the proxy.** A request with an `Origin`
+  header, and every `OPTIONS` request, is now refused with a 403 before
+  anything is forwarded. Refusals are logged (`"kind": "refused"`), without the
+  secret or the query string. This changes no bytes sent upstream.
+- **Security: the address now carries a secret.** The proxy answers only
+  requests whose path starts with a random secret, made for each proxy and
+  compared in constant time. `almanac` hands Claude Code the right address.
+  `almanac serve` prints it, so a client you start by hand needs that address
+  (see "Always on" in the README). A restarted `serve` makes a new secret, so
+  sessions that were sharing it must be started again; the 403 says so. The
+  secret is stripped before the request goes upstream, so upstream bytes do not
+  change.
+- **Security: `almanac` no longer trusts whatever answers on port 8787.** To
+  share a running `almanac serve` it must answer a random challenge with a
+  value computed from a key in `serve.json`. The key is separate from the
+  address secret and is never sent in a request. The file is readable only by
+  you and is removed when `serve` is stopped with Ctrl+C, unless another
+  `serve` has written its own since. A listener that returns a JSON list or a
+  malformed proof no longer crashes the launcher.
+- **Security: fail open is complete.** A store error, a transform error, a text
+  block that is not a string or a body too deep to parse no longer drops or
+  hangs a request, including on the retry after a 400. The original body goes
+  out.
+- **Security: forget really forgets.** `almanac memory forget` and the
+  `memory.keep_days` clean-up now also delete the conversation's saved choices
+  (compaction prefix, recall note, project, skill and tool decisions) and its
+  usage rows, overwrite deleted text, and empty the database's write-ahead file. Forget also
+  deletes the recall notes of other closed conversations, which can quote the
+  deleted text, and with `--project` the saved choices of subagents and of
+  conversations that were never indexed. A conversation
+  changed in the last hour is kept unless you add `--force`. The 45-day
+  clean-up no longer deletes the saved choices of a conversation that is still
+  being used.
+- **Security: private files on Linux and macOS.** The Almanac folder is created
+  with mode 0700 and the database and logs with mode 0600. Nothing changes on
+  Windows.
+- **Security: network paths are never opened.** A `//host/share` or
+  `\\host\share` path in a tool call is ignored when working out a project, so
+  a model cannot make Windows contact another host.
+- **Security: summary calls carry only their own conversation.** A summary call
+  now sends exchanges only from the conversation whose login it uses, and stops
+  after the first failure instead of trying every exchange.
+- **Security: wider secret removal.** Removed before storing: `NAME=value` for
+  names ending in secret, token, password or api key (but not `max_tokens`),
+  bearer and basic credentials, passwords in URLs, and Stripe, Google, npm,
+  GitLab and SendGrid keys.
+- **Security: stored text is marked as a record.** New recall notes and new
+  compaction summaries say they are quoted records, and tool output lines are
+  indented so they cannot pose as a `User:` turn. `</system-reminder >` and
+  similar spellings are removed. Notes and prefixes already stored are not
+  changed.
+- **Security: smaller fixes.** A comparison of a non-ASCII proxy token no longer
+  raises. A negative `Content-Length` or chunk size is refused. An idle client
+  is dropped after 16 minutes. On Windows another program can no longer bind
+  the port of a running proxy. `/almanac/health` shows only the scheme and host
+  of the upstream.
 - **Search by meaning.** The new optional extra `getalmanac[semantic]` and the
   command `almanac semantic install` add a small embedding model that runs on
   your machine (all-MiniLM-L6-v2, about 90 MB). With it, `almanac memory

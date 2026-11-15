@@ -95,8 +95,9 @@ class SummaryLayer:
         if reply.get("stop_reason") == "tool_use" or not ctx.project:  # nothing finished yet
             return
         store = ctx.store
-        rows = store.run("select id from node where kind = 'leaf' and project = ? and summary = '' and tries < ? "
-                         "order by ts desc, id desc limit ?", (ctx.project, MAX_TRIES, PER_JOB))
+        # Only this conversation's exchanges: the login on this request must not carry another conversation's text.
+        rows = store.run("select id from node where kind = 'leaf' and convo = (select id from convo where lane = ?) "
+                         "and summary = '' and tries < ? order by ts desc, id desc limit ?", (ctx.lane, MAX_TRIES, PER_JOB))
         for row in rows:
             used = today(store)
             if paused_until(store) or used["calls"] >= cfg["summary_daily_calls"]:
@@ -104,11 +105,12 @@ class SummaryLayer:
             store.run("update node set tries = tries + 1 where id = ?", (row["id"],))
             used["calls"] += 1
             store.put("summary:day", used)
-            self._ask(ctx, orig, row["id"], cfg["summary_model"], used)
+            if not self._ask(ctx, orig, row["id"], cfg["summary_model"], used):
+                break  # the upstream is refusing or not answering: do not wait for it once per exchange
         self.memory.embed_pending()  # a new summary clears its exchange's vector; make it again from the summary
 
     def _ask(self, ctx, orig, node_id, model, used):
-        """One summary call for one exchange. Any failure leaves the rule-written text."""
+        """One summary call for one exchange. Any failure leaves the rule-written text and returns False."""
         store, memory = ctx.store, self.memory
         text = memory.detail(node_id) or store.run("select text from node where id = ?", (node_id,))[0]["text"]
         if len(text) > INPUT_CHARS:
@@ -124,7 +126,7 @@ class SummaryLayer:
             if resp.status in PAUSE_ON:
                 store.put("summary:pause", time.time() + PAUSE_SECONDS)
             if resp.status != 200:
-                return
+                return False
             message = json.loads(data)
             usage = message.get("usage") or {}
             used["in"] += sum(int(usage.get(k) or 0) for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
@@ -133,7 +135,8 @@ class SummaryLayer:
             found = _parse(message)  # clean() also redacts secrets
             if found:
                 memory.set_summary(node_id, *found)
+            return True
         except (OSError, ValueError, http.client.HTTPException):
-            pass
+            return False
         finally:
             conn.close()

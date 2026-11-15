@@ -53,6 +53,12 @@ class HttpsModeTest(unittest.TestCase):
         self.assertIn("407", connect(self.rig.port, "api.test:443")[0])
         self.assertIn("407", connect(self.rig.port, "api.test:443", token="wrong")[0])
 
+    def test_a_token_with_non_ascii_characters_is_refused_not_a_crash(self):
+        import base64
+        header = "Basic " + base64.b64encode("almanac:café".encode()).decode()
+        self.assertFalse(self.session.authorized(header))
+        self.assertTrue(self.session.authorized("Basic " + base64.b64encode(f"almanac:{self.session.token}".encode()).decode()))
+
     def test_the_upstream_host_is_decrypted_and_served_by_the_proxy(self):
         self.rig.upstream.respond = lambda req: (200, {"content-type": "application/json"}, b'{"hello":1}')
         status, sock = connect(self.rig.port, "api.test:443", token=self.session.token)

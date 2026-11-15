@@ -76,7 +76,11 @@ numbers depend on how many skills and tools you have.
 ## What it changes
 
 Almanac only ever changes the JSON body of Claude Code's own model requests.
-Everything else is relayed byte for byte.
+Everything else is relayed as received, with two exceptions. On model requests
+`Accept-Encoding` is set to `identity`, so Almanac can read the reply. And
+hop-by-hop headers (`Connection`, `Keep-Alive`, `Transfer-Encoding`, `TE`,
+`Upgrade`, `Proxy-Authorization`, `Proxy-Connection`) are dropped, while `Host`
+and `Content-Length` are set again for the upstream.
 
 ### 1. A smaller session start
 
@@ -134,12 +138,19 @@ same upstream as your session, with the login your session already uses. It
 costs a little of your allowance: a few hundred tokens per exchange, at most
 `memory.summary_daily_calls` calls a day. Nothing goes to any other host. If a
 call fails, the rule-written text stays, and each exchange is tried at most
-three times. A rate-limit or login error pauses summary calls for an hour. Set
+three times. A 401, 403, 429 or 529 reply pauses summary calls for an hour. A
+call only carries text from the conversation whose login it uses. Set
 `memory.summary_model` to `""` to turn this off. `almanac status` shows how many
 exchanges have a model-written summary and what today's calls used.
 
-Obvious secrets (API keys, tokens, private keys, `password=` values) are removed
-before text is stored, including from model-written summaries.
+Obvious secrets (API keys, tokens, private keys, `password=` values, bearer
+credentials, passwords in URLs) are removed before text is stored, including
+from model-written summaries. This is best effort: see [Security](#security).
+
+Text handed back to the model (the note for a new conversation, the compaction
+summary) is marked as a quoted record, and lines of tool output are indented so
+they cannot pose as a `User:` turn. That lowers the risk of an injected
+instruction in stored text. It does not remove it.
 
 #### Search by meaning
 
@@ -150,7 +161,7 @@ An optional extra fixes that. It adds a small embedding model that runs on your
 machine (all-MiniLM-L6-v2, about 90 MB, CPU only):
 
 ```bash
-pip install "getalmanac[semantic]"
+pip install "getalmanac[semantic] @ git+https://github.com/vssehdave/Almanac"
 almanac semantic install
 ```
 
@@ -170,9 +181,9 @@ close enough are left out.
   them. If the model ever changes, old vectors are ignored and made again.
 - The note added to a new conversation is still chosen once and kept byte for
   byte, so a vector made later never changes it. Working out the query vector
-  for it takes about 20 milliseconds once the model is loaded.
-- Loading the model takes about a second. `almanac serve` and `almanac` load it
-  in the background as they start.
+  for it takes roughly 20 milliseconds once the model is loaded (not measured).
+- Loading the model takes roughly a second (not measured). `almanac serve` and
+  `almanac` load it in the background as they start.
 - If the packages or the model are missing, or loading fails, search quietly
   stays keyword-based. `almanac semantic off` does the same on purpose, and
   `almanac semantic on` undoes it. `almanac semantic status` shows what is in
@@ -216,7 +227,8 @@ read 24,248 of 28,165 input tokens from cache.
 
 One honest cost: Anthropic shares a cache of Claude Code's stock tool list
 across all users, and a changed tool list does not hit it. The first session
-after an idle hour writes its own copy. Sessions within the hour read it back.
+after an idle period writes its own copy, and later sessions read it back. The
+length of that period (thought to be about an hour) has not been measured here.
 
 ## Remote Control
 
@@ -296,7 +308,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac memory search WORDS` | Search stored conversations (`--project NAME`, `--all`) |
 | `almanac memory show ID` | Read one stored exchange or topic |
 | `almanac memory recent` | The latest conversations, by project |
-| `almanac memory forget` | Delete conversations (`--project NAME`, `--conversation ID`, `--all`) |
+| `almanac memory forget` | Delete conversations and their saved choices (`--project NAME`, `--conversation ID`, `--all`). Keeps any changed in the last hour unless you add `--force` |
 | `almanac semantic install` | Download the model for search by meaning (needs `getalmanac[semantic]`) |
 | `almanac semantic status` | Whether the packages and model are there, and how many exchanges have a vector |
 | `almanac semantic index` | Make vectors for every stored exchange that is waiting |
@@ -343,17 +355,26 @@ Everything is under `~/.almanac/` (or `ALMANAC_HOME`):
 
 | File | Holds |
 |---|---|
-| `almanac.db` | The memory tree, exchange transcripts, per-conversation decisions |
+| `almanac.db` | The memory tree, exchange transcripts, per-conversation decisions (deleted after 45 days of not being used) |
+| `serve.json` | While `almanac serve` runs: its port, its secret and the key that proves it, so `almanac` can find it. Removed when `serve` is stopped with Ctrl+C. A `serve` that is killed leaves it, and the next `serve` overwrites it |
 | `config.json` | Settings you changed |
 | `logs/requests.jsonl` | One line per request: sizes, token counts, timing. No message text, no credentials |
 | `mcp.json` | The entry that tells Claude Code how to start the memory tools |
 
 The memory holds conversation text in plain SQLite on your disk. Delete any of
-it with `almanac memory forget`, or all of it by removing the folder.
+it with `almanac memory forget`, or all of it by removing the folder. Forget
+also removes the saved choices for those conversations (compaction prefixes,
+recall notes, which skills stayed full), and the recall notes of every other
+closed conversation, because a note can quote the ones you deleted. It leaves a conversation alone if it
+changed in the last hour, because that one may still be open; close it and run
+forget again, or add `--force`. Saved per-conversation choices are cleaned up
+after 45 days without being used, and a conversation that keeps running keeps
+its choices.
 
 ## If something goes wrong
 
-- A layer that raises an error is skipped and the original request is sent.
+- A layer that raises an error, a store that cannot be read or written, or a
+  request body Almanac cannot parse: the original request is sent as it came.
 - If Anthropic answers 400 to a rewritten request, Almanac resends it without
   compaction, and if that is refused too, exactly as Claude Code wrote it. That
   conversation is then left alone, and the reason is in the log.
@@ -371,9 +392,85 @@ launch, run one long-lived proxy instead:
 almanac serve
 ```
 
-While it runs, `almanac` shares it. Other clients can use it by setting
-`ANTHROPIC_BASE_URL=http://127.0.0.1:8787` and
-`_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1`.
+`almanac serve` prints an address that ends in a secret, for example
+`http://127.0.0.1:8787/AbC...`. The proxy answers only requests that carry
+that secret as the first part of the path. While it runs, `almanac` finds it
+and shares it by itself. Any other client needs the printed address:
+
+```
+ANTHROPIC_BASE_URL=<the address serve printed, secret included>
+_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1
+```
+
+A new secret is made each time `serve` starts. After a restart every session
+that was using the old `serve` gets a 403 until it is started again: close
+those Claude Code sessions and run `almanac` again, and give a client you
+started by hand the new address. The secret is also in `serve.json` in
+the Almanac folder (`almanac config path` shows where), which only you can read
+on Linux and macOS. A request without the secret gets a 403 and a line in
+`logs/requests.jsonl` with `"kind": "refused"`.
+
+## Security
+
+Almanac is built for one person on their own machine. What it does and does not
+protect:
+
+**Protected**
+
+- Only this machine can reach it: it listens on 127.0.0.1 and refuses any other
+  `Host`.
+- Web pages cannot use it. Any request with an `Origin` header, and every
+  `OPTIONS` request, is refused before anything is forwarded.
+- A program needs the secret in the address (see [Always on](#always-on)).
+  `almanac` makes a new one for each proxy it starts. The check is a constant
+  time comparison.
+- `almanac` shares a running `almanac serve` only if that server answers a
+  random challenge with a value computed from a key in `serve.json`. That key
+  is separate from the secret in the address and is never sent in any request,
+  so something that just answers on port 8787, or that has seen the address, is
+  not trusted.
+- On Linux and macOS the Almanac folder is created readable by you only (mode
+  0700) and the database and logs are mode 0600.
+- Your login is forwarded and never read, stored or logged.
+- A network path (`\\host\share` or `//host/share`) that a tool call names is
+  never opened to work out a project.
+
+**Not protected**
+
+- Another program running as you. It can read the secret (it is in the
+  environment of Claude Code and in `serve.json`), the database and the logs.
+  Almanac is not a wall against your own account.
+- Other accounts on a shared machine, on Windows. The file modes above are not
+  set there. The profile folder's own permissions are what keep others out, and
+  that has not been tested with a second account.
+- A `serve` that stops while a session is using it. Its port is then free, and
+  another local program could take it and receive that session's requests,
+  login included. Do not run `serve` on a machine shared with people you do not
+  trust.
+- What gets stored. Secrets are removed by pattern before text is saved: private
+  keys, common API key formats, `NAME=value` where the name ends in `secret`,
+  `token`, `password` or `api key`, bearer and basic credentials, and passwords
+  in URLs. A secret in some other shape is stored as typed, in plain SQLite. The
+  stored text is also sent to the summary model with your login. Claude Code
+  keeps its own full transcripts in `~/.claude` regardless.
+- The session-start text in a compaction. The stored compaction keeps the
+  session-start text exactly as sent, so a secret in it is stored.
+- Memory crosses accounts. Memory is kept per project, not per login. If you use
+  a work and a personal account, give each its own `ALMANAC_HOME`. A client
+  that holds the secret can also read any project's memory by naming it in its
+  first message.
+- Settings. A login written into `upstream_proxy` is saved in `config.json` in
+  plain text. Set `HTTPS_PROXY` in the environment instead.
+- The semantic model is a pinned download over HTTPS. It is not checked against
+  a hash.
+- Deleted text. `almanac memory forget` overwrites deleted rows and empties the
+  database's write-ahead file, but it cannot reach backups or the free space of some disks.
+  A recall note already added to a conversation that is still open keeps its
+  snippets until that conversation is forgotten. `forget --project` deletes the
+  conversations filed under that project: an exchange about it inside a
+  conversation filed under another project stays until that one is forgotten.
+- Injected instructions. Stored text is marked as a quoted record, but a model
+  can still be fooled by it.
 
 ## Limits
 
