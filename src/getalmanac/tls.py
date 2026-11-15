@@ -124,7 +124,7 @@ class Session:
             given = base64.b64decode(value).decode("utf-8", "replace").partition(":")[2]
         except ValueError:
             return False
-        return scheme.lower() == "basic" and secrets.compare_digest(given, self.token)
+        return scheme.lower() == "basic" and secrets.compare_digest(given.encode("utf-8"), self.token.encode("utf-8"))
 
     def proxy_url(self, port: int) -> str:
         return f"http://almanac:{self.token}@127.0.0.1:{port}"

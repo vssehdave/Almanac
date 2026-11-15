@@ -6,6 +6,8 @@ import threading
 import time
 from pathlib import Path
 
+from . import config
+
 LOG_LIMIT = 20 * 1024 * 1024
 
 # Text Claude Code injects at session start, by the line each part opens with.
@@ -78,6 +80,7 @@ class Log:
     def __init__(self, path: Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        config.private(self.path.parent, 0o700)
         self._lock = threading.Lock()
 
     def write(self, record: dict):
@@ -86,7 +89,7 @@ class Log:
             try:
                 if self.path.exists() and self.path.stat().st_size > LOG_LIMIT:
                     os.replace(self.path, self.path.with_name(self.path.name + ".1"))
-                with open(self.path, "a", encoding="utf-8") as handle:
+                with open(self.path, "a", encoding="utf-8", opener=lambda p, flags: os.open(p, flags, 0o600)) as handle:
                     handle.write(line)
             except OSError:
                 pass  # a full disk must not stop a request

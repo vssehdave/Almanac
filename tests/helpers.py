@@ -109,8 +109,12 @@ class Rig:
         self.port = self.server.server_address[1]
         self.expected = 0
 
-    def request(self, method, path, body=None, headers=None):
+    def request(self, method, path, body=None, headers=None, token=True):
+        """`token` True sends the proxy's own, a string sends that one, False sends none."""
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        token = self.proxy.token if token is True else token
+        if token and not path.startswith("/almanac/health"):  # the way a client with the printed address arrives
+            path = f"/{token}{path}"
         payload = json.dumps(body).encode() if isinstance(body, (dict, list)) else body
         conn.request(method, path, payload, headers or {})
         resp = conn.getresponse()

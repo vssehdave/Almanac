@@ -44,9 +44,22 @@ DEFAULTS = {
 }
 
 
+POSIX = os.name != "nt"
+
+
+def private(path, mode: int):
+    """Limit a file or folder to this user. Does nothing on Windows, where the profile folder is already private."""
+    if POSIX:
+        try:
+            os.chmod(path, mode)
+        except OSError:
+            pass
+
+
 def home() -> Path:
     path = Path(os.environ.get("ALMANAC_HOME") or Path.home() / ".almanac")
     path.mkdir(parents=True, exist_ok=True)
+    private(path, 0o700)  # holds the stored conversations, so no other user may list it
     return path
 
 

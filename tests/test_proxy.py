@@ -214,16 +214,25 @@ class LauncherTest(unittest.TestCase):
 
 
 class SharedProxyTest(unittest.TestCase):
+    def tearDown(self):
+        try:
+            launcher.serve_file().unlink()
+        except OSError:
+            pass
+
     def test_a_running_proxy_of_this_version_is_found(self):
         rig = Rig()
         self.addCleanup(rig.close)
-        self.assertEqual(launcher.shared(rig.port), f"http://127.0.0.1:{rig.port}")
+        launcher.publish(rig.port, rig.proxy.token, rig.proxy.key)
+        self.assertEqual(launcher.shared(rig.port), f"http://127.0.0.1:{rig.port}/{rig.proxy.token}")
 
     def test_nothing_listening_and_other_servers_are_ignored(self):
         rig = Rig()
         self.addCleanup(rig.close)
         other = rig.upstream.server.server_address[1]  # answers, but is not an almanac proxy
+        launcher.publish(other, rig.proxy.token, rig.proxy.key)
         self.assertIsNone(launcher.shared(other))
+        launcher.publish(rig.port, rig.proxy.token, rig.proxy.key)
         rig.close()
         self.assertIsNone(launcher.shared(rig.port))
 

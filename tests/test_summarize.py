@@ -54,10 +54,16 @@ class Case(unittest.TestCase):
             return self.verdict
         return 200, {"content-type": "text/event-stream"}, sse("Added the retry helper in retry.py.")
 
-    def ask(self, prompt, extra=None, tools=True):
+    def ask(self, prompt, extra=None, tools=True, earlier=0):
+        """Send `prompt`; with `earlier`, as the end of a conversation that already has that many finished exchanges."""
+        messages = []
+        for n in range(earlier):
+            messages += [tc.human(prompt if n == 0 else f"{prompt} again {n}"),
+                         {"role": "assistant", "content": [{"type": "text", "text": "Added the retry helper in retry.py."}]}]
+        messages.append(tc.human(prompt if not earlier else f"{prompt} again {earlier}"))
         body = {"model": "m", "system": [{"type": "text", "text": IDENTITY, "cache_control": {"type": "ephemeral"}},
                                          {"type": "text", "text": f"# Environment\n - Primary working directory: {self.alpha}\n"}],
-                "messages": [tc.human(prompt)]}
+                "messages": messages}
         if tools:
             body["tools"] = tc.TOOLS
         self.rig.messages(body, extra=extra)
@@ -108,20 +114,37 @@ class SummaryTest(Case):
             self.assertNotIn(secret, data)
 
     def test_rule_text_stays_when_the_call_fails_and_each_exchange_gets_three_tries(self):
-        for status in (500, 200):
-            self.verdict = (500, JSON_HEADERS, b"{}") if status == 500 else message("sorry, no json here")
-            self.ask(f"Question number {status} about the retry helper")
-        self.assertEqual([(r["summary"], r["title"].startswith("Question")) for r in self.leaves()], [("", True)] * 2)
+        q = "A question about the retry helper"  # one conversation, resumed: each request sees the exchanges so far
+        self.verdict = (500, JSON_HEADERS, b"{}")
+        self.ask(q)
+        self.verdict = message("sorry, no json here")
+        self.ask(q, earlier=1)
+        self.assertEqual([(r["summary"], r["title"].startswith("A question")) for r in self.leaves()], [("", True)] * 2)
         self.assertFalse(summarize.paused_until(self.store))
-        for n in range(3):
-            self.ask(f"Another question {n} about the retry helper")
+        self.ask(q, earlier=2)
         self.assertEqual(max(r["tries"] for r in self.leaves()), 3)
         self.assertTrue(all(r["summary"] == "" for r in self.leaves()))
         before = len(self.calls)
         self.verdict = GOOD
-        self.ask("A final question about the retry helper")
-        self.assertEqual(len(self.calls) - before, 3)  # the exchanges that used up their tries are left alone
+        self.ask(q, earlier=3)
+        self.assertEqual(len(self.calls) - before, 3)  # the exchange that used up its tries is left alone
         self.assertEqual(len([r for r in self.leaves() if r["summary"]]), 3)
+
+    def test_a_login_only_carries_its_own_conversations_text(self):
+        self.verdict = (500, JSON_HEADERS, b"{}")
+        self.ask("Alice asked about the retry helper payroll", extra={"authorization": "Bearer alice"})
+        self.assertEqual(len(self.calls), 1)
+        self.verdict = GOOD
+        self.ask("Bob asked about something else entirely", extra={"authorization": "Bearer bob"})
+        self.assertEqual(len(self.calls), 2)  # Bob's exchange only; Alice's waits for her own conversation
+        self.assertEqual(self.calls[-1]["headers"]["authorization"], "Bearer bob")
+        self.assertNotIn("payroll", self.calls[-1]["body"].decode())
+        self.assertEqual([bool(r["summary"]) for r in self.leaves()], [False, True])
+
+    def test_a_failing_upstream_is_asked_once_not_once_per_exchange(self):
+        self.verdict = (500, JSON_HEADERS, b"{}")
+        self.ask("A question about the retry helper", earlier=3)  # four exchanges are indexed at once
+        self.assertEqual(len(self.calls), 1)
 
     def test_an_allowance_error_pauses_for_an_hour(self):
         self.verdict = (429, JSON_HEADERS, b'{"type":"error","error":{"type":"rate_limit_error"}}')
@@ -150,7 +173,7 @@ class SummaryTest(Case):
         self.assertEqual(len([r for r in self.leaves() if r["summary"]]), 2)
         self.store.put("summary:day", {"day": "2000-01-01", "calls": 99, "in": 0, "out": 0})  # a new day
         self.ask("Question 5 about the retry helper")
-        self.assertEqual(len(self.calls), 4)
+        self.assertEqual(len(self.calls), 3)  # each of these questions is its own conversation
 
     def test_nothing_is_sent_when_the_model_is_not_set_or_the_request_is_not_the_main_thread(self):
         self.start(**{"memory.summary_model": ""})

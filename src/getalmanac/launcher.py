@@ -1,7 +1,9 @@
 """Start the proxy, then run Claude Code pointed at it."""
+import hmac
 import http.client
 import json
 import os
+import secrets
 import shutil
 import signal
 import subprocess
@@ -9,6 +11,7 @@ import sys
 import threading
 from pathlib import Path
 
+from . import config
 from . import proxy as proxy_mod
 
 
@@ -45,7 +48,7 @@ def with_memory_tools(args, cfg):
     """Add the memory tools' MCP server to Claude Code's arguments, unless turned off."""
     if not (cfg["memory"]["enabled"] and cfg["memory"]["tools"]) or "--strict-mcp-config" in args:
         return args
-    from . import config, mcp
+    from . import mcp
 
     path = config.home() / "mcp.json"
     try:
@@ -94,19 +97,54 @@ def https_env(session, port: int, parent=None) -> dict:
     return env
 
 
+def serve_file():
+    return config.home() / "serve.json"
+
+
+def publish(port: int, token: str, key: str):
+    """Tell `almanac` where `almanac serve` listens, the address secret and the key that proves it. This user only."""
+    fd = os.open(serve_file(), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump({"port": port, "token": token, "key": key}, handle)
+
+
+def unpublish(token: str):
+    """Remove serve.json, unless another `almanac serve` has written its own since."""
+    try:
+        if json.loads(serve_file().read_text(encoding="utf-8")).get("token") == token:
+            serve_file().unlink()
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
 def shared(port: int):
-    """The address of a running `almanac serve` of this version on `port`, or None."""
+    """The address of a running `almanac serve` of this version on `port`, or None.
+
+    Something answering on the port is not enough: it must prove it holds the key in serve.json
+    by answering a random challenge. The key is never sent, and unlike the token it is in no request path.
+    """
     from . import __version__
 
+    try:
+        info = json.loads(serve_file().read_text(encoding="utf-8"))
+        token, key = info["token"], info["key"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if info.get("port") != port or not all(isinstance(x, str) and x for x in (token, key)):
+        return None
+    challenge = secrets.token_hex(16)
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=0.5)
     try:
-        conn.request("GET", "/almanac/health")
-        answer = json.loads(conn.getresponse().read())
+        conn.request("GET", f"/almanac/health?challenge={challenge}")
+        answer = json.loads(conn.getresponse().read(65536))
     except (OSError, ValueError, http.client.HTTPException):
         return None
     finally:
         conn.close()
-    return f"http://127.0.0.1:{port}" if answer.get("almanac") == __version__ else None
+    if not isinstance(answer, dict) or answer.get("almanac") != __version__ or not isinstance(answer.get("proof"), str):
+        return None
+    want = hmac.new(key.encode(), challenge.encode(), "sha256").hexdigest()
+    return f"http://127.0.0.1:{port}/{token}" if hmac.compare_digest(answer["proof"].encode("utf-8", "replace"), want.encode()) else None
 
 
 def start(cfg):
@@ -114,7 +152,7 @@ def start(cfg):
     proxy = proxy_mod.build(cfg)
     server = proxy.serve()
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    return proxy, server, f"http://127.0.0.1:{server.server_address[1]}"
+    return proxy, server, f"http://127.0.0.1:{server.server_address[1]}/{proxy.token}"
 
 
 def run(args, cfg) -> int:

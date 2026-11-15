@@ -36,8 +36,15 @@ def normalize(path: str) -> str:
     return path
 
 
+def is_unc(path: str) -> bool:
+    """A network path (`//host/share` or `\\\\host\\share`). Looking at one makes Windows contact that host."""
+    return path.replace("\\", "/").startswith("//")
+
+
 def repo_root(path: str) -> str:
     """The git repository containing `path`, or "". A worktree resolves to its main checkout."""
+    if is_unc(path):
+        return ""
     start = Path(normalize(path))
     now = time.time()
     try:
@@ -108,7 +115,7 @@ def describe(path: str):
 
 
 def paths_in(text: str) -> list:
-    return [normalize(m.group(0)) for m in _ABS.finditer(text or "")]
+    return [p for p in (normalize(m.group(0)) for m in _ABS.finditer(text or "")) if not is_unc(p)]
 
 
 def tool_paths(messages) -> list:
@@ -121,7 +128,7 @@ def tool_paths(messages) -> list:
             for key, value in block["input"].items():
                 if not isinstance(value, str):
                     continue
-                if key in _PATH_KEYS and re.match(r"^(?:[A-Za-z]:[\\/]|/)", value):
+                if key in _PATH_KEYS and re.match(r"^(?:[A-Za-z]:[\\/]|/)", value) and not is_unc(value):
                     found.append(normalize(value))
                 elif key in ("command", "pattern", "prompt"):
                     found.extend(paths_in(value))
@@ -178,7 +185,7 @@ class Projects:
     def discover(self, root: str):
         """Learn the repositories next to `root`, so one can be picked up by name alone."""
         parent = os.path.dirname(root)
-        if not parent or parent in self._scanned:
+        if not parent or is_unc(parent) or parent in self._scanned:
             return
         self._scanned.add(parent)
         try:
