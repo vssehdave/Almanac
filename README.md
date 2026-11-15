@@ -456,6 +456,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `routing.escalate_turns` | `3` | Turns a raise lasts |
 | `routing.prices`, `routing.work` | see `config.py` | Relative prices and expected work per turn, for pricing a switch |
 | `routing.windows` | 1,000,000 each | Context window per model id (unknown ids count as 200,000) |
+| `offline.hold_minutes` | `480` | Minutes a model request waits for the network to return (`0` fails at once) |
 | `remote_control` | `false` | Run sessions in HTTPS-proxy mode |
 | `port` | `8787` | Where `almanac serve` listens |
 | `upstream` | `https://api.anthropic.com` | Where requests are sent |
@@ -588,6 +589,21 @@ protect:
   conversation filed under another project stays until that one is forgotten.
 - Injected instructions. Stored text is marked as a quoted record, but a model
   can still be fooled by it.
+
+## When the network drops
+
+If the upstream cannot be reached, Almanac holds a model request and sends it
+when the network returns, instead of failing it. `offline.hold_minutes` (default
+480, so 8 hours) sets how long it waits; `0` turns this off and a request fails
+at once with a 502, as before. While a streaming request waits, Almanac sends
+pings so the connection stays open. A request that is not streamed answers with
+an error after at most 9 minutes, because Claude Code stops waiting for a reply
+after 10. If the wait runs out, or the upstream then answers with an error, the
+stream is cut with no invented message, so Claude Code retries and shows the
+real result. A client that gives up while its request waits is dropped and its
+request is never sent later. `almanac report` counts the requests that waited.
+Tested against a fake upstream that goes down and comes back, not a real
+outage, and not with a live Claude Code retry.
 
 ## Limits
 
