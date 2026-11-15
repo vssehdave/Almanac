@@ -130,7 +130,9 @@ def summary(records, now=None) -> dict:
         sent, tokens = record.get("bytes_out") or 0, _tokens(record.get("usage"))
         if sent and tokens and record.get("bytes_in", 0) > sent:
             saved += int((record["bytes_in"] - sent) * tokens / sent)
-    return {"requests": len(day), "sessions": len({r.get("session") for r in day}), "saved_tokens": saved}
+    held = [r["held"] for r in day if r.get("held")]
+    return {"requests": len(day), "sessions": len({r.get("session") for r in day}), "saved_tokens": saved,
+            "held": len(held), "held_s": sum(held)}
 
 
 def routing(records) -> dict:
@@ -190,5 +192,7 @@ def render(records) -> str:
     totals = summary(records)
     lines += ["", f"Last 24 hours: {totals['requests']} request(s) in {totals['sessions']} session(s), "
               f"about {totals['saved_tokens']:,} input tokens kept out."]
+    if totals["held"]:
+        lines.append(f"{totals['held']} request(s) waited out a network outage, {totals['held_s']:,} seconds in all.")
     lines.append("Per-part figures are the exact total split by size, so treat them as estimates.")
     return "\n".join(lines) + render_routing(records)

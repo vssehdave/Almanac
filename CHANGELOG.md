@@ -17,6 +17,16 @@
   `almanac route status` and `almanac route pin`. `almanac report` and
   `almanac status` show requests per tier, moves and tokens per model, and the
   request log records the model that answered.
+- **Riding out a network drop.** When the upstream cannot be reached, a model
+  request is held and sent when the network returns, for up to
+  `offline.hold_minutes` (default 480; `0` turns it off and requests fail at
+  once, as before). A streaming request gets pings while it waits. A request
+  that is not streamed answers with an error after at most 9 minutes. If the
+  wait runs out, or the upstream then answers with an error, the stream is
+  cut, so Claude Code retries and sees the real result. A client that leaves
+  while its request waits is dropped and never served later. `almanac report`
+  shows how many requests waited. Tested with a fake upstream, not a real
+  outage.
 - **Security: web pages cannot use the proxy.** A request with an `Origin`
   header, and every `OPTIONS` request, is now refused with a 403 before
   anything is forwarded. Refusals are logged (`"kind": "refused"`), without the

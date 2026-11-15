@@ -13,6 +13,7 @@ import os
 import queue
 import re
 import secrets
+import select
 import socket
 import socketserver
 import ssl
@@ -35,6 +36,10 @@ ROUTES = {"/v1/messages": "messages", "/v1/messages/count_tokens": "count_tokens
 SIZE_ERROR = re.compile(r"prompt is too long|exceed context limit", re.I)  # a size refusal, not a bad rewrite
 TEE_LIMIT = 16 * 1024 * 1024
 UPSTREAM_TIMEOUT = 900
+CONNECT_TIMEOUT = 20
+PING_EVERY = 15  # seconds between pings (and connect retries) while a stream waits for the network
+SILENT_LIMIT = 540  # a waiting non-stream request answers before the client's 600 s header wait ends
+PING = b'event: ping\ndata: {"type": "ping"}\n\n'
 ROUTE_REFUSED = (400, 403, 404)  # what an unknown, unavailable or unsupported model comes back as
 
 
@@ -65,6 +70,14 @@ class Ctx:
         self.stats = {}
         self.after = None  # the rewritten body, when a layer changed it
         self.orig = None  # the body as Claude Code sent it, for layers that decide from the whole history
+
+
+class Hold:
+    """A model request waiting for the network to return, and for how long it may."""
+
+    def __init__(self, started, seconds, stream, stats):
+        self.stream, self.stats, self.since, self.begun = stream, stats, 0, False  # begun: the client has its 200
+        self.until = started + (seconds if stream else min(seconds, SILENT_LIMIT))
 
 
 class Proxy:
@@ -229,6 +242,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     timeout = 960  # an idle or stalled local client must not hold a thread for ever
     _conn = None
+    hold = None
     tunneled = False
 
     def log_message(self, *args):
@@ -279,6 +293,47 @@ class Handler(http.server.BaseHTTPRequestHandler):
         proxy.log.write({"ts": round(time.time(), 3), "kind": "refused", "why": why, "method": self.command, "path": path})
         self._reply(status, {"error": message})
 
+    def _open(self, conn):
+        """Connect (TLS and tunnel included) quickly, and wait out an outage while the hold allows."""
+        hold = self.hold
+        try:
+            while True:
+                conn.timeout = CONNECT_TIMEOUT
+                try:
+                    return conn.connect()
+                except OSError as exc:
+                    conn.close()
+                    # a certificate problem, or a proxy that answered with a refusal, is not an outage
+                    if isinstance(exc, ssl.SSLError) or str(exc).startswith("Tunnel connection failed"):
+                        raise
+                    self._wait()
+        finally:
+            conn.timeout = UPSTREAM_TIMEOUT
+            if conn.sock:
+                conn.sock.settimeout(UPSTREAM_TIMEOUT)
+            if hold.since and round(time.time() - hold.since):
+                hold.stats["held"] = round(time.time() - hold.since)
+
+    def _wait(self):
+        """Keep the client alive for one more interval, or raise when the hold has run out."""
+        hold, now = self.hold, time.time()
+        hold.since = hold.since or now
+        if now >= hold.until:
+            raise OSError("the upstream stayed unreachable for the whole hold")
+        # a silent wait cannot notice a client that left by writing, so look for its close
+        if select.select([self.connection], [], [], 0)[0] and not self.connection.recv(1, socket.MSG_PEEK):
+            raise OSError("the client left while its request waited")
+        if hold.stream:
+            if not hold.begun:
+                self.send_response_only(200)
+                for pair in (("Content-Type", "text/event-stream"), ("Cache-Control", "no-cache"), ("Transfer-Encoding", "chunked")):
+                    self.send_header(*pair)
+                self.end_headers()
+                hold.begun = True
+            self.wfile.write(b"%x\r\n%s\r\n" % (len(PING), PING))
+            self.wfile.flush()
+        time.sleep(min(PING_EVERY, hold.until - now))
+
     def _send(self, body: bytes, identity: bool):
         """Send this request upstream with its own headers. Returns the response."""
         proxy = self.server.proxy
@@ -286,6 +341,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             reused = self._conn is not None
             conn = self._conn = self._conn or proxy.connect()
             try:
+                if self.hold and conn.sock is None:
+                    reused = False  # a failed connect is no stale connection: never open twice
+                    self._open(conn)
                 conn.putrequest(self.command, proxy.base + self.path, skip_host=True, skip_accept_encoding=True)
                 conn.putheader("Host", proxy.netloc)
                 for key, value in self.headers.items():
@@ -305,15 +363,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     raise
 
     def _pipe(self, resp, tee: bool) -> bytes:
-        self.send_response_only(resp.status, resp.reason)
-        for key, value in resp.getheaders():
-            if key.lower() not in RESPONSE_SKIP:
-                self.send_header(key, value)
+        held = bool(self.hold and self.hold.begun)  # the client already has a 200 from the wait
+        if held and resp.status != 200:  # no invented error: cut the stream so the client re-issues and sees the real status
+            try:
+                resp.read()
+            except (OSError, http.client.HTTPException):
+                self._drop()
+            self.close_connection = True
+            return b""
         bodiless = self.command == "HEAD" or resp.status in (204, 304) or resp.status < 200
-        chunked = resp.getheader("content-length") is None and not bodiless
-        if chunked:
-            self.send_header("Transfer-Encoding", "chunked")
-        self.end_headers()
+        chunked = held or (resp.getheader("content-length") is None and not bodiless)
+        if not held:
+            self.send_response_only(resp.status, resp.reason)
+            for key, value in resp.getheaders():
+                if key.lower() not in RESPONSE_SKIP:
+                    self.send_header(key, value)
+            if chunked:
+                self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
         kept, size = [], 0
         try:
             while True:
@@ -416,6 +483,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             sent, orig = proxy.rewrite(raw, ctx) if ctx else (raw, None)
         except Exception:  # fail open, whatever went wrong
             sent, orig = raw, None
+        self.hold = None
+        try:
+            seconds = proxy.cfg["offline"]["hold_minutes"] * 60 if ctx else 0
+            if seconds > 0:
+                self.hold = Hold(started, seconds, bool(orig) and orig.get("stream") is True, ctx.stats)
+        except Exception:  # a setting that is not a number turns the wait off, never the request
+            pass
         try:
             resp = self._send(sent, identity=ctx is not None)
             if ctx and sent is not raw and (resp.status == 400 or (resp.status in ROUTE_REFUSED and "route" in ctx.stats)):
@@ -461,6 +535,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 sent = retry
         except (OSError, http.client.HTTPException) as exc:
             self._drop()
+            if self.hold and self.hold.begun:  # the 200 is out, so no 502 can follow: cut the stream and let the client re-issue
+                self.close_connection = True
+                return proxy.finish(ctx, orig, raw, sent, 502, b"", started)
             via = f" through the proxy {proxy.hop.label}" if proxy.hop else ""
             message = f"almanac could not reach the upstream{via}: {type(exc).__name__}: {exc}"
             return self._reply(502, {"type": "error", "error": {"type": "api_error", "message": message}})

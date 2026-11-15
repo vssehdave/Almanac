@@ -89,6 +89,7 @@ class PassthroughTest(unittest.TestCase):
 
     def test_unreachable_upstream_gives_502(self):
         self.rig.upstream.close()
+        self.rig.cfg["offline"]["hold_minutes"] = 0  # the wait for the network has its own tests
         status, _, data = self.rig.messages(BODY)
         self.assertEqual(status, 502)
         self.assertEqual(json.loads(data)["error"]["type"], "api_error")
