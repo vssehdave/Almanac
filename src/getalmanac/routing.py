@@ -1,6 +1,6 @@
 """Model routing: pick a model and an effort level for each prompt, so nobody picks one by hand.
 
-    small   simple, basic work: questions, lookups, summaries, one-step commands
+    small   simple, basic work: lookups, summaries, renames, one-step commands
     medium  coding: writing, changing, fixing or testing code
     large   design, audits, hard bugs, work across many files, work that already failed
 
@@ -68,8 +68,6 @@ FILE = re.compile(r"[\w./\\-]+\.(py|js|ts|tsx|jsx|go|rs|java|kt|c|cc|cpp|h|rb|ph
 STEPS = re.compile(r"(?m)^\s*(\d+[.)]|[-*] \[ \])\s")
 FENCED = re.compile(r"```.*?(```|$)", re.S)
 PASTED = re.compile(r'(?m)^[ \t]*(File "|at |\d{4}-\d\d-\d\d|\[?(INFO|WARN|ERROR|DEBUG)).*$')
-# Agent types seen in the request headers. Only "custom" was seen live; the others are a guess.
-AGENT_TYPES = {"explore": "small", "plan": "large"}
 
 
 def handwritten(text: str) -> str:
@@ -95,7 +93,7 @@ def person_turns(messages) -> list:
     return [i for i, m in enumerate(messages) if isinstance(m, dict) and person_text(m)]
 
 
-def classify(text: str, agent=False, agent_type="") -> tuple:
+def classify(text: str, agent=False) -> tuple:
     """(tier or "inherit", why, ambiguous) for the text of a human turn, or of a sub-agent's task prompt."""
     low = text.lower().strip()
     size = len(low)
@@ -118,16 +116,16 @@ def classify(text: str, agent=False, agent_type="") -> tuple:
     if code:
         # a question that also names a code verb ("how do I fix ...") is a coding turn, but not a sure one
         return "medium", "asks to write or change code", bool(QUESTION.match(low)) and size < 200
+    if agent:  # a sub-agent with no sign of difficulty keeps the model Claude Code chose
+        return "inherit", "a task with no clear signal", False
     if long_job:
         return "medium", "a multi-step job", False
-    if size <= SMALL_CHARS and (SMALL_START.match(low) or (not agent and SMALL_ANY.search(low))):
+    if size <= SMALL_CHARS and (SMALL_START.match(low) or SMALL_ANY.search(low)):
         return "small", "a lookup or one-step request", bool(files)
     if size > 1200:
         return "medium", "a long request", False
     if files:
         return "medium", "names a file", True
-    if agent:  # a sub-agent with no sign of difficulty keeps the model Claude Code chose
-        return AGENT_TYPES.get(agent_type.lower(), "inherit"), "a task with no clear signal", True
     return "inherit", "no clear signal", size > 120
 
 
@@ -276,7 +274,7 @@ class RoutingLayer:
         if pin in TIERS:
             tier, why, ambiguous = pin, "pinned by `almanac route pin`", False
         else:
-            tier, why, ambiguous = classify(text, agent=kind == "sub", agent_type=ctx.agent_type)
+            tier, why, ambiguous = classify(text, agent=kind == "sub")
             if ambiguous and cfg["classifier"] == "model" and tier != "inherit":
                 began = time.time()
                 asked = self._ask(ctx, cfg, text)

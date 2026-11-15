@@ -97,6 +97,8 @@ AGENT_PROMPTS = [
     ("Look into the situation described below and tell me what you think.", "inherit"),
     ("Look through the payment module and work out why refunds are sometimes applied twice. Report back", "inherit"),
     ("Search the codebase for how auth tokens are validated and whether expiry is checked everywhere", "inherit"),
+    ("List every place auth tokens are validated and whether expiry is checked", "inherit"),
+    ("1. read the config\n2. parse it\n3. print the keys", "inherit"),
 ]
 
 
@@ -412,6 +414,11 @@ class SubagentTest(Case):
     def test_a_hard_task_goes_to_the_large_model(self):
         self.rig.messages(body([human("Difficulty: hard\nWhy does the cache return stale rows?")], SMALL), extra=sub_headers())
         self.assertEqual(self.rig.sent()["model"], LARGE)
+
+    def test_an_unmarked_task_keeps_the_model_claude_code_chose_whatever_the_agent_type(self):
+        for kind in ("Plan", "Explore"):
+            self.rig.messages(body([human("Look into how sessions expire.")], SMALL), extra=sub_headers(kind, kind))
+            self.assertEqual(self.rig.sent()["model"], SMALL, kind)
 
     def test_two_subagents_keep_their_own_tiers(self):
         self.rig.messages(body([human("Difficulty: simple\nlist the files")], MEDIUM), extra=sub_headers("a"))
