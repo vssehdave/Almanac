@@ -22,9 +22,12 @@ from getalmanac.report import Log  # noqa: E402
 SESSION = "11111111-2222-3333-4444-555555555555"
 
 
-def sse(text="ok", usage=None, tool=None) -> bytes:
+def sse(text="ok", usage=None, tool=None, model=None) -> bytes:
     usage = usage or {"input_tokens": 10, "cache_creation_input_tokens": 20, "cache_read_input_tokens": 70}
-    events = [{"type": "message_start", "message": {"usage": dict(usage, output_tokens=1)}},
+    start = {"usage": dict(usage, output_tokens=1)}
+    if model:
+        start["model"] = model
+    events = [{"type": "message_start", "message": start},
               {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
               {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
               {"type": "content_block_stop", "index": 0}]

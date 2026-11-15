@@ -35,6 +35,17 @@ ROUTES = {"/v1/messages": "messages", "/v1/messages/count_tokens": "count_tokens
 SIZE_ERROR = re.compile(r"prompt is too long|exceed context limit", re.I)  # a size refusal, not a bad rewrite
 TEE_LIMIT = 16 * 1024 * 1024
 UPSTREAM_TIMEOUT = 900
+ROUTE_REFUSED = (400, 403, 404)  # what an unknown, unavailable or unsupported model comes back as
+
+
+def _tell(proxy, method, *args):
+    """Call `method` on every layer that has it. A failure here must never drop the request."""
+    for layer in proxy.layers:
+        if hasattr(layer, method):
+            try:
+                getattr(layer, method)(*args)
+            except Exception:
+                pass
 
 
 class Ctx:
@@ -49,9 +60,11 @@ class Ctx:
         self.session = headers.get("x-claude-code-session-id") or ""
         self.agent = headers.get("x-claude-code-agent-id") or headers.get("x-claude-code-parent-agent-id") or ""
         self.klass = headers.get("x-claude-code-request-class") or ""
+        self.agent_type = headers.get("x-claude-code-agent-type") or ""
         self.lane = self.model = self.cwd = self.project = ""
         self.stats = {}
         self.after = None  # the rewritten body, when a layer changed it
+        self.orig = None  # the body as Claude Code sent it, for layers that decide from the whole history
 
 
 class Proxy:
@@ -117,7 +130,7 @@ class Proxy:
             ctx.model = str(orig.get("model") or "")
             ctx.lane = rq.lane_key(ctx.session, ctx.agent, orig["messages"])
             ctx.cwd = rq.working_dir(orig)
-            ctx.after = None
+            ctx.after, ctx.orig = None, orig
             if not self.layers or self.is_fused(ctx.lane):
                 return raw, orig
             work = json.loads(raw)
@@ -145,6 +158,8 @@ class Proxy:
             record["messages"] = len(orig["messages"])
         if reply:
             record["usage"] = {k: v for k, v in reply["usage"].items() if isinstance(v, int)}
+            if reply.get("model"):
+                record["answered"] = reply["model"]  # the model that really replied
         record.update(ctx.stats)
         if orig and reply and len(orig["messages"]) <= 3 and orig.get("tools"):
             record["sections"] = sections(ctx.after or orig)
@@ -403,30 +418,46 @@ class Handler(http.server.BaseHTTPRequestHandler):
             sent, orig = raw, None
         try:
             resp = self._send(sent, identity=ctx is not None)
-            if ctx and sent is not raw and resp.status == 400:
+            if ctx and sent is not raw and (resp.status == 400 or (resp.status in ROUTE_REFUSED and "route" in ctx.stats)):
                 detail = resp.read()[:400].decode("utf-8", "replace")
+                routed = ctx.stats.get("route")  # kept: the loop below removes it from the stats
                 ctx.stats["fallback"] = detail
-                retry = raw
-                if "compaction" in ctx.stats and proxy.store is not None:
-                    # Compaction changes the most, so drop it first and keep the other savings.
+                retry, resent = raw, False
+                # The changes most likely to be refused go first, one at a time, so the other savings stay.
+                for mark in ("route", "compaction"):
+                    if mark not in ctx.stats or proxy.store is None:
+                        continue
+                    if mark == "route":
+                        _tell(proxy, "refused", ctx, resp.status, detail)
+                    else:
+                        try:
+                            if SIZE_ERROR.search(detail):  # too long says nothing against the rewrite: estimate by size next time
+                                proxy.store.run("delete from state where key = ?", (f"usage:{ctx.lane}",))
+                            else:
+                                proxy.store.put(f"nocompact:{ctx.lane}", detail)
+                        except Exception:  # without the mark the retry may compact again, be refused again, and go out raw
+                            pass
+                    del ctx.stats[mark]
                     try:
-                        if SIZE_ERROR.search(detail):  # too long says nothing against the rewrite: estimate by size next time
-                            proxy.store.run("delete from state where key = ?", (f"usage:{ctx.lane}",))
-                        else:
-                            proxy.store.put(f"nocompact:{ctx.lane}", detail)
-                    except Exception:  # without the mark the retry may compact again, be refused again, and go out raw
-                        pass
-                    del ctx.stats["compaction"]
-                    retry, _ = proxy.rewrite(raw, ctx)
-                    resp = self._send(retry, identity=True)
-                    if retry is not raw and resp.status == 400:
-                        resp.read()
+                        retry, _ = proxy.rewrite(raw, ctx)
+                    except Exception:  # fail open on the retry too
                         retry = raw
+                    resp = self._send(retry, identity=True)
+                    if mark == "route" and resp.status < 400:  # only now is the model known to be the cause
+                        _tell(proxy, "blame", ctx, routed)
+                    if retry is raw or resp.status not in ROUTE_REFUSED + (400,):
+                        resent = retry is raw  # the original has just been sent: never send it twice
+                        break
+                    resp.read()
+                    retry = raw
                 if retry is raw:  # the rewrite was refused: send the original
-                    resp = self._send(raw, identity=True)
-                    if resp.status < 400:
-                        proxy.fuse(ctx.lane, detail)
+                    if not resent:
+                        resp = self._send(raw, identity=True)
+                        if resp.status < 400:
+                            proxy.fuse(ctx.lane, detail)
                     ctx.after = None
+                if resp.status in ROUTE_REFUSED + (400,) and routed:  # the original fails too, so the model was not the cause
+                    _tell(proxy, "forgive", ctx, routed)
                 sent = retry
         except (OSError, http.client.HTTPException) as exc:
             self._drop()
@@ -477,6 +508,7 @@ def build(cfg=None) -> Proxy:
     """A proxy with every layer attached. Each layer reads its own on/off setting."""
     from .compact import CompactLayer
     from .memory import Memory, MemoryLayer, ProjectLayer
+    from .routing import RoutingLayer
     from .startup import SkillsLayer, ToolsLayer
     from . import semantic
     from .store import Store
@@ -488,5 +520,6 @@ def build(cfg=None) -> Proxy:
     memory.prune(cfg["memory"]["keep_days"])
     threading.Thread(target=semantic.active, daemon=True).start()  # the first recall should not wait a second for the model
     # Order matters: the project first, then the history is settled, then the parts inside it.
-    layers = [ProjectLayer(memory), CompactLayer(memory), MemoryLayer(memory), SkillsLayer(), ToolsLayer(), SummaryLayer(memory)]
+    # Routing comes after them: it prices the prefix as it will really be sent.
+    layers = [ProjectLayer(memory), CompactLayer(memory), MemoryLayer(memory), SkillsLayer(), ToolsLayer(), RoutingLayer(), SummaryLayer(memory)]
     return Proxy(cfg or config.load(), store=store, layers=layers)

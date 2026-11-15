@@ -127,6 +127,19 @@ def build_prefix(messages, covered, ids, budget_chars, told=None) -> list:
     return prefix
 
 
+def estimate(body, ctx, messages) -> int:
+    """Input tokens this request would take, from the last reply's exact count when there is one."""
+    seen = ctx.store.get(f"usage:{ctx.lane}")
+    if seen and 0 < seen["messages"] <= len(body["messages"]):
+        added = sum(len(json.dumps(m, ensure_ascii=False)) for m in body["messages"][seen["messages"]:]
+                    if m.get("role") != "assistant")  # the reply itself is already in the count
+        return int(seen["tokens"] + added / CHARS_PER_TOKEN)
+    size = len(json.dumps(body.get("system") or "", ensure_ascii=False))
+    size += sum(len(json.dumps(t)) for t in body.get("tools") or [] if isinstance(t, dict) and not t.get("defer_loading"))
+    size += sum(len(json.dumps(m, ensure_ascii=False)) for m in messages)
+    return int(size / CHARS_PER_TOKEN)
+
+
 class CompactLayer:
     def __init__(self, memory):
         self.memory = memory
@@ -137,17 +150,9 @@ class CompactLayer:
         return (ctx.cfg["compaction"]["enabled"] and not ctx.agent and rq.has_client_tools(body)
                 and len(messages) > 2 and messages[0].get("role") == "user")
 
-    def _estimate(self, body, ctx, messages) -> int:
-        """Input tokens this request would take, from the last reply's exact count when there is one."""
-        seen = ctx.store.get(f"usage:{ctx.lane}")
-        if seen and 0 < seen["messages"] <= len(body["messages"]):
-            added = sum(len(json.dumps(m, ensure_ascii=False)) for m in body["messages"][seen["messages"]:]
-                        if m.get("role") != "assistant")  # the reply itself is already in the count
-            return int(seen["tokens"] + added / CHARS_PER_TOKEN)
-        size = len(json.dumps(body.get("system") or "", ensure_ascii=False))
-        size += sum(len(json.dumps(t)) for t in body.get("tools") or [] if isinstance(t, dict) and not t.get("defer_loading"))
-        size += sum(len(json.dumps(m, ensure_ascii=False)) for m in messages)
-        return int(size / CHARS_PER_TOKEN)
+    @staticmethod
+    def _estimate(body, ctx, messages) -> int:
+        return estimate(body, ctx, messages)
 
     def transform(self, body, ctx):
         if not self._applies(body, ctx):

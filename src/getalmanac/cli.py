@@ -1,6 +1,7 @@
 """The `almanac` command."""
 import argparse
 import json
+import os
 import socket
 import sqlite3
 import ssl
@@ -21,6 +22,8 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac memory recent        the latest conversations, by project
   almanac memory forget        delete stored conversations (--project NAME | --conversation ID | --all; --force for open ones)
   almanac semantic [install|status|index|on|off]   search memory by meaning (optional model)
+  almanac route [status]       what model routing is set to and what it decided lately
+  almanac route pin TIER       keep this project on small, medium or large (`pin off` lifts it)
   almanac projects             projects seen; `projects merge FROM INTO`, `projects rename NAME NEW`
   almanac status               settings, files and recent activity
   almanac doctor               check that everything needed is in place
@@ -87,6 +90,7 @@ def _status(_rest):
     print(f"  upstream   {cfg['upstream']}")
     for layer in ("skills", "tools", "memory", "compaction"):
         print(f"  {layer:<10} {'on' if cfg[layer]['enabled'] else 'off'}")
+    print(f"  routing    {cfg['routing']['mode']}")
     if records:
         last = time.strftime("%Y-%m-%d %H:%M", time.localtime(records[-1].get("ts", 0)))
         totals = report.summary(records)
@@ -98,6 +102,9 @@ def _status(_rest):
     counts = memory.counts()
     print(f"  memory     {counts['convos']} conversation(s), {counts['exchanges']} exchange(s), {counts['topics']} topic(s)")
     print(f"  summaries  {summarize.line(memory, cfg)}")
+    seen = report.render_routing(records)
+    if seen:
+        _print(seen.lstrip("\n"))
     return 0
 
 
@@ -311,6 +318,44 @@ def _projects(rest):
     return 0
 
 
+def _route(rest):
+    from . import routing
+
+    cfg, memory = config.load(), _memory_handle()
+    project = memory.projects.see(os.getcwd(), touch=False)
+    store = memory.store
+    print(f"  project    {project or 'unknown'}  (a pin applies only if the proxy works out this same project)")
+    if rest[:1] == ["pin"] and len(rest) == 2 and rest[1] in (*routing.TIERS, "off"):
+        if not project:
+            print("almanac: this folder is not a known project yet; run Claude Code here once first", file=sys.stderr)
+            return 2
+        if rest[1] == "off":
+            store.run("delete from state where key = ?", (routing.pin_key(project),))
+            print("pin lifted")
+        else:
+            store.put(routing.pin_key(project), rest[1])
+            print(f"this project is pinned to {rest[1]} ({cfg['routing']['models'][rest[1]]}) until `almanac route pin off`")
+        return 0
+    if rest not in ([], ["status"]):
+        print("usage: almanac route [status | pin small|medium|large|off]", file=sys.stderr)
+        return 2
+    route = cfg["routing"]
+    pin = store.get(routing.pin_key(project)) if project else None
+    print(f"  mode       {route['mode']}  (classifier: {route['classifier']}, ceiling: {route['ceiling']})")
+    print("  models     " + ", ".join(f"{t} {route['models'][t]}" for t in routing.TIERS))
+    print(f"  pin        {pin or 'none'} (this project)")
+    for tier, why in routing.bad_tiers(store).items():
+        print(f"  unavailable {tier}: {why}")
+    log = store.get("route:log", [])[-10:]
+    print("  last decisions:" if log else "  no decisions yet")
+    for d in log:
+        cost = f", cost to stay {d['stay']:,} / to switch {d['switch']:,}" if d.get("stay") is not None else ""
+        outcome = f"NOT applied ({d['skip']})" if d.get("skip") else ("kept" if d["move"] in ("none", "declined", "held") else "applied")
+        print(f"    {time.strftime('%H:%M:%S', time.localtime(d['ts']))} {d['kind']:<4} {d['tier']:<6} {d['move']:<8} {outcome}: "
+              f"{d['why']}{cost}")
+    return 0
+
+
 def _mcp(_rest):
     from . import mcp
 
@@ -331,7 +376,7 @@ def _version(_rest):
 
 
 COMMANDS = {"serve": _serve, "report": _report, "status": _status, "doctor": _doctor, "config": _config,
-            "version": _version, "memory": _memory, "projects": _projects, "mcp": _mcp, "semantic": _semantic}
+            "version": _version, "memory": _memory, "projects": _projects, "route": _route, "mcp": _mcp, "semantic": _semantic}
 
 
 def main(argv=None):
