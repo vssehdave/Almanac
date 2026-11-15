@@ -259,6 +259,15 @@ class RecallTest(Case):
         self.assertEqual(len(hits), 1)
         self.assertIn("Use a sticky tool set.", self.memory.read(hits[0]["id"])["text"])
 
+    def test_a_tool_inner_model_call_is_not_a_conversation(self):
+        body = self.body("Perform a web search for the query: csv sniffer")
+        body["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 8}]  # no tool the client runs
+        raw = json.dumps(body).encode()
+        self.rig.messages(raw)
+        self.assertEqual(self.rig.upstream.requests[-1]["body"], raw)
+        self.rig.records()
+        self.assertEqual(self.memory.store.run("select count(*) n from convo")[0]["n"], 1)  # only the one made in setUp
+
     def test_subagents_and_toolless_requests_are_left_alone(self):
         body = self.body("the proxy cache drops again after loading a tool")
         raw = json.dumps(body).encode()

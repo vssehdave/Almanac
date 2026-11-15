@@ -15,6 +15,11 @@ def blocks(msg) -> list:
     return [b for b in content or [] if isinstance(b, dict)]
 
 
+def has_client_tools(body) -> bool:
+    """True when the request carries a tool the client runs. Claude Code's own turns do; a tool's inner model call (web search) does not."""
+    return any(isinstance(t, dict) and "input_schema" in t for t in body.get("tools") or [])
+
+
 def is_tool_result(msg) -> bool:
     return msg.get("role") == "user" and any(b.get("type") == "tool_result" for b in blocks(msg))
 

@@ -134,7 +134,7 @@ class CompactLayer:
     @staticmethod
     def _applies(body, ctx) -> bool:
         messages = body.get("messages") or []
-        return (ctx.cfg["compaction"]["enabled"] and not ctx.agent and bool(body.get("tools"))
+        return (ctx.cfg["compaction"]["enabled"] and not ctx.agent and rq.has_client_tools(body)
                 and len(messages) > 2 and messages[0].get("role") == "user")
 
     def _estimate(self, body, ctx, messages) -> int:
@@ -158,6 +158,7 @@ class CompactLayer:
         state = ctx.store.get(key)
         if state and not (len(messages) >= state["covered"] and fingerprint(messages[:state["covered"]]) == state["hash"]):
             ctx.store.run("delete from state where key = ?", (key,))  # rewound or edited: the summary no longer fits
+            ctx.store.run("delete from state where key = ?", (f"usage:{ctx.lane}",))  # its count described the compacted body
             state = None
         fresh = False
         covered = len(messages) - 1
@@ -188,7 +189,7 @@ class CompactLayer:
         return state
 
     def observe(self, ctx, orig, reply):
-        if ctx.agent or not orig.get("tools"):
+        if ctx.agent or not rq.has_client_tools(orig):
             return
         usage = reply.get("usage") or {}
         ctx.store.put(f"usage:{ctx.lane}", {"tokens": sse.input_tokens(usage) + int(usage.get("output_tokens") or 0),

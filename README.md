@@ -138,7 +138,8 @@ same upstream as your session, with the login your session already uses. It
 costs a little of your allowance: a few hundred tokens per exchange, at most
 `memory.summary_daily_calls` calls a day. Nothing goes to any other host. If a
 call fails, the rule-written text stays, and each exchange is tried at most
-three times. A 401, 403, 429 or 529 reply pauses summary calls for an hour. A
+three times, and each failed call leaves one line in the request log (status and
+reason, no text). A 401, 403, 429 or 529 reply pauses summary calls for an hour. A
 call only carries text from the conversation whose login it uses. Set
 `memory.summary_model` to `""` to turn this off. `almanac status` shows how many
 exchanges have a model-written summary and what today's calls used.
@@ -377,7 +378,8 @@ its choices.
   request body Almanac cannot parse: the original request is sent as it came.
 - If Anthropic answers 400 to a rewritten request, Almanac resends it without
   compaction, and if that is refused too, exactly as Claude Code wrote it. That
-  conversation is then left alone, and the reason is in the log.
+  conversation is then left alone, and the reason is in the log. A 400 that says
+  the prompt is too long is not counted against compaction, so it can run again.
 - Requests that do not come from Claude Code itself (a script you run from its
   shell that inherits the base URL) are relayed untouched.
 - To rule Almanac out, run plain `claude`.

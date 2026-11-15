@@ -87,6 +87,21 @@
   stays on.
 - **Doctor.** `almanac doctor` shows the proxy and its source, the extra
   certificate files, and whether a connection through the proxy works.
+- **Fix: compaction recovers after an in-place edit.** When an edit to
+  already-summarized messages dropped the stored summary, the old token count
+  was still trusted, so the full history was sent and refused with a 400, every
+  turn. The count is dropped with the summary and the size is estimated again.
+- **Fix: a "prompt is too long" 400 no longer turns compaction off.** Only
+  other 400s to a compacted request set the per-conversation off switch. The
+  request is still resent as before, and the next message re-estimates the size.
+- **Fix: summary calls.** A reply that opens with a thinking block now stores
+  its summary (`max_tokens` is 1000, was 300). A summary call that stores
+  nothing writes one `"kind": "summary"` line to the request log with the HTTP
+  status and a reason (`status`, `empty`, `parse` or `error`), never any text.
+- **Fix: a tool's inner model call is not a conversation.** A request whose
+  tools include none the client runs (such as the call web search makes) is no
+  longer indexed, compacted or given memory, so it no longer shows up as a
+  one-exchange conversation with no project.
 - **Fix.** With a proxy in the environment, Claude Code sent its requests for
   Almanac's loopback address to that proxy. `localhost` and `127.0.0.1` are now
   added to its `NO_PROXY`.

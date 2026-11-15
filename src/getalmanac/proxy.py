@@ -11,6 +11,7 @@ import http.server
 import json
 import os
 import queue
+import re
 import secrets
 import socket
 import socketserver
@@ -31,6 +32,7 @@ REQUEST_SKIP = {"host", "connection", "keep-alive", "transfer-encoding", "te", "
 RESPONSE_SKIP = {"connection", "keep-alive", "transfer-encoding"}
 LOOPBACK = {"127.0.0.1", "localhost", "[::1]"}
 ROUTES = {"/v1/messages": "messages", "/v1/messages/count_tokens": "count_tokens"}
+SIZE_ERROR = re.compile(r"prompt is too long|exceed context limit", re.I)  # a size refusal, not a bad rewrite
 TEE_LIMIT = 16 * 1024 * 1024
 UPSTREAM_TIMEOUT = 900
 
@@ -408,7 +410,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if "compaction" in ctx.stats and proxy.store is not None:
                     # Compaction changes the most, so drop it first and keep the other savings.
                     try:
-                        proxy.store.put(f"nocompact:{ctx.lane}", detail)
+                        if SIZE_ERROR.search(detail):  # too long says nothing against the rewrite: estimate by size next time
+                            proxy.store.run("delete from state where key = ?", (f"usage:{ctx.lane}",))
+                        else:
+                            proxy.store.put(f"nocompact:{ctx.lane}", detail)
                     except Exception:  # without the mark the retry may compact again, be refused again, and go out raw
                         pass
                     del ctx.stats["compaction"]

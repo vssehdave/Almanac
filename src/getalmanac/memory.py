@@ -582,7 +582,7 @@ class MemoryLayer:
 
     @staticmethod
     def _main_thread(body, ctx) -> bool:
-        return not ctx.agent and bool(body.get("tools")) and bool(rq.human_turns(body.get("messages") or []))
+        return not ctx.agent and rq.has_client_tools(body) and bool(rq.human_turns(body.get("messages") or []))
 
     def transform(self, body, ctx):
         cfg = ctx.cfg["memory"]
