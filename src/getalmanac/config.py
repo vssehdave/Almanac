@@ -41,6 +41,32 @@ DEFAULTS = {
         "trigger_tokens": 150000,  # a conversation this large is compacted at its next message
         "target_tokens": 40000,  # most tokens the summary that replaces it may take
     },
+    "routing": {
+        "mode": "off",  # "off" changes nothing; "subagents" routes sub-agent threads; "all" routes the main thread too
+        "models": {"small": "claude-haiku-5-5", "medium": "claude-sonnet-5-5", "large": "claude-opus-5-5"},
+        "ceiling": "large",  # the highest tier routing may pick (a pin ignores it)
+        "classifier": "rules",  # "model" lets a small model settle the turns the rules are unsure about
+        "effort": {"small": "low", "medium": "medium", "large": ""},  # set only where Claude Code already sends one; "" keeps its value
+        "margin": 0.2,  # a move down on the main thread must be at least this much cheaper than staying
+        "escalate_after": 3,  # tool errors in a row, or one call failing this often, raise the next turn a tier
+        "escalate_turns": 3,  # turns the raise lasts
+        # Relative prices per token, for comparing models only. They are list-price ratios as of 2026-11-03 for the
+        # 5.5 models (cache write 1.25x input, cache read 0.05x for Sonnet and Opus); the Haiku cache-read ratio
+        # (0.1x) is assumed, as it is not listed. cache_write and cache_read are what a prefix costs to write into,
+        # or read from, that model's cache.
+        "prices": {
+            "small": {"cache_write": 0.125, "cache_read": 0.01, "output": 0.5},
+            "medium": {"cache_write": 2.5, "cache_read": 0.1, "output": 10},
+            "large": {"cache_write": 5, "cache_read": 0.2, "output": 20},
+        },
+        # What one turn of each size is expected to cost: requests in its tool loop, new tokens and reply tokens per request.
+        "work": {
+            "small": {"steps": 1, "new_tokens": 300, "out_tokens": 300},
+            "medium": {"steps": 6, "new_tokens": 1500, "out_tokens": 800},
+            "large": {"steps": 12, "new_tokens": 2500, "out_tokens": 1500},
+        },
+        "windows": {"claude-haiku-5-5": 1000000, "claude-sonnet-5-5": 1000000, "claude-opus-5-5": 1000000},  # tokens; unknown ids count as 200000
+    },
 }
 
 

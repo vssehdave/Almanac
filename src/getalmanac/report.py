@@ -133,6 +133,41 @@ def summary(records, now=None) -> dict:
     return {"requests": len(day), "sessions": len({r.get("session") for r in day}), "saved_tokens": saved}
 
 
+def routing(records) -> dict:
+    """What model routing did in the log: requests per tier, moves made and declined, raises, tokens per model."""
+    out = {"tiers": {}, "moves": {}, "raised": 0, "models": {}, "unrouted": 0}
+    for r in records:
+        if r.get("kind") != "messages":
+            continue
+        note = r.get("route") or r.get("route_kept")
+        model = r.get("answered") or (note or {}).get("model") or r.get("model") or "unknown"
+        tokens = _tokens(r.get("usage")) + int((r.get("usage") or {}).get("output_tokens") or 0)
+        if tokens:
+            out["models"][model] = out["models"].get(model, 0) + tokens
+        if not note:
+            out["unrouted"] += 1
+            continue
+        out["tiers"][note["tier"]] = out["tiers"].get(note["tier"], 0) + 1
+        if note.get("first"):
+            out["moves"][note["move"]] = out["moves"].get(note["move"], 0) + 1
+            out["raised"] += bool(note.get("escalated"))
+    return out
+
+
+def render_routing(records) -> str:
+    """Lines for `almanac report`, or "" when routing never ran."""
+    r = routing(records)
+    if not r["tiers"]:
+        return ""
+    lines = ["", "Model routing, from the request log:",
+             "  requests   " + ", ".join(f"{t} {r['tiers'].get(t, 0)}" for t in ("small", "medium", "large"))
+             + (f" ({r['unrouted']} not routed)" if r["unrouted"] else ""),
+             "  moves      " + (", ".join(f"{k} {v}" for k, v in sorted(r["moves"].items())) or "none")
+             + f"; raised after failures: {r['raised']}",
+             "  tokens     " + ", ".join(f"{m} {n:,}" for m, n in sorted(r["models"].items(), key=lambda kv: -kv[1]))]
+    return "\n".join(lines)
+
+
 def render(records) -> str:
     record = startup(records)
     if not record:
@@ -156,4 +191,4 @@ def render(records) -> str:
     lines += ["", f"Last 24 hours: {totals['requests']} request(s) in {totals['sessions']} session(s), "
               f"about {totals['saved_tokens']:,} input tokens kept out."]
     lines.append("Per-part figures are the exact total split by size, so treat them as estimates.")
-    return "\n".join(lines)
+    return "\n".join(lines) + render_routing(records)

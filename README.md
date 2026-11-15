@@ -217,6 +217,109 @@ compaction still applies. If your model has a larger window, raise the trigger:
 almanac config set compaction.trigger_tokens 600000
 ```
 
+### 4. Choosing the model for you
+
+You should not have to pick a model by hand. With routing on, Almanac picks one
+for each prompt and sets a fitting effort level:
+
+| Prompt | Model (setting) | Effort |
+|---|---|---|
+| Simple, basic: a lookup, a summary, a rename, a one-step command | `small`, Haiku | low |
+| Coding: write, change, fix or test code | `medium`, Sonnet | medium |
+| Too complex, or it failed: design, an audit, a hard bug, work across many files, "that is still broken" | `large`, Opus | as Claude Code sends it, never lowered |
+
+Effort is set only on requests where Claude Code already sends one.
+
+It is off until you turn it on:
+
+```bash
+almanac config set routing.mode all        # or: subagents
+```
+
+- `off` changes nothing. Not one byte of any request.
+- `subagents` routes only the sub-agents Claude Code starts. Your own model stays as you set it.
+- `all` routes the main conversation too.
+
+The rules are a short table in `routing.py`. A turn is judged from its length,
+its wording and the files it names, read from what you typed (pasted logs, stack
+traces and code blocks are not taken as a sign of a hard job or a failure). A turn with no sign of being easy or hard,
+such as a "why" question, a short follow-up or text that is not English, keeps
+the model you were on. A turn that says the last answer was wrong goes to
+`large`. Fast-mode requests (`speed`) are never routed. Three tool errors in a row, or one call failing three times,
+raise the next turn one tier, for three turns. With `routing.classifier` set to
+`"model"`, the turns the rules are unsure about are settled by one small-model
+call. It adds a short wait (each network step gives up after 2 seconds) to that turn and uses a little of
+your allowance. It shares the daily cap on small-model calls with the summaries
+(`memory.summary_daily_calls`) and is not turned off by `memory.summary_model`.
+If the call fails, the rules decide.
+
+**Sub-agents.** Almanac adds one fixed paragraph to Claude Code's `Agent` (or `Task`) tool.
+It asks the model to start each sub-agent prompt with `Difficulty: simple`,
+`standard` or `hard`. Almanac reads that line and picks the sub-agent's model.
+A sub-agent keeps its model for its whole life. Without that line, a task that
+asks for no coding and no hard job keeps the model Claude Code chose for it,
+whatever the agent's type.
+
+**Switching models costs money.** Anthropic's prompt cache belongs to one
+model. If a conversation moves to another model, the whole history is written
+into that model's cache again, at the cache-write price, and the old cache goes
+cold. Almanac's memory does not change that. So on the main thread:
+
+- A move **up** is made whenever the turn needs it. Getting it right beats cost.
+- A move **down** is made only if it is clearly cheaper (`routing.margin`, 20%).
+  Almanac counts the history's tokens, the price of writing them into the new
+  cache against reading them from the warm one, and the work the turn is
+  expected to take. One quick lookup while 150,000 tokens sit warm in Sonnet's
+  cache stays on Sonnet.
+- The prices in `routing.prices` are relative numbers for comparing models.
+  The defaults are list-price ratios as of 2026-11-03 for Haiku, Sonnet and
+  Opus 5.5 (the Haiku cache-read ratio is assumed, as it is not listed, and
+  Haiku costs 5 times as much above 100,000 tokens of history). Edit them if
+  your prices differ.
+- Almanac assumes a cache used last turn is still warm. After a long pause it
+  is not, so Almanac is a little too careful about moving down.
+- Compaction (above) keeps the history small, which keeps a move cheap.
+
+Each turn's choice is stored and reused for every request of that turn's tool
+loop, so the model does not change in the middle of a loop, except after a
+refused request, when the rest of the turn uses your own model. Moving between
+models mid-conversation was tested live in every direction, with thinking blocks
+and tool calls in the history, and the API accepted every case. Thinking blocks
+written by Opus 5.5 can only be read by some other models, so after a move off
+Opus they are dropped silently (and not billed) and the earlier reasoning is
+lost. When a tier cannot be used (refused, or the request does not fit its
+window), the turn stays on the previous model with that model's own effort, so
+the cache is kept.
+
+**Your own choice wins.** If a request names a model other than the three in
+`routing.models`, Almanac leaves it alone, and `almanac route status` names
+that model. If it is the model you normally use, routing does nothing until it
+is in the table: `almanac config set routing.models.large <model id>`, and give
+`routing.windows` its context window. To keep a project on one tier:
+
+```bash
+almanac route pin large      # until `almanac route pin off`
+almanac route status         # mode, project, pin, and the last 10 decisions
+```
+
+A pin belongs to a project. Both commands print the project key they used. The
+proxy works out a conversation's project from the files it touches, so if that
+differs from the folder you pinned in, the pin does not apply.
+
+**If the upstream refuses a routed request** (an unknown or unavailable model,
+an unsupported field), Almanac sends the request again without the model
+change. If that one is accepted, it marks the tier unavailable for an hour and
+shows it in `almanac route status`; if it fails too, or is only overloaded,
+nothing is marked. The rest of that turn goes out as Claude Code sent it, which
+can change the effort on the same model and so rewrites that turn's cache. The
+request is never dropped.
+
+**Audit it.** `almanac route status` lists each decision with its reason, the
+estimated cost of staying and of switching, and whether it was applied.
+`almanac report` and `almanac status` add requests per tier, moves made and
+declined, raises after failures, and tokens per model, read from the replies'
+own `usage`. The request log also records the model that really answered.
+
 ## Why the cache keeps working
 
 A proxy that rewrites requests can easily make every turn a cache miss. Almanac
@@ -314,6 +417,8 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac semantic status` | Whether the packages and model are there, and how many exchanges have a vector |
 | `almanac semantic index` | Make vectors for every stored exchange that is waiting |
 | `almanac semantic on \| off` | Use the model when it is there, or stay keyword-based |
+| `almanac route [status]` | Routing mode, pin, unavailable tiers and the last 10 decisions |
+| `almanac route pin small\|medium\|large\|off` | Keep this project on one tier, or lift the pin |
 | `almanac projects` | Projects seen. `projects merge FROM INTO`, `projects rename NAME NEW` |
 | `almanac config [set KEY VALUE \| path]` | Show or change settings |
 | `almanac serve [--port N]` | Run only the proxy, for clients you start yourself |
@@ -341,6 +446,16 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `compaction.enabled` | `true` | Compact long conversations |
 | `compaction.trigger_tokens` | `150000` | Size that starts a compaction |
 | `compaction.target_tokens` | `40000` | Most the summary may take |
+| `routing.mode` | `"off"` | `"off"`, `"subagents"` or `"all"`: which requests get a chosen model |
+| `routing.models` | Haiku, Sonnet, Opus 5.5 | The model for `small`, `medium` and `large` |
+| `routing.ceiling` | `"large"` | The highest tier routing may pick (a pin ignores it) |
+| `routing.classifier` | `"rules"` | `"model"` lets a small model settle turns the rules are unsure about |
+| `routing.effort` | low, medium, (kept) | Effort per tier, set only where Claude Code already sends one; `""` keeps its value |
+| `routing.margin` | `0.2` | How much cheaper a move down must be than staying |
+| `routing.escalate_after` | `3` | Errors in a row, or one call failing this often, that raise the next turn |
+| `routing.escalate_turns` | `3` | Turns a raise lasts |
+| `routing.prices`, `routing.work` | see `config.py` | Relative prices and expected work per turn, for pricing a switch |
+| `routing.windows` | 1,000,000 each | Context window per model id (unknown ids count as 200,000) |
 | `remote_control` | `false` | Run sessions in HTTPS-proxy mode |
 | `port` | `8787` | Where `almanac serve` listens |
 | `upstream` | `https://api.anthropic.com` | Where requests are sent |
@@ -482,6 +597,10 @@ protect:
 - Summaries are written by a small model in the background, so a new exchange
   has its rule-written text until the call finishes, and a failed call leaves it.
   Summary calls use a little of your allowance.
+- Routing is judged from the prompt's wording and a few request facts, so it
+  will sometimes choose wrong. Pin a tier, or set `routing.mode` back to `off`,
+  when it does. Its prices are guesses for comparing models. The only fields it
+  rewrites are `model` and, when Claude Code already sends one, `output_config.effort`.
 - Corporate proxies must be plain `http://` ones with no login or a basic login. A company certificate
   that re-signs HTTPS is trusted only if you point to its file. That setup is
   tested with a fake proxy, not a real company network.

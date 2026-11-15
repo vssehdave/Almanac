@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Model routing.** Almanac can now choose the model for you. With
+  `routing.mode` set to `subagents` or `all` (it is `off` by default and then
+  changes nothing), each prompt goes to Haiku (simple work), Sonnet (coding) or
+  Opus (design, audits, hard bugs, work that failed). Haiku and Sonnet get a
+  matching effort level where Claude Code sends one; Opus keeps the effort
+  Claude Code asked for. Fast-mode requests are never routed. Sub-agents are routed from a `Difficulty:` line that a short paragraph
+  added to the `Agent` tool asks the model to write. A move to a cheaper model on
+  the main thread is priced first, because a model switch writes the whole
+  history into the new model's cache. Repeated tool errors raise the next turn a
+  tier. A prompt with no sign of being easy or hard keeps your model. A
+  refused routed request is sent again without the model change, and the tier
+  is marked unavailable only if that one is accepted. New commands:
+  `almanac route status` and `almanac route pin`. `almanac report` and
+  `almanac status` show requests per tier, moves and tokens per model, and the
+  request log records the model that answered.
 - **Security: web pages cannot use the proxy.** A request with an `Origin`
   header, and every `OPTIONS` request, is now refused with a 403 before
   anything is forwarded. Refusals are logged (`"kind": "refused"`), without the

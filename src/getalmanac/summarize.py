@@ -79,6 +79,37 @@ def _parse(message):
     return (title, summary) if title and summary else None
 
 
+def call(ctx, body, used, timeout=TIMEOUT, seen=None):
+    """One small Messages call with the login this request carried. Returns the reply, or None on any failure.
+
+    Counts its tokens in `used` (today's totals) and pauses all small-model calls after a login or allowance error.
+    The HTTP status, if one came back, goes in `seen`.
+    """
+    store = ctx.store
+    conn = ctx.proxy.connect()
+    conn.timeout = timeout
+    try:
+        conn.request("POST", ctx.proxy.base + PATH, json.dumps(body).encode(), _headers(ctx.headers))
+        resp = conn.getresponse()
+        data = resp.read()
+        if seen is not None:
+            seen["status"] = resp.status
+        if resp.status in PAUSE_ON:
+            store.put("summary:pause", time.time() + PAUSE_SECONDS)
+        if resp.status != 200:
+            return None
+        message = json.loads(data)
+        usage = message.get("usage") or {}
+        used["in"] += sum(int(usage.get(k) or 0) for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+        used["out"] += int(usage.get("output_tokens") or 0)
+        store.put("summary:day", used)
+        return message
+    except (OSError, ValueError, http.client.HTTPException):
+        return None
+    finally:
+        conn.close()
+
+
 class SummaryLayer:
     """Runs only in the background; it never touches a request."""
 
@@ -117,34 +148,16 @@ class SummaryLayer:
             text = text[: INPUT_CHARS // 3] + "\n... (middle not shown) ...\n" + text[-(2 * INPUT_CHARS // 3):]
         body = {"model": model, "max_tokens": 1000, "system": _identity(orig) + [{"type": "text", "text": INSTRUCTION}],
                 "messages": [{"role": "user", "content": text}]}
-        conn = ctx.proxy.connect()
-        conn.timeout = TIMEOUT
-        status, why = 0, "error"
-        try:
-            conn.request("POST", ctx.proxy.base + PATH, json.dumps(body).encode(), _headers(ctx.headers))
-            resp = conn.getresponse()
-            data = resp.read()
-            status = resp.status
-            if status in PAUSE_ON:
-                store.put("summary:pause", time.time() + PAUSE_SECONDS)
-            if status != 200:
-                why = "status"
-                return False
-            message = json.loads(data)
-            usage = message.get("usage") or {}
-            used["in"] += sum(int(usage.get(k) or 0) for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
-            used["out"] += int(usage.get("output_tokens") or 0)
-            store.put("summary:day", used)
+        seen = {}
+        message = call(ctx, body, used, seen=seen)
+        if message is None:
+            why = "status" if seen.get("status", 200) != 200 else "error"
+        else:
             found = _parse(message)  # clean() also redacts secrets
             if found:
                 memory.set_summary(node_id, *found)
-                why = ""
-            else:
-                why = "parse" if any(isinstance(b, dict) and b.get("type") == "text" for b in message.get("content") or []) else "empty"
-            return True
-        except (OSError, ValueError, http.client.HTTPException):
-            return False
-        finally:
-            conn.close()
-            if why:  # status, empty, parse or error: never the prompt or the headers
-                ctx.proxy.log.write({"ts": round(time.time(), 3), "kind": "summary", "status": status, "why": why})
+                return True
+            why = "parse" if any(isinstance(b, dict) and b.get("type") == "text" for b in message.get("content") or []) else "empty"
+        # status, empty, parse or error: never the prompt or the headers
+        ctx.proxy.log.write({"ts": round(time.time(), 3), "kind": "summary", "status": seen.get("status", 0), "why": why})
+        return message is not None

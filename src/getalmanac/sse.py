@@ -3,7 +3,7 @@ import json
 
 
 def parse(raw: bytes):
-    """Return {"content": [...], "usage": {...}, "stop_reason": ...} or None.
+    """Return {"content": [...], "usage": {...}, "stop_reason": ..., "model": ...} or None.
 
     Accepts a server-sent event stream or a plain JSON message.
     """
@@ -15,8 +15,9 @@ def parse(raw: bytes):
             return None
         if msg.get("type") != "message":
             return None
-        return {"content": msg.get("content") or [], "usage": msg.get("usage") or {}, "stop_reason": msg.get("stop_reason")}
-    usage, stop, parts, seen = {}, None, {}, False
+        return {"content": msg.get("content") or [], "usage": msg.get("usage") or {}, "stop_reason": msg.get("stop_reason"),
+                "model": str(msg.get("model") or "")}
+    usage, stop, parts, seen, model = {}, None, {}, False, ""
     for line in raw.split(b"\n"):
         if not line.startswith(b"data:"):
             continue
@@ -28,6 +29,7 @@ def parse(raw: bytes):
         if kind == "message_start":
             seen = True
             usage.update((event.get("message") or {}).get("usage") or {})
+            model = str((event.get("message") or {}).get("model") or "")
         elif kind == "content_block_start":
             block = dict(event.get("content_block") or {})
             if block.get("type") == "tool_use":
@@ -55,7 +57,7 @@ def parse(raw: bytes):
             except ValueError:
                 block["input"] = {}
         content.append(block)
-    return {"content": content, "usage": usage, "stop_reason": stop}
+    return {"content": content, "usage": usage, "stop_reason": stop, "model": model}
 
 
 def input_tokens(usage) -> int:
