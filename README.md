@@ -224,9 +224,11 @@ for each prompt and sets a fitting effort level:
 
 | Prompt | Model (setting) | Effort |
 |---|---|---|
-| Simple, basic: a question, a lookup, a summary, a rename, a one-step command | `small`, Haiku | low |
+| Simple, basic: a lookup, a summary, a rename, a one-step command | `small`, Haiku | low |
 | Coding: write, change, fix or test code | `medium`, Sonnet | medium |
 | Too complex, or it failed: design, an audit, a hard bug, work across many files, "that is still broken" | `large`, Opus | as Claude Code sends it, never lowered |
+
+Effort is set only on requests where Claude Code already sends one.
 
 It is off until you turn it on:
 
@@ -240,13 +242,13 @@ almanac config set routing.mode all        # or: subagents
 
 The rules are a short table in `routing.py`. A turn is judged from its length,
 its wording and the files it names, read from what you typed (pasted logs, stack
-traces and code blocks are ignored). A turn with no sign of being easy or hard,
+traces and code blocks are not taken as a sign of a hard job or a failure). A turn with no sign of being easy or hard,
 such as a "why" question, a short follow-up or text that is not English, keeps
 the model you were on. A turn that says the last answer was wrong goes to
 `large`. Fast-mode requests (`speed`) are never routed. Three tool errors in a row, or one call failing three times,
 raise the next turn one tier, for three turns. With `routing.classifier` set to
 `"model"`, the turns the rules are unsure about are settled by one small-model
-call. It adds a short wait (2 seconds at most) to that turn and uses a little of
+call. It adds a short wait (each network step gives up after 2 seconds) to that turn and uses a little of
 your allowance. It shares the daily cap on small-model calls with the summaries
 (`memory.summary_daily_calls`) and is not turned off by `memory.summary_model`.
 If the call fails, the rules decide.
@@ -254,8 +256,9 @@ If the call fails, the rules decide.
 **Sub-agents.** Almanac adds one fixed paragraph to Claude Code's `Agent` (or `Task`) tool.
 It asks the model to start each sub-agent prompt with `Difficulty: simple`,
 `standard` or `hard`. Almanac reads that line and picks the sub-agent's model.
-A sub-agent keeps its model for its whole life. Without that line, and with
-nothing else to go on, it keeps the model Claude Code chose for it.
+A sub-agent keeps its model for its whole life. Without that line, a task that
+asks for no coding and no hard job keeps the model Claude Code chose for it,
+whatever the agent's type.
 
 **Switching models costs money.** Anthropic's prompt cache belongs to one
 model. If a conversation moves to another model, the whole history is written
@@ -266,7 +269,7 @@ cold. Almanac's memory does not change that. So on the main thread:
 - A move **down** is made only if it is clearly cheaper (`routing.margin`, 20%).
   Almanac counts the history's tokens, the price of writing them into the new
   cache against reading them from the warm one, and the work the turn is
-  expected to take. One quick question while 150,000 tokens sit warm in Sonnet's
+  expected to take. One quick lookup while 150,000 tokens sit warm in Sonnet's
   cache stays on Sonnet.
 - The prices in `routing.prices` are relative numbers for comparing models.
   The defaults are list-price ratios as of 2026-11-03 for Haiku, Sonnet and
