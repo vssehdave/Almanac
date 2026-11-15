@@ -227,6 +227,13 @@ class IndexTest(Case):
         record = exchange([human(f"my key is sk-{'x' * 30}"), said("noted")])
         self.assertNotIn("x" * 30, record["text"])
 
+    def test_more_secret_shapes_are_removed(self):
+        for line, secret in (("DB_PASS=s3cretValue99", "s3cretValue99"), ("AccountKey=abcdEFGH1234abcdEFGH1234==", "abcdEFGH1234"),
+                             ("STRIPE=whsec_abcdefghijklmnop1234", "abcdefghijklmnop1234"), ("dbpassword=hunter2hunter2", "hunter2")):
+            self.assertNotIn(secret, redact(line), line)
+        for line in ("BYPASS=something12", "compass: northwest", "max_tokens: 150000", "passes: everything"):
+            self.assertEqual(redact(line), line)
+
     def test_prune_removes_only_old_conversations(self):
         key = self.memory.projects.see(self.alpha)
         self.memory.index("lane-old", "s1", key, self.convo(), reply("Added it."))

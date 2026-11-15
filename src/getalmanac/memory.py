@@ -63,14 +63,15 @@ _SECRETS = [
     (re.compile(r"\bAIza[0-9A-Za-z_-]{30,}"), "[key removed]"),
     (re.compile(r"\bnpm_[A-Za-z0-9]{30,}"), "[key removed]"),
     (re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}"), "[key removed]"),
+    (re.compile(r"\bwhsec_[A-Za-z0-9]{16,}"), "[key removed]"),
     (re.compile(r"\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}"), "[key removed]"),
     # The credential must hold a digit, so prose such as "basic error-handling" stays readable.
     (re.compile(r"(?i)\b(Bearer|Basic)\s+(?=[A-Za-z._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{12,}"), r"\1 [removed]"),
     (re.compile(r"://[^/\s:@]+:[^/\s@]+@"), "://[removed]@"),
-    # NAME=value where NAME ends in secret, token, password or api key (GITHUB_TOKEN, db_password, apiKey),
+    # NAME=value where NAME ends in secret, token, pass(word), api key or account key (GITHUB_TOKEN, DB_PASS, apiKey),
     # but not tokens, tokenizer or passwords: `max_tokens: 150000` is not a secret. The name's tail is
     # bounded so a long run of such words cannot make the match slow.
-    (re.compile(r"(?i)(?P<k>(?:SECRET|TOKEN|PASSW(?:OR)?D|API[_-]?KEY)(?:[_0-9][A-Z0-9_]{0,40}|KEY)?[\"']?[ \t]*[=:][ \t]*[\"']?)[^\s\"']{6,}"),
+    (re.compile(r"(?i)(?P<k>(?:SECRET|TOKEN|PASSW(?:OR)?D|(?<![A-Z])PASS|API[_-]?KEY|ACCOUNT[_-]?KEY)(?:[_0-9][A-Z0-9_]{0,40}|KEY)?[\"']?[ \t]*[=:][ \t]*[\"']?)[^\s\"']{6,}"),
      r"\g<k>[removed]"),
 ]
 
