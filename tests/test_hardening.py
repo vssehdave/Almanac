@@ -250,7 +250,7 @@ class ServeTest(unittest.TestCase):
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]
         env = dict(os.environ, ALMANAC_HOME=tmp, ALMANAC_UPSTREAM="http://127.0.0.1:9", PYTHONIOENCODING="utf-8")
-        server = subprocess.Popen([sys.executable, "-m", "getalmanac", "serve", "--port", str(port)], env=env,
+        server = subprocess.Popen([sys.executable, "-X", "faulthandler", "-m", "getalmanac", "serve", "--port", str(port)], env=env,
                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         self.addCleanup(server.stdout.close)
         self.addCleanup(server.kill)
@@ -259,7 +259,9 @@ class ServeTest(unittest.TestCase):
         while not os.path.exists(path) and time.time() < end and server.poll() is None:
             time.sleep(0.1)
         if not os.path.exists(path):
-            server.kill()
+            import signal  # SIGABRT makes faulthandler print where serve is stuck
+            server.kill() if os.name == "nt" else server.send_signal(signal.SIGABRT)
+            server.wait(10)
             self.fail(f"serve wrote no serve.json in time; it printed:\n{server.stdout.read()}")
         token = json.load(open(path))["token"]
         time.sleep(0.5)
