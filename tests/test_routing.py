@@ -345,6 +345,13 @@ class SwitchPriceTest(Case):
         warm = routing.price(self.rig.proxy.cfg["routing"], "medium", dec["prefix"], True, "small")
         self.assertEqual((last["from"], last["stay"]), ("medium", round(warm)))
 
+    def test_a_rewound_turn_inherits_the_tier_the_turn_before_it_ran_on(self):
+        first = {"text": "list the files in src"}
+        self.send(convo([first]))
+        self.send(convo([first, {"text": "design a plugin system"}]))
+        self.send(convo([first, {"text": "design a plugin system"}, {"text": "fix cli.py"}]))
+        self.assertEqual(self.send(convo([first, {"text": "how many tests are there?"}]))["model"], SMALL)
+
     def test_a_move_up_is_always_made(self):
         self.send(convo([{"text": "list the files in src"}]), model=SMALL)
         messages = convo([{"text": "list the files in src", "pad": 600000}, {"text": "design a plugin system"}])
