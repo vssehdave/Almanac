@@ -256,8 +256,11 @@ class ServeTest(unittest.TestCase):
         self.addCleanup(server.kill)
         path = os.path.join(tmp, "serve.json")
         end = time.time() + 20
-        while not os.path.exists(path) and time.time() < end:
+        while not os.path.exists(path) and time.time() < end and server.poll() is None:
             time.sleep(0.1)
+        if not os.path.exists(path):
+            server.kill()
+            self.fail(f"serve wrote no serve.json in time; it printed:\n{server.stdout.read()}")
         token = json.load(open(path))["token"]
         time.sleep(0.5)
         with mock.patch.dict(os.environ, {"ALMANAC_HOME": tmp}):
