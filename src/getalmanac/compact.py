@@ -134,7 +134,7 @@ class CompactLayer:
     @staticmethod
     def _applies(body, ctx) -> bool:
         messages = body.get("messages") or []
-        return (ctx.cfg["compaction"]["enabled"] and not ctx.agent and bool(body.get("tools"))
+        return (ctx.cfg["compaction"]["enabled"] and not ctx.agent and rq.has_client_tools(body)
                 and len(messages) > 2 and messages[0].get("role") == "user")
 
     def _estimate(self, body, ctx, messages) -> int:
@@ -189,7 +189,7 @@ class CompactLayer:
         return state
 
     def observe(self, ctx, orig, reply):
-        if ctx.agent or not orig.get("tools"):
+        if ctx.agent or not rq.has_client_tools(orig):
             return
         usage = reply.get("usage") or {}
         ctx.store.put(f"usage:{ctx.lane}", {"tokens": sse.input_tokens(usage) + int(usage.get("output_tokens") or 0),
