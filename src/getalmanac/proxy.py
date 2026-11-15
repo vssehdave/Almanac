@@ -13,6 +13,7 @@ import os
 import queue
 import secrets
 import socket
+import socketserver
 import ssl
 import sys
 import threading
@@ -195,7 +196,9 @@ class Server(http.server.ThreadingHTTPServer):
         if os.name == "nt":  # no other program may bind this port while it is in use
             self.allow_reuse_address = False
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-        super().server_bind()
+        # HTTPServer.server_bind would also call socket.getfqdn, a reverse DNS lookup that can hang for many seconds on macOS
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
     def handle_error(self, request, client_address):
         exc = sys.exc_info()[1]
