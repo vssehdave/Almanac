@@ -158,6 +158,7 @@ class CompactLayer:
         state = ctx.store.get(key)
         if state and not (len(messages) >= state["covered"] and fingerprint(messages[:state["covered"]]) == state["hash"]):
             ctx.store.run("delete from state where key = ?", (key,))  # rewound or edited: the summary no longer fits
+            ctx.store.run("delete from state where key = ?", (f"usage:{ctx.lane}",))  # its count described the compacted body
             state = None
         fresh = False
         covered = len(messages) - 1

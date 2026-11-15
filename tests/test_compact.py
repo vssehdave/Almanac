@@ -177,6 +177,26 @@ class CompactLayerTest(LayerCase):
         self.send(messages)  # and it is not tried again for this conversation
         self.assertEqual(len(self.rig.upstream.requests), 3)
 
+    def test_a_size_refusal_does_not_switch_compaction_off_but_another_one_does(self):
+        refusal = [b'{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 250000 tokens > 200000 maximum"}}']
+
+        def respond(req):
+            if b"Almanac compacted this conversation" in req["body"]:
+                return 400, {"content-type": "application/json"}, refusal[0]
+            return 200, {"content-type": "text/event-stream"}, sse()
+
+        self.rig.upstream.respond = respond
+        self.send(history(8))
+        lane = self.rig.records()[-1]["lane"]
+        self.assertIsNone(self.store.get(f"nocompact:{lane}"))
+        self.assertIn("prompt is too long", self.rig.records()[-1]["fallback"])
+        refusal[0] = b'{"type":"error","error":{"type":"invalid_request_error","message":"bad block"}}'
+        other = history(8)
+        other[0]["content"][1]["text"] = "A different first question"  # a new conversation: the first one is no longer rewritten
+        self.send(other)
+        lane = self.rig.records()[-1]["lane"]
+        self.assertIn("bad block", self.store.get(f"nocompact:{lane}"))
+
     def test_an_edit_to_covered_history_drops_the_prefix(self):
         messages = history(8)
         self.send(messages)
@@ -185,6 +205,16 @@ class CompactLayerTest(LayerCase):
         self.rig.cfg["compaction"]["trigger_tokens"] = 10 ** 9
         sent = self.send(edited)
         self.assertEqual(sent, edited)
+
+    def test_an_edit_in_place_does_not_keep_trusting_the_old_count(self):
+        messages = history(8)
+        self.send(messages)
+        self.rig.records()  # the reply stored a count that described the compacted body
+        edited = copy.deepcopy(messages)
+        edited[5]["content"][0]["text"] = "A rewritten earlier answer."  # same length: only the content changed
+        sent = self.send(edited)
+        self.assertEqual([m["role"] for m in sent], ["user", "system", "assistant", "user"])  # compacted again
+        self.assertEqual(self.rig.records()[-1]["compaction"]["fresh"], True)
 
     def test_it_compacts_again_when_it_outgrows_the_trigger(self):
         messages = history(8)
