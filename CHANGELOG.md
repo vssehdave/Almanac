@@ -35,6 +35,18 @@
   while its request waits is dropped and never served later. `almanac report`
   shows how many requests waited. Tested with a fake upstream, not a real
   outage.
+- **Cloud hand-off.** `almanac cloud packet` prints a hand-off packet for a
+  stored conversation: the last message you typed, your earlier requests, one
+  line per exchange of what was done, the latest transcript and the state of
+  the repository, capped at 24,000 characters. Common secret patterns are
+  taken out; that is best effort, so read it first. `almanac cloud send`
+  shows the packet, asks, and starts a Claude Code cloud session from it with
+  `claude --cloud`, so the work can go on while this machine is offline. The
+  cloud clones the GitHub remote, so `send` lists the commits that are not
+  pushed and the files that are not committed. On Windows it refuses a
+  `.cmd` launcher and keeps the quoted command under the length limit.
+- **More secret shapes are taken out of stored text:** `DB_PASS=`,
+  `AccountKey=` and `whsec_` keys.
 - **Security: web pages cannot use the proxy.** A request with an `Origin`
   header, and every `OPTIONS` request, is now refused with a 403 before
   anything is forwarded. Refusals are logged (`"kind": "refused"`), without the

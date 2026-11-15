@@ -35,6 +35,9 @@ body, in five ways:
   by `almanac semantic install` to download a model, with no conversation content.
   Summary calls go to that same upstream, and `memory.summary_model` set to `""`
   turns them off.
+  - `almanac cloud send` is the one command that sends stored conversation text
+    anywhere. It hands it to Claude Code's own cloud option, only when the
+    person runs it. The proxy never does it by itself.
 - **Never read, store or log credentials.** Auth headers are forwarded as
   received and never written anywhere. A background summary call holds them in
   memory for the length of the job only.

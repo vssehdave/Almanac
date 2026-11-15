@@ -21,6 +21,8 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac memory show ID       read one stored exchange or topic in full
   almanac memory recent        the latest conversations, by project
   almanac memory forget        delete stored conversations (--project NAME | --conversation ID | --all; --force for open ones)
+  almanac cloud packet         print the hand-off packet for a Claude Code cloud session (--conversation ID)
+  almanac cloud send           show that packet, ask, then run `claude --cloud` with it (--conversation ID, --yes)
   almanac semantic [install|status|index|on|off]   search memory by meaning (optional model)
   almanac route [status]       what model routing is set to and what it decided lately
   almanac route pin TIER       keep this project on small, medium or large (`pin off` lifts it)
@@ -33,7 +35,8 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac version
 
 Everything stays on this machine. Requests go to the same upstream Claude Code
-already uses, with Claude Code's own login.
+already uses, with Claude Code's own login. `almanac cloud send` is the one
+command that hands stored text to anything else: Claude Code's cloud option.
 """
 
 
@@ -235,6 +238,38 @@ def _memory(rest):
     return 0
 
 
+def _cloud(rest):
+    import os
+
+    from . import cloud
+
+    parser = argparse.ArgumentParser(prog="almanac cloud")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    for name in ("packet", "send"):
+        sub.add_parser(name).add_argument("--conversation", type=int, help="default: the latest one of this folder's project")
+    sub.choices["send"].add_argument("--yes", action="store_true", help="send without asking")
+    args = parser.parse_args(rest)
+    memory, cwd = _memory_handle(), os.getcwd()
+    if args.conversation is None:
+        found = memory.recent(project=memory.projects.see(cwd, touch=False), limit=1)
+    else:
+        found = memory.store.run("select id, title from convo where id = ?", (args.conversation,))
+    text = cloud.fitted(memory, found[0]["id"], cwd) if found else ""
+    if not text:
+        print("almanac: no stored conversation to hand off" + (f" with id {args.conversation}" if args.conversation is not None
+              else " for this folder's project") + "; see `almanac memory recent`", file=sys.stderr)
+        return 2
+    if args.cmd == "packet":
+        _print(text)
+        return 0
+    exe = launcher.find_claude()
+    if not exe:
+        print("almanac: Claude Code was not found on PATH. Install it or set ALMANAC_CLAUDE to its path.", file=sys.stderr)
+        return 2
+    _print(f"almanac: handing conversation {found[0]['id']} ({found[0]['title']}) to a Claude Code cloud session")
+    return cloud.send(exe, text, cwd, yes=args.yes)
+
+
 def _semantic(rest):
     from . import semantic
 
@@ -397,7 +432,8 @@ def _version(_rest):
 
 
 COMMANDS = {"serve": _serve, "report": _report, "status": _status, "doctor": _doctor, "config": _config,
-            "version": _version, "memory": _memory, "projects": _projects, "route": _route, "cheatsheet": _cheatsheet, "mcp": _mcp, "semantic": _semantic}
+            "version": _version, "memory": _memory, "projects": _projects, "route": _route, "cheatsheet": _cheatsheet, "mcp": _mcp,
+            "semantic": _semantic, "cloud": _cloud}
 
 
 def main(argv=None):

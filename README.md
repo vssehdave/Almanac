@@ -3,8 +3,9 @@
 A local proxy for Claude Code. It makes each session start with less context,
 gives every project a memory, and keeps long conversations inside the context
 window. Nothing leaves your machine except the requests Claude Code was already
-sending to Anthropic. (The one exception is a model you choose to download, see
-[Search by meaning](#search-by-meaning).)
+sending to Anthropic. (The exceptions are two things you choose to do: download
+a model, see [Search by meaning](#search-by-meaning), and hand a conversation to
+a cloud session, see [Cloud hand-off](#cloud-hand-off).)
 
 ```
 Claude Code  ──▶  almanac (127.0.0.1)  ──▶  api.anthropic.com
@@ -389,6 +390,66 @@ steps aside with a one-line notice if you use a proxy it cannot go through
 driven from a phone has not been tested yet, which is why the mode is off by
 default.
 
+## Cloud hand-off
+
+A Claude Code cloud session runs on Anthropic's machines, so it keeps going
+while this machine is offline. It uses the same allowance as your local
+sessions.
+
+A cloud session starts from a prompt and the repository, and nothing else. It
+does not get the local conversation or this memory. So Almanac writes the
+prompt: a hand-off packet, built from what it stored about the conversation and
+from `git`. It holds the last message you typed, your earlier requests, one
+line per exchange of what was done, the transcript of the latest work, and the
+state of the repository.
+
+```bash
+almanac cloud packet          # read the packet first; nothing leaves the machine
+almanac cloud send            # show it again, ask, then start a cloud session
+```
+
+Both use the latest conversation of the project the current folder belongs to.
+`--conversation ID` picks another one.
+
+`send` prints the packet and what the cloud will and will not see, and asks
+before it runs `claude --cloud <packet>` in the current folder. `--yes` skips
+the question; without a terminal to ask in, `send` refuses unless you give it.
+
+The cloud session clones the GitHub remote at your current branch, not this
+folder. So push first. `send` names the branch and its upstream and lists what
+the cloud will not see: commits that are not pushed, changes that are not
+committed, and untracked files.
+
+To get the work back:
+
+- `claude --teleport` pulls a cloud session back to this machine.
+- When GitHub is connected at claude.ai, the session pushes its work to a
+  `claude/` branch.
+
+This proxy and its memory do not travel, apart from the packet. Claude Code
+decides what else a cloud session gets from this machine (settings, hooks, MCP
+servers); Almanac does not know.
+
+- The packet is capped at 24,000 characters, because it travels as one
+  command-line argument. Past that, the oldest lines of "what was done" are
+  left out and the packet says how many. The task is never cut short of 6,000
+  characters. On Windows the packet is made shorter until the quoted command
+  fits the 32,767-character limit.
+- Common secret patterns are taken out of it, the same ones as from stored
+  text. That is best effort, not complete, and the packet also holds file
+  paths and the remote's address. Read it with `almanac cloud packet` first.
+- On Windows, `send` will not run Claude Code through a `claude.cmd` or `.bat`
+  launcher (an npm install), because `cmd.exe` would cut the packet at its
+  first line. Point `ALMANAC_CLAUDE` at `claude.exe`.
+- When `claude --cloud` fails, `send` says so: it needs a Claude Code with
+  `--cloud` and a login with a claude.ai account.
+- An exchange is stored when Claude Code finishes its turn. If you stop it in
+  the middle of a turn, the packet's task is the message before that one. Read
+  the packet first.
+
+**Status:** the packet and the command are tested with the call to Claude Code
+replaced. A cloud session started from a packet has not been tried yet.
+
 ## Behind a corporate proxy
 
 If your network sends outbound traffic through an HTTP proxy, Almanac goes
@@ -433,6 +494,8 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac memory show ID` | Read one stored exchange or topic |
 | `almanac memory recent` | The latest conversations, by project |
 | `almanac memory forget` | Delete conversations and their saved choices (`--project NAME`, `--conversation ID`, `--all`). Keeps any changed in the last hour unless you add `--force` |
+| `almanac cloud packet` | Print the hand-off packet for a cloud session (`--conversation ID`). Sends nothing |
+| `almanac cloud send` | Show that packet, ask, then start a Claude Code cloud session from it (`--conversation ID`, `--yes`) |
 | `almanac semantic install` | Download the model for search by meaning (needs `getalmanac[semantic]`) |
 | `almanac semantic status` | Whether the packages and model are there, and how many exchanges have a vector |
 | `almanac semantic index` | Make vectors for every stored exchange that is waiting |
