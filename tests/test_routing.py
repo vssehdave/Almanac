@@ -221,6 +221,11 @@ class DecisionTest(Case):
         messages = convo([{"text": "list the files in src"}, {"text": "design a plugin system"}])
         self.assertEqual(self.send(messages, model=SMALL)["model"], LARGE)
 
+    def test_a_model_outside_the_table_is_left_alone_and_named_in_status(self):
+        sent = self.send(convo([{"text": "list the files in src"}]), model="claude-other-9")
+        self.assertEqual((sent["model"], sent["output_config"]["effort"]), ("claude-other-9", "high"))
+        self.assertEqual((self.store.get("route:outside"), self.decisions()), ("claude-other-9", []))
+
     def test_a_hard_question_on_the_first_turn_keeps_the_model(self):
         sent = self.send(convo([{"text": "Why do requests hang when two users save at once?"}]), model=LARGE)
         self.assertEqual(sent["model"], LARGE)

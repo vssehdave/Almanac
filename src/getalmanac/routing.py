@@ -224,6 +224,8 @@ class RoutingLayer:
             return
         tier_now = _tier_of(cfg, body["model"])
         if not tier_now:  # the person chose some other model on purpose
+            if ctx.store.get("route:outside") != body["model"]:
+                ctx.store.put("route:outside", body["model"])  # so `almanac route status` can say why nothing is routed
             return
         messages = ctx.orig["messages"]
         turns = person_turns(messages)

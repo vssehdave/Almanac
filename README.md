@@ -289,7 +289,10 @@ window), the turn stays on the previous model with that model's own effort, so
 the cache is kept.
 
 **Your own choice wins.** If a request names a model other than the three in
-`routing.models`, Almanac leaves it alone. To keep a project on one tier:
+`routing.models`, Almanac leaves it alone, and `almanac route status` names
+that model. If it is the model you normally use, routing does nothing until it
+is in the table: `almanac config set routing.models.large <model id>`, and give
+`routing.windows` its context window. To keep a project on one tier:
 
 ```bash
 almanac route pin large      # until `almanac route pin off`

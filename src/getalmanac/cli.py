@@ -344,6 +344,9 @@ def _route(rest):
     print(f"  mode       {route['mode']}  (classifier: {route['classifier']}, ceiling: {route['ceiling']})")
     print("  models     " + ", ".join(f"{t} {route['models'][t]}" for t in routing.TIERS))
     print(f"  pin        {pin or 'none'} (this project)")
+    outside = store.get("route:outside")
+    if outside and outside not in route["models"].values():
+        print(f"  not routed {outside} is not in routing.models, so its threads keep it")
     for tier, why in routing.bad_tiers(store).items():
         print(f"  unavailable {tier}: {why}")
     log = store.get("route:log", [])[-10:]
