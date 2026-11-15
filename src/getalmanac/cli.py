@@ -23,6 +23,8 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac memory forget        delete stored conversations (--project NAME | --conversation ID | --all; --force for open ones)
   almanac cloud packet         print the hand-off packet for a Claude Code cloud session (--conversation ID)
   almanac cloud send           show that packet, ask, then run `claude --cloud` with it (--conversation ID, --yes)
+  almanac cloud watchdog       the setup and the prompt for a scheduled cloud task that takes over a stalled one
+  almanac cloud status         hand-off on or off, its last heartbeat, and any takeover branch on origin
   almanac semantic [install|status|index|on|off]   search memory by meaning (optional model)
   almanac route [status]       what model routing is set to and what it decided lately
   almanac route pin TIER       keep this project on small, medium or large (`pin off` lifts it)
@@ -35,8 +37,9 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac version
 
 Everything stays on this machine. Requests go to the same upstream Claude Code
-already uses, with Claude Code's own login. `almanac cloud send` is the one
-command that hands stored text to anything else: Claude Code's cloud option.
+already uses, with Claude Code's own login. Two things you turn on hand stored
+text to anything else: `almanac cloud send` (Claude Code's cloud option) and
+`cloud.auto` (a hand-off branch on your git remote).
 """
 
 
@@ -238,6 +241,20 @@ def _memory(rest):
     return 0
 
 
+WATCHDOG_STEPS = """One-time setup, so a cloud task can take over when this machine goes quiet:
+
+1. Connect GitHub: install the Claude GitHub App at claude.ai/code, or run /web-setup in Claude Code.
+   On a Team plan an Owner must first enable the GitHub connector.
+2. almanac config set cloud.auto on      (then restart almanac)
+3. In Claude Code, in this repository, run /schedule and create an hourly task with the prompt below
+   (or create it at claude.ai/code/routines).
+
+The prompt for the scheduled task:
+
+{prompt}
+"""
+
+
 def _cloud(rest):
     import os
 
@@ -248,8 +265,16 @@ def _cloud(rest):
     for name in ("packet", "send"):
         sub.add_parser(name).add_argument("--conversation", type=int, help="default: the latest one of this folder's project")
     sub.choices["send"].add_argument("--yes", action="store_true", help="send without asking")
+    sub.add_parser("status")
+    sub.add_parser("watchdog")
     args = parser.parse_args(rest)
-    memory, cwd = _memory_handle(), os.getcwd()
+    memory, cwd, cfg = _memory_handle(), os.getcwd(), config.load()
+    if args.cmd == "watchdog":
+        _print(WATCHDOG_STEPS.format(prompt=cloud.watchdog(cfg["cloud"]["heartbeat_minutes"])))
+        return 0
+    if args.cmd == "status":
+        _print(cloud.status(cwd, cfg, memory.store))
+        return 0
     if args.conversation is None:
         found = memory.recent(project=memory.projects.see(cwd, touch=False), limit=1)
     else:

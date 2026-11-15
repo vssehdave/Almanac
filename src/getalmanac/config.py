@@ -70,6 +70,10 @@ DEFAULTS = {
     },
     # "on" appends the working rules for the answering model (Opus, Sonnet or Haiku) to each thread's system prompt
     "cheatsheet": {"mode": "on"},
+    "cloud": {
+        "auto": False,  # true keeps a running task's snapshot on origin's almanac/handoff branch (see cloud.py)
+        "heartbeat_minutes": 10,
+    },
 }
 
 
@@ -137,7 +141,7 @@ def set_value(dotted: str, raw: str) -> object:
     try:
         value = json.loads(raw)
     except ValueError:
-        value = raw
+        value = {"on": True, "off": False}.get(raw.lower(), raw) if isinstance(node, bool) else raw
     if type(value) is not type(node) and not (isinstance(node, (int, float)) and isinstance(value, (int, float))):
         raise TypeError(f"{dotted} expects {type(node).__name__}")
     data = _file()

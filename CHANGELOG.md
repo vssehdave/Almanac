@@ -35,6 +35,18 @@
   while its request waits is dropped and never served later. `almanac report`
   shows how many requests waited. Tested with a fake upstream, not a real
   outage.
+- **Automatic hand-off (off by default).** With `cloud.auto` on, a task in
+  progress in a git repository is pushed as a snapshot to `origin`'s
+  `almanac/handoff` branch every `cloud.heartbeat_minutes` (10): the work tree
+  with uncommitted changes, the hand-off packet and its state. When the turn
+  ends it is marked idle. `almanac cloud watchdog` prints the setup and the
+  prompt for an hourly scheduled cloud task that takes over a snapshot whose
+  heartbeat stopped, on a `claude/almanac-takeover-` branch with a draft pull
+  request. `almanac cloud status` shows the last heartbeat and any takeover.
+  The snapshot leaves your index, HEAD and branches alone, runs off the
+  request path, and a failure is one log line. It puts uncommitted work on
+  GitHub; `git push origin --delete almanac/handoff` removes it. Each
+  scheduled run uses a little plan usage even when there is nothing to do.
 - **Cloud hand-off.** `almanac cloud packet` prints a hand-off packet for a
   stored conversation: the last message you typed, your earlier requests, one
   line per exchange of what was done, the latest transcript and the state of
