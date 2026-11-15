@@ -45,7 +45,7 @@ def sse(text="ok", usage=None, tool=None, model=None) -> bytes:
 class Upstream:
     """Records every request. `respond(request_dict) -> (status, headers, body)` decides the answer."""
 
-    def __init__(self, respond=None):
+    def __init__(self, respond=None, port=0):
         self.requests = []
         self.respond = respond or (lambda req: (200, {"content-type": "text/event-stream"}, sse()))
         outer = self
@@ -81,7 +81,7 @@ class Upstream:
 
             do_GET = do_POST = do_HEAD = do_DELETE = _any
 
-        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
         self.server.daemon_threads = True
         threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"

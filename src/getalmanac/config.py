@@ -13,6 +13,7 @@ DEFAULTS = {
     # "" uses HTTPS_PROXY / ALL_PROXY from the environment (NO_PROXY is honoured either way)
     "upstream_proxy": "",
     "upstream_ca": "",  # a CA file to trust for the upstream, for a proxy that re-signs TLS
+    "offline": {"hold_minutes": 480},  # how long a model request waits for the network to return; 0 fails at once
     "skills": {
         "enabled": True,
         "stub_chars": 90,  # characters of description kept for a collapsed skill
