@@ -98,7 +98,7 @@ class SummaryTest(Case):
         self.assertFalse([k for k in call["headers"] if k.startswith("x-claude-code")])
         self.assertEqual(call["path"], "/v1/messages?beta=true")
         self.assertEqual(sent["system"], [{"type": "text", "text": IDENTITY}, {"type": "text", "text": summarize.INSTRUCTION}])
-        self.assertEqual((sent["model"], sent["max_tokens"], "stream" in sent, "tools" in sent), (MODEL, 300, False, False))
+        self.assertEqual((sent["model"], sent["max_tokens"], "stream" in sent, "tools" in sent), (MODEL, 1000, False, False))
         self.assertIn("retry helper", sent["messages"][0]["content"])
         used = summarize.today(self.store)
         self.assertEqual((used["calls"], used["in"], used["out"]), (1, 50, 20))
@@ -140,6 +140,23 @@ class SummaryTest(Case):
         self.assertEqual(self.calls[-1]["headers"]["authorization"], "Bearer bob")
         self.assertNotIn("payroll", self.calls[-1]["body"].decode())
         self.assertEqual([bool(r["summary"]) for r in self.leaves()], [False, True])
+
+    def test_a_thinking_block_before_the_text_still_stores_the_summary(self):
+        body = {"type": "message", "role": "assistant", "usage": {"input_tokens": 5, "output_tokens": 9},
+                "content": [{"type": "thinking", "thinking": "hmm", "signature": "s"},
+                            {"type": "text", "text": json.dumps({"title": TITLE, "summary": SUMMARY})}]}
+        self.verdict = (200, JSON_HEADERS, json.dumps(body).encode())
+        self.ask("Add a retry helper to the fetch module")
+        self.assertEqual(self.leaves()[0]["summary"], SUMMARY)
+        self.assertFalse([r for r in self.rig.records() if r["kind"] == "summary"])  # a stored summary logs nothing
+
+    def test_a_call_that_stores_nothing_leaves_one_line_in_the_log(self):
+        self.verdict = (500, JSON_HEADERS, b"{}")
+        self.ask("Add a retry helper to the fetch module")
+        self.assertEqual(self.leaves()[0]["summary"], "")
+        lines = [r for r in self.rig.records() if r["kind"] == "summary"]
+        self.assertEqual([(r["status"], r["why"]) for r in lines], [(500, "status")])
+        self.assertEqual(set(lines[0]), {"ts", "kind", "status", "why"})
 
     def test_a_failing_upstream_is_asked_once_not_once_per_exchange(self):
         self.verdict = (500, JSON_HEADERS, b"{}")

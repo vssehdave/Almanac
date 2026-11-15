@@ -115,17 +115,20 @@ class SummaryLayer:
         text = memory.detail(node_id) or store.run("select text from node where id = ?", (node_id,))[0]["text"]
         if len(text) > INPUT_CHARS:
             text = text[: INPUT_CHARS // 3] + "\n... (middle not shown) ...\n" + text[-(2 * INPUT_CHARS // 3):]
-        body = {"model": model, "max_tokens": 300, "system": _identity(orig) + [{"type": "text", "text": INSTRUCTION}],
+        body = {"model": model, "max_tokens": 1000, "system": _identity(orig) + [{"type": "text", "text": INSTRUCTION}],
                 "messages": [{"role": "user", "content": text}]}
         conn = ctx.proxy.connect()
         conn.timeout = TIMEOUT
+        status, why = 0, "error"
         try:
             conn.request("POST", ctx.proxy.base + PATH, json.dumps(body).encode(), _headers(ctx.headers))
             resp = conn.getresponse()
             data = resp.read()
-            if resp.status in PAUSE_ON:
+            status = resp.status
+            if status in PAUSE_ON:
                 store.put("summary:pause", time.time() + PAUSE_SECONDS)
-            if resp.status != 200:
+            if status != 200:
+                why = "status"
                 return False
             message = json.loads(data)
             usage = message.get("usage") or {}
@@ -135,8 +138,13 @@ class SummaryLayer:
             found = _parse(message)  # clean() also redacts secrets
             if found:
                 memory.set_summary(node_id, *found)
+                why = ""
+            else:
+                why = "parse" if any(isinstance(b, dict) and b.get("type") == "text" for b in message.get("content") or []) else "empty"
             return True
         except (OSError, ValueError, http.client.HTTPException):
             return False
         finally:
             conn.close()
+            if why:  # status, empty, parse or error: never the prompt or the headers
+                ctx.proxy.log.write({"ts": round(time.time(), 3), "kind": "summary", "status": status, "why": why})
