@@ -180,6 +180,7 @@ class Proxy:
                 record["sections_before"] = sections(orig)
         self.log.write(record)
         self.count += 1
+        _tell(self, "outcome", ctx, orig, status)  # a few counters under a lock: no I/O
         if reply and orig:
             for layer in self.layers:
                 if hasattr(layer, "observe"):
@@ -540,6 +541,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return proxy.finish(ctx, orig, raw, sent, 502, b"", started)
             via = f" through the proxy {proxy.hop.label}" if proxy.hop else ""
             message = f"almanac could not reach the upstream{via}: {type(exc).__name__}: {exc}"
+            if ctx:
+                _tell(proxy, "outcome", ctx, orig, 502)
             return self._reply(502, {"type": "error", "error": {"type": "api_error", "message": message}})
         tee = self._pipe(resp, tee=ctx is not None)
         if ctx:
