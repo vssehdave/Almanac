@@ -22,6 +22,11 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac memory show ID       read one stored exchange or topic in full
   almanac memory recent        the latest conversations, by project
   almanac memory forget        delete stored conversations (--project NAME | --conversation ID | --all; --force for open ones)
+  almanac cloud packet         print the hand-off packet for a Claude Code cloud session (--conversation ID)
+  almanac cloud send           show that packet, ask, then run `claude --cloud` with it (--conversation ID, --yes)
+  almanac cloud watchdog       the setup and the prompt for a scheduled cloud task that takes over a stalled one
+  almanac cloud on|off         let this repository take part in the automatic hand-off, or stop it
+  almanac cloud status         hand-off on or off, its last heartbeat, and any takeover branch on origin
   almanac semantic [install|status|index|on|off]   search memory by meaning (optional model)
   almanac route [status]       what model routing is set to and what it decided lately
   almanac route pin TIER       keep this project on small, medium or large (`pin off` lifts it)
@@ -40,7 +45,9 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac version
 
 Everything stays on this machine. Requests go to the same upstream Claude Code
-already uses, with Claude Code's own login.
+already uses, with Claude Code's own login. Two things you turn on hand stored
+text to anything else: `almanac cloud send` (Claude Code's cloud option) and
+`cloud.auto` (a hand-off branch on your git remote).
 """
 
 
@@ -240,6 +247,69 @@ def _memory(rest):
         if memory.kept:
             print(f"kept {memory.kept} open conversation(s) (changed in the last hour); close them and run forget again, or add --force")
     return 0
+
+
+WATCHDOG_STEPS = """One-time setup, so a cloud task can take over when this machine goes quiet:
+
+1. Connect GitHub: install the Claude GitHub App at claude.ai/code, or run /web-setup in Claude Code.
+   On a Team plan an Owner must first enable the GitHub connector.
+2. almanac config set cloud.auto on      (then restart almanac)
+3. almanac cloud on                      (in this repository; no other repository takes part)
+   This repository is {here}.
+4. In Claude Code, in this repository, run /schedule and create an hourly task with the prompt below
+   (or create it at claude.ai/code/routines).
+
+The prompt for the scheduled task:
+
+{prompt}
+"""
+
+
+def _cloud(rest):
+    import os
+
+    from . import cloud
+
+    parser = argparse.ArgumentParser(prog="almanac cloud")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    for name in ("packet", "send"):
+        sub.add_parser(name).add_argument("--conversation", type=int, help="default: the latest one of this folder's project")
+    sub.choices["send"].add_argument("--yes", action="store_true", help="send without asking")
+    for name in ("status", "watchdog", "on", "off"):
+        sub.add_parser(name)
+    args = parser.parse_args(rest)
+    memory, cwd, cfg = _memory_handle(), os.getcwd(), config.load()
+    if args.cmd in ("on", "off"):
+        text = cloud.turn(memory, cwd, args.cmd == "on")
+        _print(text)
+        return 2 if "cannot" in text else 0
+    key = cloud.key_of(memory, cwd)
+    listed = bool(key) and key in cfg["cloud"]["repos"]
+    if args.cmd == "watchdog":
+        here = "on" if listed else "off"
+        _print(WATCHDOG_STEPS.format(prompt=cloud.watchdog(cfg["cloud"]["heartbeat_minutes"]), here=here))
+        return 0
+    if args.cmd == "status":
+        _print(cloud.status(cwd, cfg, memory.store, listed))
+        return 0
+    if args.conversation is None:
+        found = memory.recent(project=memory.projects.see(cwd, touch=False), limit=1)
+    else:
+        found = memory.store.run("select id, title from convo where id = ?", (args.conversation,))
+    text = cloud.fitted(memory, found[0]["id"], cwd) if found else ""
+    if not text:
+        print("almanac: no stored conversation to hand off" + (f" with id {args.conversation}" if args.conversation is not None
+              else " for this folder's project") + "; see `almanac memory recent`", file=sys.stderr)
+        return 2
+    if args.cmd == "packet":
+        _print(text)
+        return 0
+    exe = launcher.find_claude()
+    if not exe:
+        print("almanac: Claude Code was not found on PATH. Install it or set ALMANAC_CLAUDE to its path.", file=sys.stderr)
+        return 2
+    _print(f"almanac: handing conversation {found[0]['id']} ({found[0]['title']}) to a Claude Code cloud session")
+    return cloud.send(exe, text, cwd, yes=args.yes)
 
 
 def _semantic(rest):
@@ -473,8 +543,8 @@ def _version(_rest):
 
 
 COMMANDS = {"serve": _serve, "report": _report, "status": _status, "doctor": _doctor, "config": _config,
-            "version": _version, "memory": _memory, "projects": _projects, "route": _route, "cheatsheet": _cheatsheet, "mcp": _mcp, "semantic": _semantic,
-            "skill": _skill, "pack": _pack}
+            "version": _version, "memory": _memory, "projects": _projects, "route": _route, "cheatsheet": _cheatsheet, "mcp": _mcp,
+            "semantic": _semantic, "cloud": _cloud, "skill": _skill, "pack": _pack}
 
 
 def main(argv=None):

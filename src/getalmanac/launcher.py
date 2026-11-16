@@ -189,6 +189,8 @@ def run(args, cfg) -> int:
         signal.signal(signal.SIGINT, previous)
         if proxy:
             proxy.drain(60)  # summary calls may still be running
+            for layer in proxy.layers:
+                getattr(layer, "close", lambda: None)()
             server.shutdown()
         if session:
             session.close()

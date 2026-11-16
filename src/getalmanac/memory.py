@@ -54,6 +54,8 @@ _TAG = re.compile(r"</?[a-zA-Z][\w-]{0,40}>")
 _REMINDER = re.compile(r"(?i)<\s*/?\s*system-reminder\s*>?")  # the spellings _TAG misses; only the tag name goes, so a stray one cannot eat prose
 _SECRETS = [
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S), "[private key removed]"),
+    # a key cut short (head -5, a truncated tool result) has no END line: take the rest of its body
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[A-Za-z0-9+/=\s]|\\n)*"), "[private key removed]"),
     (re.compile(r"\b(?:sk|pk|rk)-[A-Za-z0-9_\-]{20,}"), "[key removed]"),
     (re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})"), "[key removed]"),
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "[key removed]"),
@@ -63,14 +65,19 @@ _SECRETS = [
     (re.compile(r"\bAIza[0-9A-Za-z_-]{30,}"), "[key removed]"),
     (re.compile(r"\bnpm_[A-Za-z0-9]{30,}"), "[key removed]"),
     (re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}"), "[key removed]"),
+    (re.compile(r"\bwhsec_[A-Za-z0-9]{16,}"), "[key removed]"),
+    (re.compile(r"\bhf_[A-Za-z0-9]{30,}"), "[key removed]"),
+    (re.compile(r"hooks\.slack\.com/services/[A-Za-z0-9/]+"), "hooks.slack.com/[removed]"),
     (re.compile(r"\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}"), "[key removed]"),
     # The credential must hold a digit, so prose such as "basic error-handling" stays readable.
     (re.compile(r"(?i)\b(Bearer|Basic)\s+(?=[A-Za-z._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{12,}"), r"\1 [removed]"),
+    (re.compile(r"(?i)(Authorization:[ \t]*[A-Za-z]+[ \t]+)[^\s\"']{8,}"), r"\1[removed]"),
     (re.compile(r"://[^/\s:@]+:[^/\s@]+@"), "://[removed]@"),
-    # NAME=value where NAME ends in secret, token, password or api key (GITHUB_TOKEN, db_password, apiKey),
+    # NAME=value where NAME ends in secret, token, pass(word), api, account or private key (GITHUB_TOKEN, DB_PASS,
+    # apiKey), quoted or JSON-escaped (a tool call is stored as JSON: API_KEY=\"...\"),
     # but not tokens, tokenizer or passwords: `max_tokens: 150000` is not a secret. The name's tail is
     # bounded so a long run of such words cannot make the match slow.
-    (re.compile(r"(?i)(?P<k>(?:SECRET|TOKEN|PASSW(?:OR)?D|API[_-]?KEY)(?:[_0-9][A-Z0-9_]{0,40}|KEY)?[\"']?[ \t]*[=:][ \t]*[\"']?)[^\s\"']{6,}"),
+    (re.compile(r"(?i)(?P<k>(?:SECRET|TOKEN|PASSW(?:OR)?D|(?<![A-Z])PASS|API[_-]?KEY|ACCOUNT[_-]?KEY|PRIVATE[_-]?KEY)(?:[_0-9][A-Z0-9_]{0,40}|KEY)?(?:\\?[\"'])?[ \t]*[=:][ \t]*\\?[\"']?)[^\s\"']{6,}"),
      r"\g<k>[removed]"),
 ]
 
