@@ -16,6 +16,9 @@ import time
 from pathlib import Path
 
 from . import config
+from .memory import MemoryLayer
+from .routing import CONTINUE, _digest, handwritten, person_text, person_turns
+from .startup import _insert_before_last
 
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]{1,48}$")
 WORD = re.compile(r"[a-z0-9]+")
@@ -284,3 +287,60 @@ def bump(name):
         pb["uses"] += 1
         _write(pb)
     return pb
+
+
+class PlaybookLayer:
+    """Tell Claude which playbook applies to the newest typed request of the main conversation thread.
+
+    The note is frozen per (lane, turn, digest of the typed text), an empty one included, so every
+    later request of the conversation carries the same bytes whatever happens to the playbook.
+    """
+
+    @staticmethod
+    def _key(ctx, turn, text) -> str:
+        return f"playbook:{ctx.lane}:{turn}:{_digest(text)}"
+
+    def transform(self, body, ctx):
+        cfg = ctx.cfg.get("playbooks") or {}
+        if not (cfg.get("enabled") and cfg.get("inject")) or ctx.store is None or ctx.kind != "messages":
+            return
+        if not MemoryLayer._main_thread(body, ctx):
+            return
+        try:
+            self._apply(body, ctx)
+        except Exception:  # fail open: a bad playbook folder must never block a turn
+            return
+
+    def _apply(self, body, ctx):
+        messages, orig = body["messages"], (ctx.orig or body)["messages"]
+        seen, mine = person_turns(orig), person_turns(messages)
+        if not seen:
+            return
+        last = len(seen) - 1
+        newest = person_text(orig[seen[last]])
+        key = self._key(ctx, last, newest)
+        text = ctx.store.get(key)
+        if text is None:
+            low = handwritten(newest)
+            if len(low) < MIN_REQUEST or CONTINUE.match(low):
+                text = ""  # decided by the words alone, so nothing is stored
+            else:
+                text = ctx.store.frozen(key, lambda: self._first(ctx, low))
+        # Earlier turns got their note when they were new: put it back, byte for byte, so the cached prefix holds.
+        # When compaction changed the history the turns no longer line up, and there is nothing to put back.
+        if len(mine) == len(seen):
+            for turn in range(last):
+                old = ctx.store.get(self._key(ctx, turn, person_text(orig[seen[turn]])))
+                if old:
+                    _insert_before_last(messages[mine[turn]], old)
+        if text:
+            _insert_before_last(messages[mine[-1]], text)
+            ctx.stats["playbook"] = {"chars": len(text)}
+
+    @staticmethod
+    def _first(ctx, low) -> str:
+        best = find(low, ctx.project, limit=1)
+        if not best:
+            return ""
+        done = bump(best[0]["name"]) or best[0]
+        return note(done)

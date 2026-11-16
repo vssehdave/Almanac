@@ -8,9 +8,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import helpers  # noqa: F401  (sets ALMANAC_HOME before getalmanac is imported)
+from helpers import Rig
 
-from getalmanac import cli, config, playbook
+from getalmanac import cli, mcp, playbook
+from getalmanac import request as rq
+from getalmanac.memory import Memory
+from getalmanac.playbook import PlaybookLayer
+from getalmanac.store import Store
 
 
 def make(name="weekly-report", **over):
@@ -227,6 +231,253 @@ class CliTest(Home):
         self.assertEqual(pb["status"], "approved")
         self.assertIn(pb["hash"], out)
         self.assertTrue(playbook.runnable(pb))
+
+
+TOOLS = [{"name": "Bash", "description": "run", "input_schema": {"type": "object"}}]
+ASK = "please send the weekly report for the team"
+
+
+def human(text):
+    return {"role": "user", "content": [{"type": "text", "text": "<system-reminder>rules</system-reminder>"},
+                                        {"type": "text", "text": text}]}
+
+
+def said(text="done"):
+    return {"role": "assistant", "content": [{"type": "text", "text": text}]}
+
+
+def body(*messages, tools=True):
+    out = {"model": "claude-test", "system": [{"type": "text", "text": "x\n - Primary working directory: /tmp/p\n"}],
+           "messages": list(messages)}
+    if tools:
+        out["tools"] = TOOLS
+    return out
+
+
+def reminders(msg):
+    return [b["text"] for b in rq.blocks(msg) if b.get("type") == "text" and "Almanac playbook" in b.get("text", "")]
+
+
+class SetProject:
+    def __init__(self, key):
+        self.key = key
+
+    def transform(self, body, ctx):
+        ctx.project = self.key
+
+
+class LayerTest(Home):
+    def setUp(self):
+        super().setUp()
+        self.store = Store(os.path.join(self.home, "a.db"))
+        self.addCleanup(self.store.close)
+
+    def rig(self, project="", overrides=None):
+        rig = Rig(layers=[SetProject(project), PlaybookLayer()], store=self.store, overrides=overrides)
+        self.addCleanup(rig.close)
+        return rig
+
+    def send(self, rig, payload, **kw):
+        rig.messages(payload, **kw)
+        return rig.sent()
+
+    def test_a_match_adds_a_note_to_the_newest_typed_turn_only(self):
+        playbook.save(make(), script=SCRIPT)
+        rig = self.rig()
+        sent = self.send(rig, body(human("what is in the folder today?"), said(), human(ASK)))
+        first, second = sent["messages"][0], sent["messages"][2]
+        self.assertEqual(reminders(first), [])
+        self.assertEqual(len(reminders(second)), 1)
+        self.assertEqual(rq.human_text(second), ASK)  # the typed text is still last and untouched
+        self.assertEqual(rq.blocks(second)[-1]["text"], ASK)
+        text = reminders(second)[0]
+        self.assertTrue(text.startswith('<system-reminder>\nAlmanac playbook "weekly-report" matches this request (Weekly report; used 1 time).'))
+        self.assertIn("Steps:\n1. If the folder is missing: ask for it\n2. Run the script\n", text)
+        self.assertIn("Skills: interfaces:better-layout. Agents: crew:code-reviewer.", text)
+        self.assertIn("Script (draft, not yet approved): run `python", text)
+        self.assertIn("record it with `playbook_save`.\n</system-reminder>", text)
+        self.assertLessEqual(len(text), 1500)
+
+    def test_an_approved_script_names_the_tool_and_a_plain_string_message_works(self):
+        playbook.save(make(args=[{"name": "path", "help": "the folder"}]), script=SCRIPT)
+        playbook.approve("weekly-report")
+        sent = self.send(self.rig(), body({"role": "user", "content": ASK}))
+        self.assertIn('Script: call the tool `playbook_run` with name "weekly-report" and args [<path>]', reminders(sent["messages"][0])[0])
+        self.assertEqual(rq.human_text(sent["messages"][0]), ASK)
+
+    def test_no_script_means_no_script_line(self):
+        playbook.save(make())
+        text = reminders(self.send(self.rig(), body(human(ASK)))["messages"][0])[0]
+        self.assertNotIn("Script", text)
+
+    def test_the_note_never_passes_the_cap(self):
+        playbook.save(make(steps=["step " + "w" * 300] * 30, title="t" * 120, when="w" * 300,
+                           skills=["s" * 79] * 20, agents=["a" * 79] * 20))
+        text = reminders(self.send(self.rig(), body(human(ASK)))["messages"][0])[0]
+        self.assertLessEqual(len(text), 1500)
+        self.assertTrue(text.endswith("</system-reminder>"))
+
+    def test_no_match_on_short_or_follow_up_text_or_other_words(self):
+        playbook.save(make(triggers=["run it", "sounds good", "ok"]))
+        rig = self.rig()
+        for text in ("run it", "ok", "yes, sounds good", "send the monthly numbers"):
+            sent = self.send(rig, body(human(text)))
+            self.assertEqual(reminders(sent["messages"][0]), [], text)
+        self.assertEqual(playbook.load("weekly-report")["uses"], 0)
+
+    def test_a_project_playbook_matches_only_in_its_project(self):
+        playbook.save(make("proj-only", project="proj-a"))
+        self.assertEqual(reminders(self.send(self.rig("proj-b"), body(human(ASK)), session="s-b")["messages"][0]), [])
+        self.assertEqual(len(reminders(self.send(self.rig("proj-a"), body(human(ASK)), session="s-a")["messages"][0])), 1)
+
+    def test_a_sub_agent_and_a_toolless_request_are_left_alone(self):
+        playbook.save(make())
+        rig = self.rig()
+        raw = json.dumps(body(human(ASK))).encode()
+        rig.messages(raw, extra={"x-claude-code-agent-id": "agent-7"})
+        self.assertEqual(rig.upstream.requests[-1]["body"], raw)
+        raw = json.dumps(body(human(ASK), tools=False)).encode()
+        rig.messages(raw)
+        self.assertEqual(rig.upstream.requests[-1]["body"], raw)
+
+    def test_the_note_is_byte_identical_after_the_playbook_is_edited_and_deleted(self):
+        playbook.save(make(), script=SCRIPT)
+        rig = self.rig()
+        payload = body(human(ASK))
+        self.send(rig, payload)
+        first = rig.upstream.requests[-1]["body"]
+        playbook.save(make(title="Renamed", steps=["Do something else"], triggers=["other words"]))
+        self.send(rig, payload)
+        self.assertEqual(rig.upstream.requests[-1]["body"], first)
+        playbook.remove("weekly-report")
+        self.send(rig, payload)
+        self.assertEqual(rig.upstream.requests[-1]["body"], first)
+        self.assertIn(b"Almanac playbook", first)
+
+    def test_a_later_turn_keeps_the_earlier_note(self):
+        playbook.save(make(), script=SCRIPT)
+        rig = self.rig()
+        first = self.send(rig, body(human(ASK)))
+        note = reminders(first["messages"][0])[0]
+        self.send(rig, body(human(ASK)))  # the tool loop of the same turn
+        playbook.remove("weekly-report")
+        later = self.send(rig, body(human(ASK), said(), human("now tidy the notes folder up")))
+        self.assertEqual(reminders(later["messages"][0]), [note])
+        self.assertEqual(reminders(later["messages"][2]), [])
+
+    def test_uses_is_counted_once_per_frozen_note(self):
+        playbook.save(make())
+        rig = self.rig()
+        for _ in range(3):
+            self.send(rig, body(human(ASK)))
+        self.assertEqual(playbook.load("weekly-report")["uses"], 1)
+        self.send(rig, body(human(ASK), said(), human("send the weekly report again, to the board")))
+        self.assertEqual(playbook.load("weekly-report")["uses"], 2)
+
+    def test_a_playbook_saved_during_a_turn_does_not_appear_in_it(self):
+        rig = self.rig()
+        payload = body(human(ASK))
+        plain = self.send(rig, payload)
+        self.assertEqual(reminders(plain["messages"][0]), [])
+        playbook.save(make())
+        self.assertEqual(self.send(rig, payload), plain)
+
+    def test_the_best_match_wins(self):
+        playbook.save(make("weekly-report", triggers=["report"]))
+        playbook.save(make("friday-report", title="Friday", triggers=["weekly report"]))
+        text = reminders(self.send(self.rig(), body(human(ASK)))["messages"][0])[0]
+        self.assertIn('"friday-report"', text)
+
+    def test_disabled_or_not_injecting_changes_nothing(self):
+        playbook.save(make())
+        for key in ("playbooks.enabled", "playbooks.inject"):
+            rig = self.rig(overrides={key: False})
+            raw = json.dumps(body(human(ASK))).encode()
+            rig.messages(raw)
+            self.assertEqual(rig.upstream.requests[-1]["body"], raw, key)
+        self.assertEqual(playbook.load("weekly-report")["uses"], 0)
+
+    def test_a_broken_playbook_folder_fails_open(self):
+        rig = self.rig()
+        Path(self.home, "playbooks").write_text("a file where the folder should be")
+        raw = json.dumps(body(human(ASK))).encode()
+        rig.messages(raw)
+        self.assertEqual(rig.upstream.requests[-1]["body"], raw)
+
+
+class ToolTest(Home):
+    def setUp(self):
+        super().setUp()
+        self.store = Store(os.path.join(self.home, "a.db"))
+        self.addCleanup(self.store.close)
+        self.memory = Memory(self.store)
+        self.cwd = tempfile.mkdtemp(prefix="almanac-cwd-")
+        self.addCleanup(shutil.rmtree, self.cwd, True)
+
+    def tool(self, tool, **args):
+        reply = mcp.handle(self.memory, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                         "params": {"name": tool, "arguments": args}}, self.cwd)["result"]
+        return reply["content"][0]["text"], reply["isError"]
+
+    def test_save_then_find(self):
+        text, failed = self.tool("playbook_save", playbook=make(source="owner"), script=SCRIPT)
+        self.assertFalse(failed)
+        self.assertIn("status: draft", text)
+        self.assertIn("almanac playbook approve weekly-report", text)
+        self.assertIn(str(playbook.folder("weekly-report")), text)
+        self.assertEqual(playbook.load("weekly-report")["source"], "claude")
+        found, _ = self.tool("playbook_find", query="send me the weekly report")
+        self.assertIn("weekly-report: Weekly report (draft, used 0x)", found)
+        self.assertIn("The owner asks for the weekly report.", found)
+        self.assertEqual(self.tool("playbook_find", query="unrelated words")[0], "No playbook matches.")
+
+    def test_save_without_a_script_needs_no_approval(self):
+        text, _ = self.tool("playbook_save", playbook=make())
+        self.assertIn("status: approved", text)
+        self.assertNotIn("approve weekly-report", text)
+
+    def test_save_refuses_a_bad_playbook(self):
+        for bad in (make("../escape"), make(steps=[]), "text"):
+            self.assertTrue(self.tool("playbook_save", playbook=bad)[1], bad)
+        self.assertEqual(playbook.names(), [])
+
+    def test_run_refuses_a_draft_and_runs_an_approved_script(self):
+        self.tool("playbook_save", playbook=make(), script=SCRIPT)
+        text, failed = self.tool("playbook_run", name="weekly-report", args=["x"])
+        self.assertFalse(failed)
+        self.assertTrue(text.startswith("Not run"), text)
+        self.assertIn("run.py", text)
+        playbook.approve("weekly-report")
+        text, _ = self.tool("playbook_run", name="weekly-report", args=["x", "y"])
+        self.assertEqual(json.loads(text.split("--- stdout ---\n")[1].split("\n--- stderr")[0]), {"args": ["x", "y"]})
+
+    def test_a_script_changed_after_approval_does_not_run(self):
+        self.tool("playbook_save", playbook=make(), script=SCRIPT)
+        playbook.approve("weekly-report")
+        self.tool("playbook_save", playbook=make(), script=SCRIPT + "print('new')\n")
+        text, _ = self.tool("playbook_run", name="weekly-report")
+        self.assertTrue(text.startswith("Not run"), text)
+
+    def test_run_rejects_bad_args_and_reports_failure(self):
+        self.tool("playbook_save", playbook=make(), script="import sys\nsys.exit(5)\n")
+        playbook.approve("weekly-report")
+        self.assertTrue(self.tool("playbook_run", name="weekly-report", args="not a list")[1])
+        self.assertTrue(self.tool("playbook_run", name="weekly-report", args=[1])[1])
+        self.assertIn("exit code 5", self.tool("playbook_run", name="weekly-report")[0])
+        self.assertTrue(self.tool("playbook_run", name="nothing-here")[1])
+
+    def test_the_script_runs_in_the_session_folder(self):
+        self.tool("playbook_save", playbook=make(), script="import os\nprint(os.getcwd())\n")
+        playbook.approve("weekly-report")
+        text, _ = self.tool("playbook_run", name="weekly-report")
+        self.assertEqual(os.path.realpath(text.split("--- stdout ---\n")[1].split("\n")[0].strip()), os.path.realpath(self.cwd))
+
+    def test_the_launcher_adds_the_server_when_only_playbooks_are_on(self):
+        from getalmanac import launcher
+        cfg = {"memory": {"enabled": False, "tools": False}, "playbooks": {"enabled": True}}
+        self.assertEqual(launcher.with_memory_tools(["-p"], cfg)[0], "--mcp-config")
+        cfg["playbooks"]["enabled"] = False
+        self.assertEqual(launcher.with_memory_tools(["-p"], cfg), ["-p"])
 
 
 if __name__ == "__main__":

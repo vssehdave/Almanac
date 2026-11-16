@@ -334,7 +334,7 @@ class McpTest(Case):
     def test_handshake_and_tool_list(self):
         self.assertEqual(self.ask("initialize", {"protocolVersion": "2025-06-18"})["result"]["protocolVersion"], "2025-06-18")
         self.assertEqual([t["name"] for t in self.ask("tools/list")["result"]["tools"]],
-                         ["memory_search", "memory_read", "memory_projects"])
+                         ["memory_search", "memory_read", "memory_projects", "playbook_find", "playbook_save", "playbook_run"])
         self.assertIsNone(mcp.handle(self.memory, {"jsonrpc": "2.0", "method": "notifications/initialized"}, self.alpha))
         self.assertEqual(self.ask("nope")["error"]["code"], -32601)
 
