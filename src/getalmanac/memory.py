@@ -23,7 +23,7 @@ from . import embed, semantic
 from . import request as rq
 from .match import STOP, tokens
 from .project import Projects, tool_paths
-from .status import STATUSES, combine, rule
+from .status import OPEN_KEEP, STATUSES, combine, rule
 
 SCHEMA = """
 create table if not exists convo (
@@ -466,8 +466,10 @@ class Memory:
 
     def statuses(self, lane: str) -> dict:
         """seq -> status for the exchanges of one conversation."""
-        return {r["seq"]: r["status"] for r in self.store.run(
+        found = {r["seq"]: r["status"] for r in self.store.run(
             "select n.seq, n.status from node n join convo c on c.id = n.convo where c.lane = ? and n.kind = 'leaf'", (lane,))}
+        stale = max(found, default=0) - OPEN_KEEP
+        return {seq: "done" if status == "open" and seq < stale else status for seq, status in found.items()}
 
     def status_counts(self) -> dict:
         """status -> how many stored exchanges have it (every status, zero included)."""

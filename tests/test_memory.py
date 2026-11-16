@@ -371,6 +371,17 @@ class StatusTest(Case):
         self.memory.index("lane", "s", self.memory.projects.see(self.alpha), messages, reply(last))
         return self.memory.statuses("lane")
 
+    def test_a_question_sets_no_rule(self):
+        done = [said("It reads a stale cache key.")]
+        found = self.tag(("Why does the upload always fail on the second try?", done), final="Fix it then")
+        self.assertEqual(found[0], "done")
+
+    def test_open_work_far_behind_the_newest_is_no_longer_open(self):
+        asked = [said("Which of the two layouts do you want?")]
+        found = self.tag(*[("Sketch the settings page layout", asked)] * 18, final="Carry on with the form")
+        self.assertEqual(found[0], "done")  # more than OPEN_KEEP exchanges back
+        self.assertEqual(found[17], "open")
+
     def test_each_rule(self):
         done = [said("Added the retry helper.")]
         found = self.tag(

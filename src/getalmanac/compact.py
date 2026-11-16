@@ -236,6 +236,7 @@ class CompactLayer:
 
     def transform(self, body, ctx):
         if not self._applies(body, ctx):
+            self._relieve_agent(body, ctx)
             return
         cfg, messages, key = ctx.cfg["compaction"], body["messages"], f"compact:{ctx.lane}"
         if ctx.store.get(f"nocompact:{ctx.lane}"):  # the upstream refused this conversation's compacted form
@@ -267,6 +268,15 @@ class CompactLayer:
             ctx.stats.setdefault("compaction", {})["stubbed"] = stubbed  # under this mark a refused body is retried without it
         if state or stubbed:
             body["messages"] = out
+
+    def _relieve_agent(self, body, ctx):
+        """A sub-agent thread has no stored prefix, but a long one still fills its window: only the stubs apply to it."""
+        cfg, messages = ctx.cfg["compaction"], body.get("messages") or []
+        if not (cfg["enabled"] and ctx.agent and rq.has_client_tools(body) and len(messages) > 2)                 or ctx.store.get(f"nocompact:{ctx.lane}"):
+            return
+        stubbed = self._relieve(body, ctx, cfg, messages, False)
+        if stubbed:
+            ctx.stats.setdefault("compaction", {})["stubbed"] = stubbed
 
     def _relieve(self, body, ctx, cfg, out, at_human_turn) -> int:
         """Stub the old tool results of the current turn (see the module docstring). Returns how many are stubbed in `out`.

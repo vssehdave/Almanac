@@ -512,6 +512,18 @@ class LongTurnTest(LayerCase):
         self.assertGreaterEqual(len(results(sent)) - len(last), 4)
         self.assertLess(passes, 40)  # a pass frees a good share of the room, so the cache is not broken at every request
 
+    def test_a_long_sub_agent_gets_the_same_relief(self):
+        # Claude Code's own compaction is off for sub-agents as well, and they have no stored prefix to fall back on.
+        messages = long_turn(30)
+        extra = {"x-claude-code-agent-id": "a1"}
+        self.rig.messages(body(copy.deepcopy(messages)), extra=extra)
+        first = json.loads(self.rig.upstream.requests[-1]["body"])["messages"]
+        self.assertEqual(stubbed(first), [f"u{i}" for i in range(18)])
+        self.assertEqual(len(first), len(messages))
+        self.rig.messages(body(copy.deepcopy(long_turn(32))), extra=extra)
+        second = json.loads(self.rig.upstream.requests[-1]["body"])["messages"]
+        self.assertEqual(json.dumps(second[:len(first)]), json.dumps(first))  # the same bytes on the next request
+
 
 if __name__ == "__main__":
     unittest.main()

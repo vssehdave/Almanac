@@ -17,6 +17,7 @@ import re
 from . import request as rq
 
 STATUSES = ("open", "done", "decision", "superseded", "noise")
+OPEN_KEEP = 15  # an exchange this far behind the newest is no longer listed as open: nobody closes them by hand
 # The one place the wording of a standing rule lives. Matched on the text the person wrote by hand, lower-cased.
 DECISION = re.compile(
     r"\b(from now on|going forward|always|never|remember that|no longer|instead of|i only need|keep it at"
@@ -42,7 +43,7 @@ def rule(group, following=None, newest=False) -> str:
 
     typed = routing.person_text(group[0])
     mine = routing.handwritten(typed)
-    if DECISION.search(mine):
+    if DECISION.search(mine) and not routing.QUESTION.match(mine):  # "why does it always fail?" sets no rule
         return "decision"
     if following and routing.failed(following):
         return "superseded"
