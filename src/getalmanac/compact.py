@@ -16,6 +16,9 @@ if the covered messages change (a rewind or an edit).
 The outline is built from the stored titles and summaries: a small model's when
 it has written them (see summarize.py), the rule-written ones otherwise. What it
 leaves out stays readable: each exchange's transcript is in the local memory, one tool call away.
+When the memory has a status for each exchange (see status.py) the outline is in
+sections instead: standing decisions first, then open work, then what is done
+(newest first, as many as fit); superseded and noise exchanges are only counted.
 Compaction happens only at a human turn. Inside a long tool loop Claude Code's
 own compaction still applies.
 """
@@ -37,6 +40,7 @@ HEADER = ("Almanac compacted this conversation to keep it inside the context win
 
 
 ACK = "Understood. I have the summary of the earlier conversation and will continue from it."
+MORE = "- ({n} more {what} not listed; find them with memory_search)"
 
 
 def _strip(value):
@@ -70,8 +74,56 @@ def _groups(messages, turns):
         yield seq, messages[start:end]
 
 
-def build_prefix(messages, covered, ids, budget_chars, told=None) -> list:
-    """The messages that stand in for `messages[:covered]`. `told` maps seq -> (title, summary) written by a model."""
+def _fill(lines, room):
+    """(the lines that fit, in order; room left; how many did not fit)."""
+    kept = []
+    for line in lines:
+        if len(line) + 1 > room:
+            break
+        kept.append(line)
+        room -= len(line) + 1
+    return kept, room, len(lines) - len(kept)
+
+
+def _sections(groups, first_full, tag, told, statuses, room) -> list:
+    """The outline by status: decisions, open work, done, and a count of what is left out on purpose."""
+    lines, hidden = {"decision": [], "open": [], "done": []}, 0
+    for seq in range(first_full):
+        status = statuses.get(seq, "done")
+        if status not in lines:  # superseded and noise
+            hidden += 1
+            continue
+        record = exchange(groups[seq][1])
+        title, said = told.get(seq) or (record["title"], _first_line(record["answer"], 400 if status == "open" else 200))
+        line = f"- {tag(seq)}{title} -> {said if status == 'open' else _first_line(said, 200)}"
+        if status == "open" and record["notes"]:
+            line += f" ({_first_line(record['notes'], 160)})"
+        lines[status].append(line)
+    closing = (f"{hidden} earlier exchange{'s' if hidden != 1 else ''} marked superseded or noise "
+               "are not listed; they stay readable through the memory tools (memory_search, memory_read).") if hidden else ""
+    heads = {"decision": "Standing decisions, oldest first:", "open": "Open work:", "done": "Done, newest first:"}
+    room -= len(closing) + sum(len(heads[k]) + 1 for k in lines if lines[k])
+    # Decisions take the room first and lose their newest first; open work next; what is done fills the rest.
+    shown, left = {}, {}
+    shown["decision"], room, left["decision"] = _fill(lines["decision"], room)
+    kept, room, left["open"] = _fill(lines["open"][::-1], room)
+    shown["open"] = kept[::-1]
+    shown["done"], room, left["done"] = _fill(lines["done"][::-1], room)
+    names = {"decision": "standing decisions", "open": "open exchanges", "done": "finished exchanges"}
+    parts = []
+    for key in heads:
+        body = shown[key] + ([MORE.format(n=left[key], what=names[key])] if left[key] else [])
+        if body:
+            parts.append(heads[key] + "\n" + "\n".join(body))
+    return parts + ([closing] if closing else [])
+
+
+def build_prefix(messages, covered, ids, budget_chars, told=None, statuses=None) -> list:
+    """The messages that stand in for `messages[:covered]`.
+
+    `told` maps seq -> (title, summary) written by a model; `statuses` maps seq -> status (see status.py).
+    Without statuses the outline is one list in order, with them it is in sections.
+    """
     told = told or {}
     old = messages[:covered]
     turns = rq.human_turns(old)
@@ -92,7 +144,8 @@ def build_prefix(messages, covered, ids, budget_chars, told=None) -> list:
     first_full = full[0][0] if full else len(groups)
 
     outline, room = [], budget_chars - used - len(HEADER) - 400
-    for seq, group in reversed(groups[:first_full]):
+    sections = _sections(groups, first_full, tag, told, statuses, room) if statuses else []
+    for seq, group in reversed([] if statuses else groups[:first_full]):
         record = exchange(group)
         title, said = told.get(seq) or (record["title"], _first_line(record["answer"], 200))
         line = f"- {tag(seq)}{title} -> {said}"
@@ -105,7 +158,7 @@ def build_prefix(messages, covered, ids, budget_chars, told=None) -> list:
         room -= len(line) + 1
     outline.reverse()
 
-    parts = [HEADER]
+    parts = [HEADER] + sections
     if outline:
         parts.append("Earlier exchanges, oldest first:\n" + "\n".join(outline))
     if full:
@@ -183,11 +236,11 @@ class CompactLayer:
                                    "prefix_chars": len(json.dumps(state["prefix"], ensure_ascii=False))}
 
     def _compact(self, ctx, messages, covered, cfg) -> dict:
-        ids, told = {}, {}
+        ids, told, statuses = {}, {}, {}
         if ctx.cfg["memory"]["enabled"]:  # make sure every covered exchange can be read back
             self.memory.index(ctx.lane, ctx.session, ctx.project, messages[:covered], finished=True)
-            ids, told = self.memory.leaves(ctx.lane), self.memory.summaries(ctx.lane)
-        prefix = build_prefix(messages, covered, ids, int(cfg["target_tokens"] * CHARS_PER_TOKEN), told)
+            ids, told, statuses = self.memory.leaves(ctx.lane), self.memory.summaries(ctx.lane), self.memory.statuses(ctx.lane)
+        prefix = build_prefix(messages, covered, ids, int(cfg["target_tokens"] * CHARS_PER_TOKEN), told, statuses)
         state = {"covered": covered, "hash": fingerprint(messages[:covered]), "prefix": prefix, "ts": time.time()}
         ctx.store.put(f"compact:{ctx.lane}", state)
         ctx.store.run("delete from state where key = ?", (f"usage:{ctx.lane}",))  # the old count no longer describes it

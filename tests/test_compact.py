@@ -84,6 +84,61 @@ class PrefixTest(unittest.TestCase):
         self.assertIn("earlier exchanges not listed", text)
 
 
+class OutlineByStatusTest(unittest.TestCase):
+    def outline(self, statuses, turns=12, budget=12000, told=None, ids=None):
+        messages = history(turns)
+        prefix = compact.build_prefix(messages, len(messages) - 1, ids or {n: 100 + n for n in range(turns)}, budget, told, statuses)
+        return prefix[0]["content"][-1]["text"]
+
+    def test_sections_come_in_order_and_superseded_and_noise_are_only_counted(self):
+        statuses = {0: "decision", 1: "superseded", 2: "noise", 3: "open", 4: "done", 5: "done", 6: "decision"}
+        text = self.outline(statuses, budget=6000)
+        marks = ["Standing decisions, oldest first:", "Open work:", "Done, newest first:",
+                 "2 earlier exchanges marked superseded or noise are not listed", "The most recent exchanges before this point, in full:"]
+        at = [text.index(m) for m in marks]
+        self.assertEqual(at, sorted(at))
+        decisions, rest = text.split("Open work:")[0], text.split("Open work:")[1]
+        self.assertLess(decisions.index("[100] Question 1"), decisions.index("[106] Question 7"))  # oldest first
+        done = rest.split("Done, newest first:")[1].split("2 earlier exchanges")[0]
+        self.assertLess(done.index("[105] Question 6"), done.index("[104] Question 5"))  # newest first
+        for hidden in ("Question 2:", "Question 3:"):
+            self.assertNotIn(f"] {hidden}", text)
+        self.assertIn("through the memory tools", text)
+
+    def test_open_work_keeps_the_longer_summary_and_done_is_cut(self):
+        long = "The retry cap is five and the backoff doubles each time. " * 8
+        told = {3: ("Retry helper", long), 4: ("Cache helper", long)}
+        text = self.outline({3: "open", 4: "done"}, told=told, budget=6000)
+        opened = [l for l in text.splitlines() if l.startswith("- [103]")][0]
+        closed = [l for l in text.splitlines() if l.startswith("- [104]")][0]
+        self.assertGreater(len(opened), len(closed) + 100)
+        self.assertTrue(closed.endswith("…"))
+
+    def test_decisions_stay_when_the_room_is_short(self):
+        statuses = {n: "decision" if n in (0, 5) else "done" for n in range(30)}
+        text = self.outline(statuses, turns=30, budget=3000)
+        self.assertIn("[100] Question 1", text)
+        self.assertIn("[105] Question 6", text)
+        self.assertRegex(text, r"\(\d+ more finished exchanges not listed; find them with memory_search\)")
+        self.assertNotIn("more standing decisions", text)
+
+    def test_when_decisions_alone_overflow_the_oldest_stay(self):
+        text = self.outline({n: "decision" for n in range(40)}, turns=40, budget=6000)
+        listed = [l for l in text.splitlines() if l.startswith("- [1")]
+        self.assertLess(len(listed), 39)
+        self.assertTrue(listed[0].startswith("- [100] Question 1"))
+        self.assertRegex(text, r"\(\d+ more standing decisions not listed")
+        self.assertNotIn("Done, newest first", text)
+
+    def test_without_statuses_the_outline_is_the_old_one(self):
+        messages = history(12)
+        old = compact.build_prefix(messages, len(messages) - 1, {0: 41}, 6000)
+        self.assertEqual(compact.build_prefix(messages, len(messages) - 1, {0: 41}, 6000, None, {}), old)
+        self.assertEqual(compact.build_prefix(messages, len(messages) - 1, {0: 41}, 6000, {}, None), old)
+        self.assertIn("Earlier exchanges, oldest first:", old[0]["content"][-1]["text"])
+        self.assertNotIn("Standing decisions", old[0]["content"][-1]["text"])
+
+
 class LayerCase(unittest.TestCase):
     trigger = 2000
 
@@ -120,10 +175,24 @@ class CompactLayerTest(LayerCase):
         record = self.rig.records()[-1]["compaction"]
         self.assertEqual((record["covered"], record["fresh"]), (len(messages) - 1, True))
 
+    def test_the_stored_statuses_shape_the_prefix_and_a_later_change_waits_for_the_next_compaction(self):
+        messages = history(8)
+        messages[9]["content"][1]["text"] = "Question 3: from now on answer every question with a codeword"  # turn 3 is a decision
+        first = self.send(messages)
+        text = first[0]["content"][-1]["text"]
+        self.assertIn("Standing decisions, oldest first:", text)
+        self.assertIn("Question 3: from now on", text.split("Done, newest first:")[0])
+        lane = self.rig.records()[-1]["lane"]
+        self.store.run("update node set status = 'noise'")  # a status that changes later
+        grown = messages + [{"role": "assistant", "content": [{"type": "text", "text": "The exporter mirrors it."}]},
+                            human("Thanks, one more thing")]
+        self.assertEqual(json.dumps(self.send(grown)[:3]), json.dumps(first[:3]))  # the stored prefix does not move
+        self.assertEqual(set(self.memory.statuses(lane).values()), {"noise"})
+
     def test_covered_exchanges_can_be_read_back_from_memory(self):
         sent = self.send(history(8))
         summary = sent[0]["content"][-1]["text"]
-        first = int(summary.split("- [", 1)[1].split("]", 1)[0])
+        first = int(summary.split("] Question 1:", 1)[0].rsplit("[", 1)[1])  # the done section lists the newest first
         self.assertIn("source of part 1", self.memory.detail(first))
         self.assertIn("zebra1", self.memory.read(first)["text"])
 
