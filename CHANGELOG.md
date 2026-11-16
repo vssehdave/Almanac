@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Accepting a flagged skill.** `almanac skill accept NAME` stops the launch
+  warning for a skill or plugin whose findings you have read, for its current
+  files only; any change brings the warning back. `skill audit` shows it as
+  accepted with its real verdict. `skill unaccept` undoes it. `skill add` is
+  unchanged. The launch check now also stops hashing inside a large folder when
+  its time is up, `almanac pack` finds its list from any folder, and removing a
+  quarantine folder no longer warns on Python 3.12 and later.
 - **Working rules for each model.** Each conversation thread now gets a short
   set of working rules at the end of its system prompt, picked by the model
   the request goes out on: Opus and Sonnet get their own text plus a common
