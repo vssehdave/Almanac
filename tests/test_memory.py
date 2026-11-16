@@ -362,6 +362,50 @@ class McpTest(Case):
         self.assertEqual(replies[1]["error"]["code"], -32700)
 
 
+class StatusTest(Case):
+    """The status rules (status.py), as they run when exchanges are stored."""
+
+    def tag(self, *exchanges, final, last="Done."):
+        """Store a conversation of (typed text, assistant messages) exchanges ending on `final`; return seq -> status."""
+        messages = [m for typed, answer in exchanges for m in [human(typed), *answer]] + [human(final)]
+        self.memory.index("lane", "s", self.memory.projects.see(self.alpha), messages, reply(last))
+        return self.memory.statuses("lane")
+
+    def test_each_rule(self):
+        done = [said("Added the retry helper.")]
+        found = self.tag(
+            ("Add a retry helper to fetch", done),
+            ("From now on keep every function under twenty lines", done),
+            ("ok go ahead", done),
+            ("<command-name>/clear</command-name>", done),
+            ("Rename the module", [said("Which name do you want?")]),
+            final="Add a cache to the proxy")
+        self.assertEqual([found[n] for n in range(6)], ["done", "decision", "noise", "noise", "open", "open"])
+
+    def test_precedence(self):
+        tool = [said("Looking", ("Read", {"file_path": self.alpha + "/src/a.py"})), result(), said("Read it.")]
+        found = self.tag(
+            ("always use tabs", [said("Done.")]),  # decision, then the next message says it failed: still a decision
+            ("that's wrong, try again", [said("Retried.")]),
+            ("sounds good", [said("Fine.")]),  # an acknowledgement, then a failure: superseded beats noise
+            ("it still fails", [said("Looking again.")]),
+            ("go ahead", tool),  # an acknowledgement that did work is not noise
+            final="ok", last="Right.")  # the newest, and an acknowledgement: noise beats open
+        self.assertEqual([found[n] for n in range(6)], ["decision", "done", "superseded", "done", "done", "noise"])
+
+    def test_the_next_message_saying_it_failed_makes_the_exchange_before_it_superseded(self):
+        key = self.memory.projects.see(self.alpha)
+        first = [human("Add a retry helper to fetch"), said("Added it.")]
+        self.memory.index("lane", "s", key, first[:1], reply("Added it."))
+        self.assertEqual(self.memory.statuses("lane"), {0: "open"})
+        self.memory.index("lane", "s", key, first + [human("Now add a cache")], reply("Added the cache."))
+        self.assertEqual(self.memory.statuses("lane"), {0: "done", 1: "open"})
+        later = first + [human("Now add a cache"), said("Added the cache."), human("that did not work, try again")]
+        self.memory.index("lane", "s", key, later, reply("Trying again."))
+        self.assertEqual(self.memory.statuses("lane"), {0: "done", 1: "superseded", 2: "open"})
+        self.assertEqual(self.memory.status_counts(), {"open": 1, "done": 1, "decision": 0, "superseded": 1, "noise": 0})
+
+
 class CliTest(unittest.TestCase):
     def test_memory_and_projects_commands_run(self):
         from getalmanac import cli
@@ -370,6 +414,7 @@ class CliTest(unittest.TestCase):
         with redirect_stdout(out):
             self.assertEqual(cli.main(["memory", "search", "anything", "at", "all", "--all"]), 0)
             self.assertEqual(cli.main(["memory", "recent"]), 0)
+            self.assertIn("exchanges by status: open 0, done 0", out.getvalue())
             self.assertEqual(cli.main(["projects"]), 0)
             self.assertEqual(cli.main(["status"]), 0)
         self.assertIn("memory", out.getvalue())

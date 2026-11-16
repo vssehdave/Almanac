@@ -118,10 +118,15 @@ def _status(_rest):
     counts = memory.counts()
     print(f"  memory     {counts['convos']} conversation(s), {counts['exchanges']} exchange(s), {counts['topics']} topic(s)")
     print(f"  summaries  {summarize.line(memory, cfg)}")
+    print(f"  statuses   {_status_counts(memory)}")
     seen = report.render_routing(records)
     if seen:
         _print(seen.lstrip("\n"))
     return 0
+
+
+def _status_counts(memory) -> str:
+    return ", ".join(f"{name} {n}" for name, n in memory.status_counts().items())
 
 
 def _doctor(_rest):
@@ -240,6 +245,7 @@ def _memory(rest):
         _print(mcp.render_node(memory, memory.read(args.id)))
     elif args.cmd == "recent":
         _print(mcp.render_projects(memory))
+        print(f"exchanges by status: {_status_counts(memory)}")
     else:
         count = memory.forget(project=project_key(args.project) if args.project else None, convo_id=args.conversation,
                               force=args.force)

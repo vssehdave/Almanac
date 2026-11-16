@@ -23,6 +23,7 @@ from . import embed, semantic
 from . import request as rq
 from .match import STOP, tokens
 from .project import Projects, tool_paths
+from .status import STATUSES, combine, rule
 
 SCHEMA = """
 create table if not exists convo (
@@ -33,7 +34,8 @@ create table if not exists node (
     id integer primary key, convo integer not null, project text not null, parent integer,
     kind text not null, seq integer not null, ts real not null, title text not null, text text not null,
     mark text not null default '', vec blob, summary text not null default '', tries integer not null default 0,
-    dvec blob, dname text not null default ''
+    dvec blob, dname text not null default '',
+    status text not null default 'done', mstatus text not null default ''
 );
 create index if not exists node_convo on node (convo, kind, seq);
 create index if not exists node_project on node (project, kind, ts);
@@ -186,7 +188,8 @@ class Memory:
             store.db.executescript(SCHEMA)
             have = {r["name"] for r in store.run("pragma table_info(node)")}
             for column, ddl in (("summary", "text not null default ''"), ("tries", "integer not null default 0"),
-                                ("dvec", "blob"), ("dname", "text not null default ''")):
+                                ("dvec", "blob"), ("dname", "text not null default ''"),
+                                ("status", "text not null default 'done'"), ("mstatus", "text not null default ''")):
                 if column not in have:  # a database written before model summaries or semantic search
                     store.run(f"alter table node add column {column} {ddl}")
         self.projects = Projects(store)
@@ -231,18 +234,30 @@ class Memory:
         self.store.run("delete from node_fts where rowid = ?", (topic_id,))
         self.store.run("insert into node_fts (rowid, title, text) values (?, ?, ?)", (topic_id, title, text))
 
-    def set_summary(self, node_id, title, summary):
-        """Give an exchange a model-written title and summary. The summary joins its searchable text."""
+    def set_summary(self, node_id, title, summary, status=""):
+        """Give an exchange a model-written title and summary. The summary joins its searchable text.
+        A valid `status` from the model refines the rules' (see status.combine); anything else changes nothing."""
         with self.store.lock:
-            rows = self.store.run("select parent, text from node where id = ? and kind = 'leaf' and summary = ''", (node_id,))
+            rows = self.store.run("select parent, text, status from node where id = ? and kind = 'leaf' and summary = ''", (node_id,))
             if not rows:  # gone (the conversation was rewound) or already done
                 return
             text = "Summary: " + summary + "\n\n" + rows[0]["text"]
-            self.store.run("update node set title = ?, text = ?, summary = ?, dvec = null, dname = '' where id = ?",
-                           (title, text, summary, node_id))  # the vector is made again from the new text
+            by_model = status if status in STATUSES else ""
+            self.store.run("update node set title = ?, text = ?, summary = ?, mstatus = ?, status = ?, dvec = null, dname = '' "
+                           "where id = ?", (title, text, summary, by_model, combine(rows[0]["status"], by_model), node_id))  # the vector is made again from the new text
             self.store.run("delete from node_fts where rowid = ?", (node_id,))
             self.store.run("insert into node_fts (rowid, title, text) values (?, ?, ?)", (node_id, title, text))
             self._refresh_topic(rows[0]["parent"])
+
+    def _retag(self, convo_id, turns, group, first, done):
+        """Apply the status rules to exchanges `first` up to `done`: a new exchange can change the one before it."""
+        have = {r["seq"]: r for r in self.store.run(
+            "select seq, status, mstatus from node where convo = ? and kind = 'leaf' and seq >= ? and seq < ?", (convo_id, first, done))}
+        for seq, row in have.items():
+            following = rq.human_text(group(seq + 1)[0]) if seq + 1 < len(turns) else None
+            status = combine(rule(group(seq), following, newest=seq == len(turns) - 1), row["mstatus"])
+            if status != row["status"]:
+                self.store.run("update node set status = ? where convo = ? and kind = 'leaf' and seq = ?", (status, convo_id, seq))
 
     def embed_pending(self, limit=DENSE_PASS) -> int:
         """Give up to `limit` exchanges a vector from the active model, newest first: the ones that have none,
@@ -348,6 +363,7 @@ class Memory:
                 written += 1
             for topic in touched - {None}:
                 self._refresh_topic(topic)
+            self._retag(convo["id"], turns, group, max(0, start_at - 1), done)
             main = self.store.run("select project, count(*) n from node where convo = ? and kind = 'leaf' "
                                   "group by project order by n desc limit 1", (convo["id"],))
             self.store.run("update convo set turns = ?, updated = ?, project = ? where id = ?",
@@ -447,6 +463,16 @@ class Memory:
         return {r["seq"]: (r["title"], r["summary"]) for r in self.store.run(
             "select n.seq, n.title, n.summary from node n join convo c on c.id = n.convo "
             "where c.lane = ? and n.kind = 'leaf' and n.summary != ''", (lane,))}
+
+    def statuses(self, lane: str) -> dict:
+        """seq -> status for the exchanges of one conversation."""
+        return {r["seq"]: r["status"] for r in self.store.run(
+            "select n.seq, n.status from node n join convo c on c.id = n.convo where c.lane = ? and n.kind = 'leaf'", (lane,))}
+
+    def status_counts(self) -> dict:
+        """status -> how many stored exchanges have it (every status, zero included)."""
+        found = {r["status"]: r["n"] for r in self.store.run("select status, count(*) n from node where kind = 'leaf' group by status")}
+        return {name: found.get(name, 0) for name in STATUSES}
 
     def read(self, node_id: int):
         """One node with what is under it: a topic's exchanges, or an exchange's full text."""
