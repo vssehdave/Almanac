@@ -194,6 +194,21 @@ class LauncherTest(unittest.TestCase):
         self.assertNotIn("ANTHROPIC_API_KEY", env)
         self.assertNotIn("ANTHROPIC_AUTH_TOKEN", env)
 
+    def test_the_bundle_is_passed_as_a_plugin_folder_unless_turned_off(self):
+        on = launcher.with_bundle(["-p", "hi"], {"bundle": {"enabled": True}})
+        self.assertEqual(on[0], "--plugin-dir")
+        self.assertTrue(os.path.isfile(os.path.join(on[1], "egm", ".claude-plugin", "plugin.json")))
+        self.assertEqual(on[2:], ["-p", "hi"])
+        self.assertEqual(launcher.with_bundle(["-p", "hi"], {"bundle": {"enabled": False}}), ["-p", "hi"])
+
+    def test_every_bundled_plugin_has_a_manifest_and_a_licence(self):
+        folder = os.path.join(os.path.dirname(launcher.__file__), "bundle")
+        for name in os.listdir(folder):
+            if os.path.isdir(os.path.join(folder, name)):
+                with open(os.path.join(folder, name, ".claude-plugin", "plugin.json"), encoding="utf-8") as handle:
+                    self.assertTrue(json.load(handle)["name"])
+                self.assertTrue(os.path.isfile(os.path.join(folder, name, "LICENSE")), name)
+
     def test_run_launches_the_client_through_the_proxy(self):
         # A stand-in "claude" that makes one request to the base URL it was given.
         rig = Rig()
