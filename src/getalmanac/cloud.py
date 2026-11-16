@@ -99,8 +99,8 @@ def _repo_text(cwd, on_branch=False) -> str:
     if len(facts["status"]) > STATUS_LINES:
         lines.append(f"    ... ({len(facts['status']) - STATUS_LINES} more lines)")
     if on_branch:
-        lines.append("This branch is a snapshot of that local work tree: the uncommitted changes and the untracked "
-                     "files listed above are in it. Files git ignores are not.")
+        lines.append("This branch is a snapshot of that local work tree: the uncommitted changes to tracked files "
+                     "listed above are in it. Untracked files and files git ignores are not.")
         return "\n".join(lines)
     if facts["unpushed"]:
         lines.append(f"WARNING: {len(facts['unpushed'])} local commit(s) were not on the remote, so they are not in "
@@ -286,19 +286,51 @@ HANDOFF = "almanac/handoff"
 TAKEOVER = "claude/almanac-takeover-"
 
 
+# Names that hold credentials by convention: their changes never go on the branch.
+CREDENTIAL_NAME = re.compile(r"(?i)(^|/)(\.env(\..*)?|id_[a-z0-9]+(\.pub)?|\.npmrc|\.pypirc|\.netrc|credentials[^/]*|secrets?[^/]*"
+                             r"|[^/]*\.(pem|key|p12|pfx|jks|keystore|kdbx|asc|gpg|tfstate))$")
+SCAN_BYTES = 1_000_000  # a changed file larger than this is not scanned, so it is left out
+
+
+def _leave_out(top, name) -> bool:
+    """Whether a changed tracked file must stay at its HEAD version on the branch: a credential name, too big
+    to scan, not text, or holding a secret pattern. Its contents are not redacted, so it goes whole or not at all."""
+    if CREDENTIAL_NAME.search(name):
+        return True
+    try:
+        with open(os.path.join(top, name), "rb") as handle:
+            data = handle.read(SCAN_BYTES + 1)
+        text = data.decode("utf-8")
+    except FileNotFoundError:
+        return False  # a deletion carries no content
+    except (OSError, UnicodeDecodeError):
+        return True
+    return len(data) > SCAN_BYTES or redact(text) != text
+
+
 def snapshot(cwd, text, state, session) -> tuple:
-    """Commit the work tree as it is now, plus the packet, on top of HEAD. Returns (commit, top folder).
+    """Commit the tracked work as it is now, plus the packet, on top of HEAD. Returns (commit, top folder).
 
     The user's index, work tree, HEAD and branches are not touched: a temporary index holds the snapshot,
-    and the new commit is on no branch until it is pushed.
+    and the new commit is on no branch until it is pushed. Untracked files never go in, and a changed
+    tracked file that may hold a secret stays at its HEAD version; the packet lists what was left out.
     """
     top = _must(cwd, "rev-parse", "--show-toplevel")
     head = _must(top, "rev-parse", "HEAD")
     folder = tempfile.mkdtemp(prefix="almanac-handoff-")
     try:
-        env = {"GIT_INDEX_FILE": os.path.join(folder, "index")}  # must not exist yet: read-tree makes it
+        env = {"GIT_INDEX_FILE": os.path.join(folder, "index"), "GIT_LITERAL_PATHSPECS": "1"}  # the index must not exist yet: read-tree makes it
         _must(top, "read-tree", "HEAD", env=env)
-        _must(top, "add", "-A", env=env, timeout=120)  # tracked edits and new files; .gitignore is respected
+        _must(top, "add", "-u", env=env, timeout=120)  # tracked edits only: an untracked .env or key file stays home
+        changed = _must(top, "diff", "--cached", "--name-only", "-z", "--no-renames", "HEAD", env=env).split("\0")
+        held = [name for name in changed if name and _leave_out(top, name)]
+        if held:
+            listing = os.path.join(folder, "held")
+            with open(listing, "w", encoding="utf-8", newline="") as handle:
+                handle.write("\0".join(held))
+            _must(top, "reset", "-q", "HEAD", f"--pathspec-from-file={listing}", "--pathspec-file-nul", env=env)
+            text += ("\n\nLeft out of this branch because they may hold a secret, are not text or are too big "
+                     "(they are at their HEAD version here): " + redact(", ".join(name[:120] for name in held[:UNTRACKED])))
         meta = {"state": state, "time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "base_branch": _git(top, "branch", "--show-current"), "base_commit": head, "session": session}
         for name, body in (("ALMANAC_HANDOFF.md", text), ("almanac-handoff.json", json.dumps(meta, indent=2) + "\n")):
@@ -308,7 +340,9 @@ def snapshot(cwd, text, state, session) -> tuple:
             blob = _must(top, "hash-object", "-w", "--no-filters", path)
             _must(top, "update-index", "--add", "--cacheinfo", f"100644,{blob},{name}", env=env)
         tree = _must(top, "write-tree", env=env)
-        return _must(top, "-c", "commit.gpgsign=false", "commit-tree", tree, "-p", head, "-m", f"almanac hand-off: {state}"), top
+        # [skip ci]: a heartbeat every few minutes must not start the repository's workflows
+        return _must(top, "-c", "commit.gpgsign=false", "commit-tree", tree, "-p", head, "-m",
+                     f"almanac hand-off: {state} [skip ci]"), top
     finally:
         shutil.rmtree(folder, ignore_errors=True)
 
@@ -363,7 +397,10 @@ class HandoffLayer:
         while True:
             self.wake.wait(min(60, self.interval / 2))
             self.wake.clear()
-            self.beat()
+            try:
+                self.beat()
+            except Exception:  # a dead thread would look like a stalled machine to the watchdog
+                pass
 
     def beat(self, now=None):
         """Push what is due: "working" once per interval while a task runs, "idle" once when it stops."""
@@ -380,20 +417,31 @@ class HandoffLayer:
                 self._push(cwd, entry, state)
 
     def close(self):
-        """On exit: a task that stops with this process is not running anywhere, so say so."""
-        with self.busy:
+        """On exit: a task that stops with this process is not running anywhere, so say so.
+
+        Exit waits at most 5 seconds for a heartbeat still pushing, and at most 15 for its own push."""
+        if not self.busy.acquire(timeout=5):
+            return
+        try:
             for cwd, entry in list(self.repos.items()):
                 if entry["pushed"] == "working":
-                    self._push(cwd, entry, "idle")
+                    self._push(cwd, entry, "idle", timeout=15)
+        finally:
+            self.busy.release()
 
-    def _push(self, cwd, entry, state):
+    def _push(self, cwd, entry, state, timeout=120):
         try:
             rows = self.memory.store.run("select id from convo where lane = ?", (entry["lane"],))
             text = packet(self.memory, rows[0]["id"] if rows else None, cwd, live=entry["live"], on_branch=True)
             commit, top = snapshot(cwd, text or "No record of this conversation was stored.", state, entry["session"])
-            # by address, not by name: pushing to "origin" would also add a remote-tracking ref to the user's repository
+            # by address, not by name, so older git adds no remote-tracking ref (git 2.56 adds origin/almanac/handoff anyway)
             where = _must(top, "remote", "get-url", "--push", "origin")
-            _must(top, "push", "--force", "--quiet", where, f"{commit}:refs/heads/{HANDOFF}", timeout=120)
+            env = {}
+            if not (os.environ.get("GIT_SSH_COMMAND") or os.environ.get("GIT_SSH") or _git(top, "config", "core.sshCommand")):
+                env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"  # ssh asks for a passphrase on the terminal Claude Code owns
+            # only the one ref: no tags (push.followTags) and no submodules, whatever the user's config says
+            _must(top, "push", "--force", "--quiet", "--no-follow-tags", "--recurse-submodules=no", where,
+                  f"{commit}:refs/heads/{HANDOFF}", env=env, timeout=timeout)
             with self.lock:
                 self.repos[cwd]["pushed"] = state
             self.memory.store.put(f"handoff:{top}", {"time": time.time(), "state": state, "commit": commit})
@@ -410,7 +458,8 @@ one of the stop steps below; that is normal. Run the steps in order. When a step
 at once and change nothing.
 
 1. Run `git fetch origin {HANDOFF}`. If it fails (the branch does not exist), stop.
-2. Run `git show FETCH_HEAD:almanac-handoff.json`. If its "state" is "idle", stop.
+2. Run `git show FETCH_HEAD:almanac-handoff.json`. If its "state" is "idle", or its "base_branch" is
+   empty (the local work was on no branch), stop.
 3. Run `echo $(( $(date +%s) - $(git log -1 --format=%ct FETCH_HEAD) ))`. If the number is below {quiet * 60}
    (the commit is younger than {quiet} minutes), stop: the local session is still sending its heartbeat.
 4. Run `git rev-parse --short=12 FETCH_HEAD`; call the result SHA. Run

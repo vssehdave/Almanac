@@ -462,11 +462,15 @@ trigger has to wait in the cloud already. It works like this:
 
 - While a task runs, Almanac pushes a snapshot of it to the branch
   `almanac/handoff` on `origin`, once every heartbeat (10 minutes by default).
-  The snapshot is your work tree as it is, uncommitted changes and new files
-  included (`.gitignore` is respected), plus the hand-off packet as
-  `ALMANAC_HANDOFF.md` and a small `almanac-handoff.json` (state, time, base
-  branch and commit). It is built with a separate index, so your index, HEAD,
-  branches and `git status` stay exactly as they were.
+  The snapshot is your current commit plus your uncommitted changes to tracked
+  files, plus the hand-off packet as `ALMANAC_HANDOFF.md` and a small
+  `almanac-handoff.json` (state, time, base branch and commit). Untracked files
+  never go in. A changed tracked file whose name looks like a credential
+  (`.env`, `*.pem`, `id_rsa`, ...), that holds a common secret pattern, that is
+  not text or that is over 1 MB stays at its committed version, and the packet
+  lists it. It is built with a separate index, so your index, HEAD, branches
+  and `git status` stay exactly as they were. Only that one branch is pushed:
+  no tags, whatever `push.followTags` says.
 - "Running" is what the proxy sees: a model request came in within the last
   heartbeat, or the last reply asked for a tool. When a reply ends the turn,
   Almanac pushes once with state `idle` and stops until the next request.
@@ -496,12 +500,24 @@ work back with `claude --teleport` or `git fetch origin <branch>`.
 
 Know this before you turn it on:
 
-- **It puts your work on GitHub.** The hand-off branch holds a copy of your
-  uncommitted work and the packet (your conversation's task and transcript,
-  with common secret patterns taken out, best effort). On a public repository
-  the branch is public. An untracked file that `.gitignore` does not cover,
-  such as a stray `.env`, is pushed too. Your pre-push hooks run on every push.
-  `almanac memory forget` does not touch it; delete it with
+- **What is sent where.** To the `origin` remote of whichever repository a
+  Claude Code session works in, branch `almanac/handoff`, force-pushed (that
+  branch only): your uncommitted edits to tracked files, every local commit
+  not pushed yet (they are the snapshot's history), and the packet. The packet
+  is your conversation's task and recent transcript, including tool output
+  such as file contents and command output from outside the repository, and
+  absolute paths. Common secret patterns are taken out of it; that is best
+  effort, not complete. Read one first with `almanac cloud packet`.
+- **The setting is global.** When it is on, every repository with an `origin`
+  you open through Almanac gets the branch, a work repository included. On a
+  public repository the branch is public.
+- Your pre-push hooks run on every push. The commit says `[skip ci]`, which
+  stops GitHub Actions, but other services that build every branch may still
+  build it.
+- **Anyone who can push to `origin` can write that branch.** A collaborator
+  could plant a `working` hand-off, and the scheduled task would carry it out
+  with your GitHub access. Turn this on only for repositories only you push to.
+- `almanac memory forget` does not touch the branch; delete it with
   `git push origin --delete almanac/handoff`.
 - **Cost.** There is no separate charge for the cloud machine, but each
   scheduled run uses a little of your plan, even the runs that find nothing to
@@ -515,12 +531,16 @@ Know this before you turn it on:
   middle of a task looks the same as a dropped network, so the cloud may carry
   on work you meant to come back to. Stopping a tool with Esc and then closing
   the laptop looks like a task still running.
-- **One hand-off branch per repository.** Two machines working in one
-  repository overwrite each other's snapshot.
+- **One hand-off branch per repository.** Two machines, worktrees or
+  sessions working in one repository overwrite each other's snapshot, and an
+  `idle` from one can hide another that is still working. Work on a detached
+  HEAD is never taken over.
 - The setting is read when Almanac starts, so restart it after a change.
 
-**Status:** the snapshot, the heartbeat and the idle push are tested against a
-local bare repository. The scheduled cloud task itself has not been run yet.
+**Status: the cloud side is untested.** The snapshot, the heartbeat, the idle
+push and what lands on the branch are tested against a local bare repository.
+Nothing has been pushed to a real GitHub repository, and the scheduled cloud
+task and its takeover have never been run.
 
 ## Behind a corporate proxy
 

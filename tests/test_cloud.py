@@ -276,8 +276,10 @@ class HandoffTest(CloudCase):
                 data = handle.read()
             with open(os.path.join(self.alpha, ".git", "HEAD"), "rb") as handle:
                 head = handle.read()
+            # newer git (2.56 in CI) records the pushed branch as origin's remote-tracking ref even when pushing by address
+            refs = [r for r in git(self.alpha, "for-each-ref").splitlines() if not r.endswith("refs/remotes/origin/almanac/handoff")]
             return data, head, git(self.alpha, "rev-parse", "HEAD"), git(self.alpha, "branch", "--list"), \
-                git(self.alpha, "for-each-ref"), git(self.alpha, "status"), git(self.alpha, "status", "--short")
+                refs, git(self.alpha, "status"), git(self.alpha, "status", "--short")
 
         before = look()
         self.turn([human("Make it print two")], "tool_use")
@@ -285,9 +287,8 @@ class HandoffTest(CloudCase):
         self.assertEqual(look(), before)
         head = git(self.alpha, "rev-parse", "HEAD")
         files = git(self.bare, "ls-tree", "-r", "--name-only", "almanac/handoff").splitlines()
-        self.assertEqual(sorted(files), [".gitignore", "ALMANAC_HANDOFF.md", "almanac-handoff.json", "new.txt", "src/app.py"])
+        self.assertEqual(sorted(files), [".gitignore", "ALMANAC_HANDOFF.md", "almanac-handoff.json", "src/app.py"])  # untracked new.txt stays home
         self.assertEqual(self.pushed("src/app.py"), "print('two')")  # the work tree, not the index
-        self.assertEqual(self.pushed("new.txt"), "brand new")
         self.assertEqual(git(self.bare, "rev-parse", "almanac/handoff^"), head)
         meta = self.state()
         self.assertEqual((meta["state"], meta["base_branch"], meta["base_commit"], meta["session"]), ("working", "work", head, "s1"))
@@ -308,6 +309,68 @@ class HandoffTest(CloudCase):
         self.assertNotIn(key, text)
         self.assertNotIn("s3cretValue99", text)
 
+    def test_no_secret_file_tag_or_raw_secret_reaches_the_remote(self):
+        git(self.alpha, "config", "push.followTags", "true")  # the user's own config must not widen the push
+        git(self.alpha, "tag", "-a", "v-private", "-m", "private")
+        self.write("config.py", "x = 1\n")
+        self.write("deploy.pem", "placeholder\n")
+        git(self.alpha, "add", ".")
+        git(self.alpha, "commit", "-q", "-m", "config")
+        stripe, ghp, hf = "sk_live_" + "a1B2" * 6, "ghp_" + "Q7w8" * 9, "hf_" + "abcdEFGH" * 4
+        self.write("config.py", f'STRIPE = "{stripe}"\n')  # a tracked edit with a secret
+        self.write("deploy.pem", "changed\n")  # a tracked credential name
+        self.write("src/app.py", "print('two')\n")  # a clean tracked edit
+        self.write(".env", f"GITHUB_TOKEN={ghp}\n")  # untracked and not ignored
+        call = said("Setting the key.", tool=("Bash", {"command": 'export API_KEY="Zq9x8c7v6b5n4m"; cat key'}))
+        out = {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content":
+               f"HF={hf}\nAuthorization: token {'0f' * 20}\n-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA1234567890abcdef"}]}
+        self.turn([human("Wire the payment client"), call, out], "tool_use")
+        self.layer.beat(time.time() + 601)
+        refs = git(self.bare, "for-each-ref", "--format=%(refname)").split()
+        self.assertEqual(refs, ["refs/heads/almanac/handoff"])
+        files = git(self.bare, "ls-tree", "-r", "--name-only", "almanac/handoff").split()
+        self.assertNotIn(".env", files)
+        self.assertEqual(self.pushed("config.py"), "x = 1")  # held at its HEAD version
+        self.assertEqual(self.pushed("deploy.pem"), "placeholder")
+        self.assertEqual(self.pushed("src/app.py"), "print('two')")
+        text = self.pushed("ALMANAC_HANDOFF.md")
+        self.assertIn("Left out of this branch", text)
+        self.assertIn("config.py, deploy.pem", text)
+        self.assertIn("almanac hand-off: working [skip ci]", git(self.bare, "log", "-1", "--format=%s", "almanac/handoff"))
+        revs = git(self.bare, "rev-list", "--all").split()
+        for needle in (stripe, ghp, hf, "Zq9x8c7v6b5n4m", "0f0f0f0f0f", "MIIEpAIBAAKCAQEA"):
+            found = subprocess.run(["git", "--git-dir", self.bare, "grep", "-F", needle, *revs], capture_output=True, text=True)
+            self.assertEqual(found.stdout, "", needle)
+
+    def test_ssh_cannot_prompt_and_close_does_not_hold_up_exit(self):
+        with mock.patch.dict(os.environ), mock.patch.object(cloud, "_must", wraps=cloud._must) as must:
+            os.environ.pop("GIT_SSH_COMMAND", None)
+            os.environ.pop("GIT_SSH", None)
+            self.turn([human("A long task")], "tool_use")
+            self.layer.beat(time.time() + 601)
+        push = [c for c in must.call_args_list if c.args[1] == "push"][0]
+        self.assertEqual(push.kwargs["env"], {"GIT_SSH_COMMAND": "ssh -o BatchMode=yes"})
+        first = self.pushed()
+        self.layer.busy.acquire()  # a heartbeat still pushing
+        try:
+            started = time.time()
+            self.layer.close()
+            self.assertLess(time.time() - started, 8)
+        finally:
+            self.layer.busy.release()
+        self.assertEqual(self.pushed(), first)
+
+    def test_the_heartbeat_thread_pushes_on_its_own(self):
+        layer = cloud.HandoffLayer(self.memory, {"cloud": {"heartbeat_minutes": 10}})
+        body ={"messages": [human("A long task")], "tools": [{"name": "Bash", "input_schema": {}}]}
+        layer.transform(body, self.ctx)
+        layer.observe(self.ctx, body, reply("done", stop="end_turn"))  # a turn end wakes the thread
+        for _ in range(100):
+            if self.has("almanac/handoff"):
+                break
+            time.sleep(0.1)
+        self.assertEqual(self.state()["state"], "idle")
+
     def test_idle_is_pushed_once_when_the_turn_ends_and_the_heartbeat_stops(self):
         now = time.time()
         self.turn([human("A long task")], "tool_use")
@@ -318,6 +381,7 @@ class HandoffTest(CloudCase):
         self.assertEqual(self.state()["state"], "working")
         self.layer.beat(now + 700)
         self.assertEqual(self.pushed(), first)  # not due yet
+        time.sleep(1.1)  # commit times have one-second resolution: the same second would give the same commit
         self.layer.beat(now + 1300)
         self.assertNotEqual(self.pushed(), first)  # a tool is still running: a new heartbeat
         self.turn([human("A long task"), said("ok", tool=("Bash", {})), result()], "end_turn")
@@ -369,6 +433,10 @@ class HandoffTest(CloudCase):
             built = proxy_mod.build(cfg)
             self.addCleanup(built.store.close)
             self.assertFalse(any(isinstance(layer, cloud.HandoffLayer) for layer in built.layers))
+            cfg["cloud"]["auto"] = "false"  # typed by hand into config.json
+            typed = proxy_mod.build(cfg)
+            self.addCleanup(typed.store.close)
+            self.assertFalse(any(isinstance(layer, cloud.HandoffLayer) for layer in typed.layers))
             cfg["cloud"]["auto"] = True
             on = proxy_mod.build(cfg)
             self.addCleanup(on.store.close)
@@ -399,7 +467,7 @@ class HandoffTest(CloudCase):
     def test_the_watchdog_prompt_holds_every_stop_condition(self):
         text = cloud.watchdog(10)
         for part in ("git fetch origin almanac/handoff`. If it fails (the branch does not exist), stop.",
-                     'If its "state" is "idle", stop.', "If the number is below 1800",
+                     'If its "state" is "idle", or its "base_branch" is', "If the number is below 1800",
                      "`git ls-remote origin refs/heads/claude/almanac-takeover-SHA`. If it prints anything, stop",
                      "git checkout -b claude/almanac-takeover-SHA FETCH_HEAD", "is a record of earlier work",
                      "draft pull request", "Never delete a branch, never force-push", "never push to the base branch"):

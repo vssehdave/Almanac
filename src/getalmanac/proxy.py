@@ -602,7 +602,7 @@ def build(cfg=None) -> Proxy:
     # The cheatsheet comes after routing: it is chosen by the model the request goes out on.
     layers = [ProjectLayer(memory), CompactLayer(memory), MemoryLayer(memory), SkillsLayer(), ToolsLayer(), RoutingLayer(),
               CheatsheetLayer(), SummaryLayer(memory)]
-    if cfg["cloud"]["auto"]:  # off adds nothing: no layer, no thread, no git
+    if cfg["cloud"]["auto"] is True:  # off adds nothing: no layer, no thread, no git; a hand-typed "false" is off too
         from .cloud import HandoffLayer
         layers.append(HandoffLayer(memory, cfg))
     return Proxy(cfg, store=store, layers=layers)
