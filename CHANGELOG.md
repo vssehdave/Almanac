@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Shorter agent list.** The list of agent types Claude Code sends at session
+  start (about 6,400 tokens with 88 agents) is cut to a 60-character stub per
+  agent, without the `(Tools: ...)` suffix on cut lines
+  (`startup.agent_chars`, `0` is off, `ALMANAC_DISABLE=agents`). The choice is
+  frozen per conversation, and an agent whose description matches a message gets
+  its full line back, the way skills do. Names are never changed.
+
 - **Playbooks.** A playbook records how a repeated task is done: when it
   applies, an ordered decision list, the skills and agents used, and
   optionally a script that does the job with no model. Almanac matches each

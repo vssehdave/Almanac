@@ -93,6 +93,11 @@ whether or not the conversation will use them.
   it. If a later message matches a collapsed skill, its full description is
   placed next to that message. Every skill stays listed and can be invoked by
   name at any time.
+- **Agents.** The list of agent types gets the same treatment: each description
+  is cut to `startup.agent_chars` characters (60 by default, `0` turns this off),
+  and the `(Tools: ...)` part of a cut line is dropped. An agent whose
+  description matches your message gets its full line back, as skills do. Every
+  agent stays listed and can be used by name.
 - **Tools.** Schemas of rarely used tools (`tools.cold`) are deferred. Their
   names are added to the list of deferred tools Claude Code already keeps, and
   the model loads one through its normal tool search when it needs it. A tool
@@ -798,6 +803,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `skills.enabled` | `true` | Collapse skill descriptions |
 | `skills.stub_chars` | `90` | Characters kept for a collapsed skill |
 | `skills.always_full` | `[]` | Skills never collapsed |
+| `startup.agent_chars` | `60` | Characters kept for a listed agent type (`0` leaves the agent list alone) |
 | `skills.scan_on_launch` | `true` | Scan new or changed skills and plugins in the background at each start, and warn about flagged ones |
 | `tools.enabled` | `true` | Defer cold tool schemas |
 | `tools.cold` | six tools | Tools deferred unless called for |
@@ -835,7 +841,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `upstream_proxy` | `""` | Corporate `http://` proxy to reach the upstream through. Empty uses `HTTPS_PROXY` |
 | `upstream_ca` | `""` | Extra certificate file to trust for the upstream |
 
-For one run, `ALMANAC_DISABLE=skills,tools,memory,compaction` (or `all`) turns
+For one run, `ALMANAC_DISABLE=skills,agents,tools,memory,compaction` (or `all`) turns
 layers off, and `ALMANAC_HOME` moves the files.
 
 ## What is stored, and where
