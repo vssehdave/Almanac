@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Playbooks from your past sessions.** `almanac playbook mine` finds tasks
+  you repeat in Claude Code's session files with no model, and `almanac
+  playbook compile` has one headless Sonnet session write the best one up as a
+  draft playbook (source `miner`; a script waits for `approve`). At each start a
+  detached process does this within `playbooks.compile_per_day` (default 1, `0`
+  is off), and one line at launch names drafts waiting for approval. A new rule
+  in the skills cheat sheet tells Claude to follow a matching playbook and run
+  its approved script. Settings: `playbooks.transcript_dirs`,
+  `playbooks.background`, `playbooks.compile_per_day`.
+
 - **Shorter agent list.** The list of agent types Claude Code sends at session
   start (about 6,400 tokens with 88 agents) is cut to a 60-character stub per
   agent, without the `(Tools: ...)` suffix on cut lines

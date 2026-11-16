@@ -39,6 +39,8 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac pack list            the pack: third-party skills and plugins, each pinned to a commit
   almanac pack install [NAME]  install the pack's skills through the scan; plugins and programs are only shown
   almanac playbook list|show|approve|remove|path   recorded ways of doing repeated tasks, and their scripts
+  almanac playbook mine        find tasks you repeat in past sessions, no model (--days 30, --min 3)
+  almanac playbook compile     have one Claude Code session write the best repeat up as a playbook (--top N, --dry-run)
   almanac projects             projects seen; `projects merge FROM INTO`, `projects rename NAME NEW`
   almanac status               settings, files and recent activity
   almanac doctor               check that everything needed is in place
@@ -531,9 +533,25 @@ def _playbook(rest):
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("list")
     sub.add_parser("path")
+    mining = sub.add_parser("mine")
+    mining.add_argument("--days", type=int, default=30)
+    mining.add_argument("--min", type=int, default=3, dest="minimum")
+    writing = sub.add_parser("compile")
+    writing.add_argument("--top", type=int, default=1)
+    writing.add_argument("--dry-run", action="store_true")
+    sub.add_parser("work")  # the background run started at launch
     for name in ("show", "approve", "remove"):
         sub.add_parser(name).add_argument("name")
     args = parser.parse_args(rest)
+    if args.cmd in ("mine", "compile", "work"):
+        from . import mine
+
+        if args.cmd == "mine":
+            mine.mine(args.days, args.minimum, out=_print)
+            return 0
+        if args.cmd == "work":
+            return mine.work()
+        return mine.compile_top(args.top, args.dry_run, out=_print)
     if args.cmd == "path":
         print(playbook.root())
         return 0

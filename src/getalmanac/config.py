@@ -80,6 +80,11 @@ DEFAULTS = {
     "playbooks": {
         "enabled": True,
         "inject": True,  # tell Claude which playbook matches a request (see playbook.py)
+        # Claude Code config folders to mine for repeated tasks, besides ~/.claude and $CLAUDE_CONFIG_DIR (see mine.py),
+        # for example ["~/.claude-work"]
+        "transcript_dirs": [],
+        "background": True,  # mine past sessions and compile the best repeat into a playbook draft, in the background
+        "compile_per_day": 1,  # most Sonnet sessions a day that do the compiling; 0 turns it off
     },
     "cloud": {
         "auto": False,  # true keeps a running task's snapshot on origin's almanac/handoff branch (see cloud.py)
