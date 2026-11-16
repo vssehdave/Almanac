@@ -46,7 +46,8 @@ def child_env(url: str, parent=None) -> dict:
 
 def with_memory_tools(args, cfg):
     """Add the memory tools' MCP server to Claude Code's arguments, unless turned off."""
-    if not (cfg["memory"]["enabled"] and cfg["memory"]["tools"]) or "--strict-mcp-config" in args:
+    memory = cfg["memory"]["enabled"] and cfg["memory"]["tools"]
+    if not (memory or cfg.get("playbooks", {}).get("enabled")) or "--strict-mcp-config" in args:
         return args
     from . import mcp
 

@@ -77,6 +77,10 @@ DEFAULTS = {
         "enabled": True,  # load the skills and agents kept in this package (bundle/) into every session
     },
     "cheatsheet": {"mode": "on"},
+    "playbooks": {
+        "enabled": True,
+        "inject": True,  # tell Claude which playbook matches a request (see playbook.py)
+    },
     "cloud": {
         "auto": False,  # true keeps a running task's snapshot on origin's almanac/handoff branch (see cloud.py)
         "heartbeat_minutes": 10,

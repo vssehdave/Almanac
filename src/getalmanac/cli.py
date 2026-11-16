@@ -38,6 +38,7 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac skill accept ITEM    stop the launch warning for this item at its current contents (`unaccept` undoes it)
   almanac pack list            the pack: third-party skills and plugins, each pinned to a commit
   almanac pack install [NAME]  install the pack's skills through the scan; plugins and programs are only shown
+  almanac playbook list|show|approve|remove|path   recorded ways of doing repeated tasks, and their scripts
   almanac projects             projects seen; `projects merge FROM INTO`, `projects rename NAME NEW`
   almanac status               settings, files and recent activity
   almanac doctor               check that everything needed is in place
@@ -523,6 +524,49 @@ def _pack(rest):
     return skills.pack_install(entries, args.accept_caution, args.replace, out=_print)
 
 
+def _playbook(rest):
+    from . import playbook
+
+    parser = argparse.ArgumentParser(prog="almanac playbook")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("list")
+    sub.add_parser("path")
+    for name in ("show", "approve", "remove"):
+        sub.add_parser(name).add_argument("name")
+    args = parser.parse_args(rest)
+    if args.cmd == "path":
+        print(playbook.root())
+        return 0
+    if args.cmd == "list":
+        for pb in playbook.listing():
+            print(f"{pb['name']:<28} {pb['status']:<9} {pb['uses']:>4}  {pb['title']}")
+        return 0
+    pb = playbook.load(args.name) if playbook.valid_name(args.name) else None
+    if pb is None:
+        print(f"almanac: no usable playbook called {args.name!r}; see `almanac playbook list`", file=sys.stderr)
+        return 2
+    if args.cmd == "show":
+        print(f"{pb['name']}  ({pb['status']}, used {pb['uses']} times, from {pb['source']}, {pb['created']})\n{pb['title']}\n"
+              f"When: {pb['when']}\nTriggers: {', '.join(pb['triggers'])}\nProject: {pb['project'] or 'any'}")
+        print("Steps:\n" + "\n".join(f"  {i}. {s}" for i, s in enumerate(pb["steps"], 1)))
+        print(f"Skills: {', '.join(pb['skills'])}\nAgents: {', '.join(pb['agents'])}")
+        if pb["script"]:
+            print(f"Script: {playbook.script_path(pb['name'])}  (hash {pb['hash'] or 'not approved'})")
+        return 0
+    if args.cmd == "remove":
+        playbook.remove(args.name)
+        print(f"removed {args.name}")
+        return 0
+    if not pb["script"]:
+        print(f"{args.name} has no script, so there is nothing to approve.")
+        return 0
+    digest, text = playbook.approve(args.name)
+    lines = text.splitlines()
+    _print("\n".join(lines[:40]) + (f"\n... ({len(lines) - 40} more lines)" if len(lines) > 40 else ""))
+    print(f"\nApproved {args.name}. sha256 {digest}\nIf the script changes, it goes back to draft until you approve it again.")
+    return 0
+
+
 def _mcp(_rest):
     from . import mcp
 
@@ -544,7 +588,8 @@ def _version(_rest):
 
 COMMANDS = {"serve": _serve, "report": _report, "status": _status, "doctor": _doctor, "config": _config,
             "version": _version, "memory": _memory, "projects": _projects, "route": _route, "cheatsheet": _cheatsheet, "mcp": _mcp,
-            "semantic": _semantic, "cloud": _cloud, "skill": _skill, "pack": _pack}
+            "semantic": _semantic, "cloud": _cloud, "skill": _skill, "pack": _pack,
+            "playbook": _playbook}
 
 
 def main(argv=None):

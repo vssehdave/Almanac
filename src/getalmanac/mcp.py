@@ -7,7 +7,7 @@ import os
 import sys
 import time
 
-from . import __version__, config
+from . import __version__, config, playbook
 from .memory import Memory
 from .store import Store
 
@@ -29,6 +29,24 @@ TOOLS = [
     {"name": "memory_projects",
      "description": "List the projects Almanac has memory for, and each one's most recent conversations.",
      "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "playbook_find",
+     "description": "Find recorded playbooks (a way of doing a repeated task) that match some words. Returns the top 5 "
+                    "with name, title, when it applies and its status.",
+     "inputSchema": {"type": "object", "required": ["query"], "properties": {
+         "query": {"type": "string", "description": "The request, or words from it"}}}},
+    {"name": "playbook_save",
+     "description": "Record, or update, a playbook for a task that will come up again. A script is a draft until the "
+                    "owner approves it with `almanac playbook approve NAME`.",
+     "inputSchema": {"type": "object", "required": ["playbook"], "properties": {
+         "playbook": {"type": "object", "description": "name (lowercase, digits, hyphens), title, when, triggers (2 to 5 short phrases), "
+                                                       "steps (ordered \"If X: do Y with Z\" lines, at most 30), skills, agents, "
+                                                       "args [{name, help}], project (optional)"},
+         "script": {"type": "string", "description": "The text of run.py, if the job can be done with no model"}}}},
+    {"name": "playbook_run",
+     "description": "Run an approved playbook script with no model in the loop. Returns its exit code, stdout and stderr. "
+                    "A draft script is not run.",
+     "inputSchema": {"type": "object", "required": ["name"], "properties": {
+         "name": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}}}}},
 ]
 
 
@@ -84,6 +102,22 @@ def call(memory, name, args, cwd) -> str:
         return text
     if name == "memory_projects":
         return render_projects(memory)
+    if name == "playbook_find":
+        found = playbook.find(str(args.get("query") or ""), memory.projects.see(cwd, touch=False) or "")
+        return ("\n".join(f"{pb['name']}: {pb['title']} ({pb['status']}, used {pb['uses']}x)\n    {pb['when']}" for pb in found)
+                or "No playbook matches.")
+    if name == "playbook_save":
+        given = args.get("playbook")
+        if not isinstance(given, dict):
+            raise ValueError("playbook must be an object")
+        pb = playbook.save(dict(given, source="claude"), args.get("script"))
+        text = f"Saved playbook {pb['name']} at {playbook.folder(pb['name'])} (status: {pb['status']})."
+        if pb["status"] == "draft":
+            text += (f" Its script is a draft and will not run through playbook_run. Tell the owner to read "
+                     f"{playbook.script_path(pb['name'])} and approve it with `almanac playbook approve {pb['name']}`.")
+        return text
+    if name == "playbook_run":
+        return playbook.run(str(args.get("name") or ""), args.get("args") or [], cwd)
     raise KeyError(name)
 
 
