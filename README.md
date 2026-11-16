@@ -360,11 +360,16 @@ repository (`src/getalmanac/bundle/`), so there is nothing to install or update.
 | `untangle` | A phased clean-up of a whole codebase (started by hand: `/untangle:untangle-codebase`) |
 | `security-audit` | A multi-phase security audit with validated findings |
 | `crew` | 71 specialist sub-agents (planning, review per language, build fixes, audits), each pointed at the skills above |
+| `api-anything` | Calling a website through its own data requests, for scrapers and sites with no API. Runs locally only: nothing goes to its shared catalog |
+| `bla` | Hardening release artifacts against automated reverse engineering |
 
 The [working rules](#5-working-rules-for-each-model) tell each model when to reach for
 them. Where each plugin came from, at which commit, and what was changed is in
 `src/getalmanac/bundle/SOURCES.md`. `almanac config set bundle.enabled false`
 turns the whole bundle off.
+
+`api-anything` and `bla` each start a small server through `npx` at a fixed
+version (Node 22 or newer). That code comes from npm on first use.
 
 ## Installing skills safely
 
