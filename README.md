@@ -23,18 +23,14 @@ Claude Code  ──▶  almanac (127.0.0.1)  ──▶  api.anthropic.com
 Python 3.10 or newer and Claude Code are the only requirements.
 
 ```bash
-# with pipx (recommended)
-pipx install git+https://github.com/vssehdave/Almanac
-
-# or with uv
-uv tool install git+https://github.com/vssehdave/Almanac
-
-# or with pip
-pip install git+https://github.com/vssehdave/Almanac
+# the repository is private: clone it with your own GitHub login, then
+git clone https://github.com/vssehdave/Almanac && cd Almanac
+pip install -e .
 ```
 
-A wheel is attached to every [release](https://github.com/vssehdave/Almanac/releases)
-if you would rather install a file. Then check the setup:
+The install is editable, so `git pull` in that folder is the update. A wheel is
+also attached to every [release](https://github.com/vssehdave/Almanac/releases).
+Then check the setup:
 
 ```bash
 almanac doctor
@@ -639,9 +635,8 @@ The tests use a fake upstream. None of them calls a real API.
 ### Releasing
 
 Pushing a tag `vX.Y.Z` that matches the version in `pyproject.toml` builds the
-wheel, smoke-tests it and attaches it to a GitHub release. Publishing to PyPI is
-a separate, manually started workflow (`publish`), and needs a trusted publisher
-set up for the `getalmanac` project on PyPI first.
+wheel, smoke-tests it and attaches it to a GitHub release. Almanac is a
+personal tool in a private repository and is not published to PyPI.
 
 ## Licence
 
