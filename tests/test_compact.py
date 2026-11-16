@@ -316,5 +316,202 @@ class CompactLayerTest(LayerCase):
         self.assertEqual(self.send(messages), messages)
 
 
+def loop(n, start=0, size=3000, special=None):
+    """A tool loop: `n` tool calls and their results, ids u<start>... `special` maps an index to overrides for that result block."""
+    out = []
+    for i in range(start, start + n):
+        block = {"type": "tool_result", "tool_use_id": f"u{i}", "content": f"r{i} " + "x" * size}
+        block.update((special or {}).get(i, {}))
+        out += [{"role": "assistant", "content": [{"type": "text", "text": f"step {i}"},
+                                                  {"type": "tool_use", "id": f"u{i}", "name": "Bash", "input": {"command": f"run {i}"}}]},
+                {"role": "user", "content": [block]}]
+    return out
+
+
+def long_turn(n, **kw):
+    return history(2, last="Do the long job please") + loop(n, **kw)
+
+
+def results(messages):
+    """The tool results of the tool loop (the ones whose id starts with u)."""
+    return [b for m in messages if m.get("role") == "user" for b in compact.rq.blocks(m)
+            if b.get("type") == "tool_result" and str(b.get("tool_use_id")).startswith("u")]
+
+
+def stubbed(messages):
+    return [b["tool_use_id"] for b in results(messages) if str(b.get("content")).startswith("[Almanac removed")]
+
+
+class LongTurnTest(LayerCase):
+    window = 30000  # tokens; a pass starts at 85% of it
+
+    def setUp(self):
+        super().setUp()
+        self.rig.cfg["routing"]["windows"]["m"] = self.window
+        self.rig.upstream.respond = lambda req: (200, {"content-type": "text/event-stream"},
+                                                 sse(usage={"input_tokens": len(req["body"]) // 3}))
+
+    def go(self, messages):
+        """Send, wait for the reply to be recorded, and return the messages the upstream received."""
+        self.send(messages)
+        self.rig.records()
+        return self.rig.sent()["messages"]
+
+    def lane(self):
+        return self.rig.records()[-1]["lane"]
+
+    def test_below_the_share_nothing_changes(self):
+        raw = json.dumps(body(long_turn(10))).encode()
+        self.rig.messages(raw)
+        self.assertEqual(self.rig.upstream.requests[-1]["body"], raw)
+
+    def test_old_results_are_stubbed_past_the_share_and_the_newest_are_kept(self):
+        messages = long_turn(30, special={3: {"is_error": True}, 4: {"content": "short"}})
+        sent = self.go(messages)
+        self.assertEqual(stubbed(sent), [f"u{i}" for i in range(18) if i not in (3, 4)])  # not the newest 12, the error or the small one
+        self.assertEqual(len(sent), len(messages))
+        self.assertEqual(json.dumps(results(sent)[18:]), json.dumps(results(messages)[18:]))  # the newest are as sent
+        self.assertEqual(results(sent)[0]["content"], "[Almanac removed this tool result to keep the turn inside the "
+                                                       "context window (3003 characters). Run the tool again if you need it.]")
+        self.assertEqual(results(sent)[3], results(messages)[3])  # the error stays, with its flag
+        self.assertEqual(results(sent)[4], results(messages)[4])
+        for before, after in zip(messages, sent):  # roles, ids and tool calls are exactly as sent
+            self.assertEqual(before["role"], after["role"])
+            if before["role"] == "assistant":
+                self.assertEqual(before, after)
+            else:
+                self.assertEqual([b.get("tool_use_id") for b in before["content"]], [b.get("tool_use_id") for b in after["content"]])
+        self.assertEqual(sent[:5], messages[:5])  # nothing before the last human turn is touched
+        self.assertEqual(self.rig.records()[-1]["compaction"]["stubbed"], 16)
+        # the count the reply gave describes the rewritten body
+        self.assertLess(self.store.get(f"usage:{self.lane()}")["tokens"], len(json.dumps(messages)) / 3 * 0.7)
+
+    def test_consecutive_requests_stub_the_same_results_byte_for_byte(self):
+        first = self.go(long_turn(30))
+        second = self.go(long_turn(33))  # three results arrive: still under the share, so nothing new is stubbed
+        self.assertEqual(stubbed(second), stubbed(first))
+        self.assertEqual(json.dumps(second[:len(first)]), json.dumps(first))
+
+    def test_a_second_pass_stubs_more_and_leaves_the_first_stubs_as_they_were(self):
+        first = self.go(long_turn(30))
+        second = self.go(long_turn(44))
+        self.assertEqual(len(stubbed(first)), 18)
+        self.assertEqual(len(stubbed(second)), 32)
+        self.assertEqual(stubbed(second)[:18], stubbed(first))
+        self.assertEqual(json.dumps(second[:2 * 18]), json.dumps(first[:2 * 18]))
+
+    def test_the_kept_count_steps_down_to_four_when_one_pass_is_not_enough(self):
+        self.rig.cfg["routing"]["windows"]["m"] = 8000
+        sent = self.go(long_turn(20))
+        self.assertEqual(len(results(sent)) - len(stubbed(sent)), 4)
+        self.assertEqual(self.store.get(f"stubs:{self.lane()}")["keep"], 4)
+
+    def test_it_is_off_at_zero_and_with_compaction_off(self):
+        messages = long_turn(30)
+        self.rig.cfg["compaction"]["window_share"] = 0
+        self.assertEqual(self.go(messages), messages)
+        self.rig.cfg["compaction"]["window_share"] = 0.85
+        self.rig.cfg["compaction"]["enabled"] = False
+        self.assertEqual(self.go(messages), messages)
+
+    def test_a_malformed_block_does_not_stop_the_request_or_the_other_stubs(self):
+        messages = long_turn(30, special={2: {"content": None}, 3: {"content": 7}, 4: {"content": {"odd": "x" * 3000}}})
+        messages[11]["content"][0].pop("tool_use_id")  # a result that names no call
+        messages[13]["content"][0]["tool_use_id"] = ["u6"]
+        messages[15]["content"].append("not a block")
+        self.assertEqual(self.rig.messages(body(copy.deepcopy(messages)))[0], 200)
+        sent = self.rig.sent()["messages"]
+        self.assertNotIn("error", self.rig.records()[-1])
+        self.assertIn("u5", stubbed(sent))
+        self.assertIn("u4", stubbed(sent))  # a result that is not text counts by its size
+        self.assertEqual(sent[11], messages[11])
+        self.assertEqual(sent[13], messages[13])
+
+    def test_a_failure_while_deciding_sends_the_request_unchanged(self):
+        from unittest import mock
+
+        messages = long_turn(30)
+        with mock.patch.object(compact, "estimate", side_effect=RuntimeError("boom")):
+            self.assertEqual(self.go(messages), messages)
+
+    def test_it_composes_with_the_stored_prefix(self):
+        messages = history(8)
+        first = self.go(messages)  # compacted at this human turn
+        sent = self.go(messages + loop(30))
+        self.assertEqual(json.dumps(sent[:3]), json.dumps(first[:3]))  # the prefix is replayed as stored
+        self.assertEqual(len(stubbed(sent)), 18)
+        self.assertEqual(len(sent), 3 + 1 + 60)
+        record = self.rig.records()[-1]["compaction"]
+        self.assertEqual((record["fresh"], record["stubbed"]), (False, 18))
+
+    def test_the_next_human_turn_rebuilds_the_prefix_and_clears_the_stubs(self):
+        messages = long_turn(30)
+        self.go(messages)
+        key = f"stubs:{self.lane()}"
+        self.assertTrue(self.store.get(key))
+        sent = self.go(messages + [{"role": "assistant", "content": [{"type": "text", "text": "Done."}]}, human("Now the next thing")])
+        self.assertTrue(self.rig.records()[-1]["compaction"]["fresh"])
+        self.assertIsNone(self.store.get(key))
+        self.assertNotIn("Almanac removed this tool result", json.dumps(sent))
+
+    def test_without_a_rebuild_the_next_human_turn_keeps_the_same_stubs(self):
+        self.rig.cfg["compaction"]["trigger_tokens"] = 10 ** 9
+        messages = long_turn(30)
+        first = self.go(messages)
+        sent = self.go(messages + [{"role": "assistant", "content": [{"type": "text", "text": "Done."}]}, human("Now the next thing")])
+        self.assertEqual(json.dumps(sent[:len(first)]), json.dumps(first))
+
+    def test_an_edit_of_covered_history_drops_the_stubs(self):
+        messages = history(8)
+        self.go(messages)
+        self.go(messages + loop(30))
+        key = f"stubs:{self.lane()}"
+        self.assertTrue(self.store.get(key))
+        edited = copy.deepcopy(messages)
+        edited[5]["content"][0]["text"] = "A rewritten earlier answer."
+        self.go(edited)
+        self.assertIsNone(self.store.get(key))
+
+    def test_a_lagging_usage_count_does_not_cause_a_second_pass(self):
+        first = self.go(long_turn(30))
+        self.store.put(f"usage:{self.lane()}", {"tokens": 10 ** 6, "messages": 7})  # an earlier request's count, written late
+        second = self.go(long_turn(32))
+        self.assertEqual(stubbed(second), stubbed(first))
+
+    def test_a_refused_body_goes_out_as_it_was(self):
+        def respond(req):
+            if b"Almanac removed this tool result" in req["body"]:
+                return 400, {"content-type": "application/json"}, b'{"type":"error","error":{"type":"invalid_request_error","message":"bad block"}}'
+            return 200, {"content-type": "text/event-stream"}, sse()
+
+        self.rig.upstream.respond = respond
+        messages = long_turn(30)
+        self.assertEqual(self.go(messages), messages)
+        self.assertEqual(len(self.rig.upstream.requests), 2)
+        self.assertIn("bad block", self.store.get(f"nocompact:{self.lane()}"))
+        self.assertIn("bad block", self.rig.records()[-1]["fallback"])
+        longer = long_turn(31)
+        self.assertEqual(self.go(longer), longer)  # and it is not tried again for this conversation
+        self.assertEqual(len(self.rig.upstream.requests), 3)
+
+    def test_four_hundred_tool_results_in_one_turn_stay_inside_the_window(self):
+        self.rig.cfg["routing"]["windows"]["m"] = 60000
+        self.rig.upstream.respond = lambda req: (200, {"content-type": "text/event-stream"},  # a tool loop: each reply asks for another call
+                                                 sse(usage={"input_tokens": len(req["body"]) // 3}, tool=("Bash", {"command": "next"})))
+        sizes, passes, last, messages = [], 0, [], history(2, last="Do the long job please")
+        for i in range(400):
+            messages += loop(1, start=i, size=2100)
+            self.rig.messages(body(copy.deepcopy(messages)))  # no wait for the reply's count: it may arrive late
+            sent = json.loads(self.rig.upstream.requests[-1]["body"])["messages"]
+            sizes.append(len(self.rig.upstream.requests[-1]["body"]) / compact.CHARS_PER_TOKEN)
+            now = stubbed(sent)
+            passes += now != last
+            self.assertEqual(now[:len(last)], last)  # the stubs only grow
+            last = now
+        self.assertLess(max(sizes), 0.85 * 60000 + 1000)
+        self.assertGreaterEqual(len(results(sent)) - len(last), 4)
+        self.assertLess(passes, 40)  # a pass frees a good share of the room, so the cache is not broken at every request
+
+
 if __name__ == "__main__":
     unittest.main()

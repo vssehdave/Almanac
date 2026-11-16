@@ -45,6 +45,8 @@ DEFAULTS = {
         "enabled": True,
         "trigger_tokens": 150000,  # a conversation this large is compacted at its next message
         "target_tokens": 40000,  # most tokens the summary that replaces it may take
+        "window_share": 0.85,  # inside one long turn, old tool results are removed from this share of the model's window; 0 turns it off
+        "keep_results": 12,  # tool results of the current turn that are never removed (the newest ones)
     },
     "routing": {
         "mode": "off",  # "off" changes nothing; "subagents" routes sub-agent threads; "all" routes the main thread too
