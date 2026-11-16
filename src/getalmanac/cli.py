@@ -30,8 +30,8 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac semantic [install|status|index|on|off]   search memory by meaning (optional model)
   almanac route [status]       what model routing is set to and what it decided lately
   almanac route pin TIER       keep this project on small, medium or large (`pin off` lifts it)
-  almanac cheatsheet show [opus|sonnet|haiku]   the rules added for that model, and their size
-  almanac cheatsheet path      where your own copies go (opus.md, sonnet.md, haiku.md, common.md)
+  almanac cheatsheet show [opus|sonnet|haiku|fable]   the rules added for that model, and their size
+  almanac cheatsheet path      where your own copies go (opus.md, sonnet.md, haiku.md, fable.md, common.md, skills.md)
   almanac skill scan PATH|URL  scan a skill or plugin with SkillSpector (exit 0 SAFE, 1 CAUTION, 2 DO_NOT_INSTALL, 3 error)
   almanac skill add URL|PATH   fetch, scan, and install its skills only if SAFE (--skill NAME, --ref SHA)
   almanac skill audit          scan installed skills and plugins not scanned yet (--again: all), then a table
@@ -449,7 +449,7 @@ def _cheatsheet(rest):
             text = cheatsheet.text_for(name)
             _print(f"--- {name}: about {round(len(text) / CHARS_PER_TOKEN)} tokens ---\n{text}\n")
     else:
-        print("usage: almanac cheatsheet [show [opus|sonnet|haiku] | path]", file=sys.stderr)
+        print("usage: almanac cheatsheet [show [opus|sonnet|haiku|fable] | path]", file=sys.stderr)
         return 2
     return 0
 def _skill(rest):

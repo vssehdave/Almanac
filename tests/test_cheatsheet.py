@@ -49,15 +49,18 @@ class Fresh(unittest.TestCase):
 
 class TextTest(Fresh):
     def test_each_family_gets_its_own_text(self):
-        common = cheatsheet.read("common")
-        self.assertEqual(cheatsheet.text_for(LARGE), cheatsheet.read("opus") + "\n\n" + common)
-        self.assertEqual(cheatsheet.text_for(MEDIUM), cheatsheet.read("sonnet") + "\n\n" + common)
+        rest = "\n\n" + cheatsheet.read("common") + "\n\n" + cheatsheet.read("skills")
+        self.assertEqual(cheatsheet.text_for(LARGE), cheatsheet.read("opus") + rest)
+        self.assertEqual(cheatsheet.text_for(MEDIUM), cheatsheet.read("sonnet") + rest)
+        fable = cheatsheet.read("fable") + "\n\n" + cheatsheet.read("skills")  # its own method stays; only the skills are added
+        self.assertEqual(cheatsheet.text_for("claude-fable-1"), fable)
+        self.assertEqual(cheatsheet.text_for("claude-mythos-2"), fable)
         self.assertEqual(cheatsheet.text_for(SMALL), cheatsheet.read("haiku"))
         self.assertTrue(cheatsheet.read("haiku").startswith("# How to work here (Haiku)"))
         self.assertEqual(cheatsheet.text_for("Claude-OPUS-4-1"), cheatsheet.text_for(LARGE))
 
     def test_other_models_get_nothing(self):
-        for model in ("claude-fable-1", "claude-mythos-2", "some-model", ""):
+        for model in ("some-model", ""):
             self.assertEqual(cheatsheet.text_for(model), "")
             self.assertEqual(run(model)["system"], claude_system())
 
@@ -166,7 +169,7 @@ class CommandTest(Fresh):
         with mock.patch("builtins.print") as shown:
             self.assertEqual(cli._cheatsheet(["show", "haiku"]), 0)
             self.assertEqual(cli._cheatsheet(["path"]), 0)
-            self.assertEqual(cli._cheatsheet(["show", "fable"]), 2)
+            self.assertEqual(cli._cheatsheet(["show", "gpt"]), 2)
         text = "\n".join(str(c.args[0]) for c in shown.call_args_list)
         self.assertIn(cheatsheet.text_for(SMALL), text)
         self.assertIn("haiku: about", text)

@@ -46,23 +46,6 @@
 - Do ask before anything destructive, irreversible or outward-facing: deleting,
   force-pushing, publishing, sending.
 
-## Skills and agents
-
-- A new project, or a feature that spans several files: plan before building.
-  Run the `egm:egm-brainstorm` skill, then `egm:egm-draft`, then
-  `egm:egm-review`, and build from the reviewed document. Skip this for a small
-  change.
-- Interface work: follow the `interfaces:` skills while building and finish
-  with `interfaces:interface-review`. Use `astryx:astryx` when the project uses
-  that design system.
-- A security question or an audit: the `security-audit:security-audit` skill.
-- Hand a self-contained piece of work to a `crew:` agent when one fits it, for
-  example `crew:planner`, `crew:code-reviewer`, `crew:build-error-resolver`, a
-  language reviewer or `crew:security-reviewer`. Start its prompt with a
-  `Difficulty:` line. Do small things yourself: no agent for a job of a few
-  tool calls, and never more than two agents at once.
-- If a skill or agent named here is not in your list, carry on without it.
-
 ## Commits and branches
 
 - A commit is one finished, working, reviewable unit of change. It is not a

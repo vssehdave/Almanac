@@ -11,8 +11,9 @@ from importlib import resources
 from . import config
 from .routing import RoutingLayer
 
-FAMILIES = ("opus", "sonnet", "haiku")
-NAMES = (*FAMILIES, "common")
+FAMILIES = ("opus", "sonnet", "haiku", "fable")
+NAMES = (*FAMILIES, "common", "skills")
+ALIASES = {"mythos": "fable"}  # the same model under another name
 
 
 def override_dir():
@@ -30,7 +31,7 @@ def read(name: str) -> str:
 
 def family(model: str) -> str:
     low = model.lower()
-    return next((f for f in FAMILIES if f in low), "")
+    return next((f for f in FAMILIES if f in low), "") or next((v for k, v in ALIASES.items() if k in low), "")
 
 
 def text_for(model: str) -> str:
@@ -38,7 +39,10 @@ def text_for(model: str) -> str:
     name = family(model)
     if not name:
         return ""
-    return read(name) if name == "haiku" else read(name) + "\n\n" + read("common")
+    if name == "haiku":  # short on purpose: its own file is the whole text
+        return read(name)
+    parts = [read(name), read("skills")] if name == "fable" else [read(name), read("common"), read("skills")]
+    return "\n\n".join(parts)
 
 
 def _thread(ctx, body) -> bool:
