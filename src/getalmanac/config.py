@@ -70,6 +70,9 @@ DEFAULTS = {
         "windows": {"claude-haiku-5-5": 1000000, "claude-sonnet-5-5": 1000000, "claude-opus-5-5": 1000000},  # tokens; unknown ids count as 200000
     },
     # "on" appends the working rules for the answering model (Opus, Sonnet or Haiku) to each thread's system prompt
+    "bundle": {
+        "enabled": True,  # load the skills and agents kept in this package (bundle/) into every session
+    },
     "cheatsheet": {"mode": "on"},
     "cloud": {
         "auto": False,  # true keeps a running task's snapshot on origin's almanac/handoff branch (see cloud.py)

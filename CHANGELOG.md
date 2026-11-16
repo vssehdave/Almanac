@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Bundled skills and agents.** Almanac now carries its own plugins and loads
+  them into every session with `--plugin-dir`: design planning and review,
+  interface building, the Astryx design system, codebase untangling, security
+  audits, and a crew of 71 sub-agents pointed at those skills. The working
+  rules for Opus and Sonnet say when to use them. `bundle.enabled` set to
+  `false` turns it off.
+
 - **Accepting a flagged skill.** `almanac skill accept NAME` stops the launch
   warning for a skill or plugin whose findings you have read, for its current
   files only; any change brings the warning back. `skill audit` shows it as

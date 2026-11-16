@@ -58,6 +58,14 @@ def with_memory_tools(args, cfg):
     return ["--mcp-config", str(path), *args]
 
 
+def with_bundle(args, cfg):
+    """Add Almanac's own skills and agents (the plugins under `bundle/`) to Claude Code's arguments."""
+    folder = Path(__file__).parent / "bundle"
+    if not cfg["bundle"]["enabled"] or not folder.is_dir():
+        return args
+    return ["--plugin-dir", str(folder), *args]
+
+
 def https_session(cfg):
     """A tls.Session when this launch should run in HTTPS-proxy mode, else None (and says why)."""
     asked = os.environ.get("ALMANAC_HTTPS", "").lower()
@@ -181,6 +189,7 @@ def run(args, cfg) -> int:
         proxy.tls = session
     env = https_env(session, server.server_address[1]) if session else child_env(url)
     args = with_memory_tools(list(args), cfg)
+    args = with_bundle(args, cfg)
     # Ctrl+C belongs to Claude Code. A handler (not SIG_IGN) so the child does not inherit it.
     previous = signal.signal(signal.SIGINT, lambda *_: None)
     try:

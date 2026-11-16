@@ -40,4 +40,4 @@ almanac = "getalmanac.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-getalmanac = ["cheatsheets/*.md", "pack.json"]
+getalmanac = ["cheatsheets/*.md", "pack.json", "bundle/**/*", "bundle/**/.claude-plugin/*"]
