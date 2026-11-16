@@ -1,0 +1,84 @@
+{
+  "entries": [
+    {
+      "name": "security-audit",
+      "source": "https://github.com/cloudflare/security-audit-skill",
+      "ref": "c1c8a8c1471069fb0e188eeaff69b8e8db6564a8",
+      "kind": "skill",
+      "skills": ["skills/security-audit"],
+      "note": "Security review skill. Its reference files describe attacks, which the scanner flags."
+    },
+    {
+      "name": "untangle-codebase",
+      "source": "https://github.com/caldoai/skills",
+      "ref": "f3cf47774975a7d9fca45730babf4ff7ad765ada",
+      "kind": "skill",
+      "skills": ["skills/untangle-codebase"],
+      "note": "One skill."
+    },
+    {
+      "name": "interfaces",
+      "source": "https://github.com/jakubkrehel/skills",
+      "ref": "a72290d140249813898ba8648becf6415abcb059",
+      "kind": "skill",
+      "note": "14 interface design skills under skills/. The repo is also a plugin, with no hooks or MCP servers."
+    },
+    {
+      "name": "egm",
+      "source": "https://github.com/google/elephant-goldfish-model",
+      "ref": "72d06f52a2482885d9a64bd24b291c6e8628942c",
+      "kind": "skill",
+      "note": "A plugin with 7 skills and no hooks or MCP servers, so its skills install on their own. Its 10 agent files under .claude-plugin/agents are not installed."
+    },
+    {
+      "name": "astryx",
+      "source": "https://github.com/meta/astryx",
+      "ref": "312604adaed6e71d7b0c212ce9d970da6d8e1392",
+      "kind": "skill",
+      "skills": ["plugins/astryx/skills/astryx"],
+      "note": "The one skill only, not the npm packages in the same repo."
+    },
+    {
+      "name": "api-anything",
+      "source": "https://github.com/goodnight000/api-anything",
+      "ref": "d40abd44f171c5cc444f1ac6b947afefa8605b78",
+      "kind": "plugin",
+      "note": "Starts an MCP server with `npx -y api-anything mcp`: no version pin, so each start can run new code from npm."
+    },
+    {
+      "name": "bla",
+      "source": "https://github.com/qybaihe/bla",
+      "ref": "883c5bac107f83666410092ebdd1f3e0ed5da53e",
+      "kind": "plugin",
+      "note": "Starts an MCP server with `npx -y bla-agents@3.4.1 mcp` (pinned to a version, not to a hash)."
+    },
+    {
+      "name": "ecc",
+      "source": "https://github.com/affaan-m/ECC",
+      "ref": "d2ef2680594f9a17526a6e1a2e18b3d242c5d17b",
+      "kind": "plugin",
+      "note": "27 hooks, an MCP server through npx, and hundreds of skills. Its hooks overlap what Almanac already does (memory, compaction, session start)."
+    },
+    {
+      "name": "ponytail",
+      "source": "https://github.com/DietrichGebert/ponytail",
+      "ref": "96608e078b2d5ea607c5c3b8b5a54d1c1fba6846",
+      "kind": "plugin",
+      "note": "Already installed on the owner's machine (version 5.3.3 is this commit)."
+    },
+    {
+      "name": "trufflehog",
+      "source": "https://github.com/trufflesecurity/trufflehog",
+      "ref": "db665f0c24c63a536220e0e4a3ec9b9dc250e6be",
+      "kind": "binary",
+      "note": "Secret scanner, a Go program. Install a release from its GitHub page. Run it with --no-verification so found secrets are not sent to third parties to check them."
+    },
+    {
+      "name": "skillspector",
+      "source": "https://github.com/NVIDIA/skillspector",
+      "ref": "c81615007d40e86051a302a3cf897f8a05264928",
+      "kind": "binary",
+      "note": "The scanner Almanac uses. Install: uv tool install git+https://github.com/NVIDIA/skillspector.git@c81615007d40e86051a302a3cf897f8a05264928"
+    }
+  ]
+}

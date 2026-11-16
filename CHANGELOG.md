@@ -10,6 +10,18 @@
   the same names under `ALMANAC_HOME/cheatsheets/` replace the packaged ones.
   New commands: `almanac cheatsheet show` and `almanac cheatsheet path`. The
   text is the same on every request, so the prompt cache keeps hitting.
+- **Skill scanning.** Skills and plugins can be checked with NVIDIA's
+  SkillSpector before they are installed (`almanac skill scan`, static checks
+  only). `almanac skill add` fetches a source into a quarantine folder with
+  nothing run, scans the skill folders, and installs them only on SAFE.
+  CAUTION needs `--accept-caution`; DO_NOT_INSTALL or a failed scan cannot be
+  overridden. Plugins with hooks or MCP servers are scanned and shown, not
+  installed. At each start, Almanac warns about flagged skills and plugins and
+  scans new or changed ones in the background, 5 per start
+  (`skills.scan_on_launch`; `almanac skill audit` does all of them now). A
+  pinned `pack.json` lists third-party skills and plugins, installed with
+  `almanac pack install`. The scanner contacts api.osv.dev with dependency
+  names and versions. Tested on Windows with SkillSpector 2.12.0.
 - **Model routing.** Almanac can now choose the model for you. With
   `routing.mode` set to `subagents` or `all` (it is `off` by default and then
   changes nothing), each prompt goes to Haiku (simple work), Sonnet (coding) or
