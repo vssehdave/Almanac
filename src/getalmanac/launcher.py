@@ -112,9 +112,12 @@ def serve_file():
 
 def publish(port: int, token: str, key: str):
     """Tell `almanac` where `almanac serve` listens, the address secret and the key that proves it. This user only."""
-    fd = os.open(serve_file(), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    # written beside it and moved into place, so a reader never finds the file half written
+    draft = serve_file().with_name(f"serve.json.{os.getpid()}.tmp")
+    fd = os.open(draft, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         json.dump({"port": port, "token": token, "key": key}, handle)
+    os.replace(draft, serve_file())
 
 
 def unpublish(token: str):
