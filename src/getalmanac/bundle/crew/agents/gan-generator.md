@@ -1,7 +1,7 @@
 ---
 name: gan-generator
 description: Implements features from the spec and iterates on evaluator feedback until the quality bar is met; use in the GAN build loop.
-tools: Read, Write, Edit, Bash, Grep, Glob
+tools: Read, Write, Edit, Bash, Grep, Glob, Skill
 model: sonnet
 color: green
 ---
@@ -138,3 +138,7 @@ Your job after receiving feedback:
 3. Fix them systematically
 4. If a score is below 5, treat it as critical
 5. If a suggestion seems wrong, still try it — the Evaluator sees things you don't
+
+## Skills to use
+
+For interface work follow the `interfaces:better-interface`, `interfaces:better-ui` and `interfaces:better-accessibility` skills, and finish with `interfaces:interface-review`. If the project depends on `@astryxdesign`, use the `astryx:astryx` skill for components and tokens.

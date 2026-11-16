@@ -1,7 +1,7 @@
 ---
 name: tdd-guide
 description: Guides test-first development, writing failing tests before code, with 80% coverage; use when adding features, fixing bugs or refactoring.
-tools: Read, Write, Edit, Bash, Grep
+tools: Read, Write, Edit, Bash, Grep, Skill
 model: sonnet
 ---
 
@@ -96,3 +96,7 @@ Integrate eval-driven development into TDD flow:
 4. Re-run tests and evals; report pass@1 and pass@3.
 
 Release-critical paths should target pass^3 stability before merge.
+
+## Skills to use
+
+Fix with the smallest complete change: if the `ponytail:ponytail-review` skill is available, check your change against it.

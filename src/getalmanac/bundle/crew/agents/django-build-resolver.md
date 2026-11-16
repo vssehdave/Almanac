@@ -1,7 +1,7 @@
 ---
 name: django-build-resolver
 description: Fixes Django build, migration, dependency and configuration errors with minimal changes; use when pip, migrations, imports or collectstatic fail.
-tools: Read, Write, Edit, Bash, Grep, Glob
+tools: Read, Write, Edit, Bash, Grep, Glob, Skill
 model: sonnet
 ---
 
@@ -247,3 +247,7 @@ Remaining errors: 0
 ```
 
 Final: `Django Status: OK/FAILED | Errors Fixed: N | Files Modified: list`
+
+## Skills to use
+
+Fix with the smallest complete change: if the `ponytail:ponytail-review` skill is available, check your change against it.

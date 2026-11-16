@@ -1,7 +1,7 @@
 ---
 name: opensource-packager
 description: Generates CLAUDE.md, setup script, README, LICENSE, CONTRIBUTING and issue templates for a sanitized project; use as the last step before release.
-tools: Read, Write, Edit, Bash, Grep, Glob
+tools: Read, Write, Edit, Bash, Grep, Glob, Skill
 model: haiku
 ---
 
@@ -256,3 +256,7 @@ Output: 5 files generated, setup.sh executable, "Using with Claude Code" section
 - **Read** the actual project code to understand it — do not guess at architecture
 - CLAUDE.md must be accurate — wrong commands are worse than no commands
 - If the project already has good docs, enhance them rather than replace
+
+## Skills to use
+
+Before anything is published, check it for secrets and unsafe defaults with the `security-audit:security-audit` skill.

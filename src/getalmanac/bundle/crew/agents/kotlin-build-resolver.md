@@ -1,7 +1,7 @@
 ---
 name: kotlin-build-resolver
 description: Fixes Kotlin and Gradle build, compiler and dependency errors with minimal changes; use when a Kotlin build fails.
-tools: Read, Write, Edit, Bash, Grep, Glob
+tools: Read, Write, Edit, Bash, Grep, Glob, Skill
 model: sonnet
 ---
 
@@ -123,3 +123,7 @@ Remaining errors: 2
 ```
 
 Final: `Build Status: SUCCESS/FAILED | Errors Fixed: N | Files Modified: list`
+
+## Skills to use
+
+Fix with the smallest complete change: if the `ponytail:ponytail-review` skill is available, check your change against it.
