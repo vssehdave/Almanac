@@ -13,6 +13,7 @@ icons and marketplace files were left out; nothing else was changed unless noted
 | `untangle` | github.com/caldoai/skills | f3cf4777 | MIT | manifest written here |
 | `astryx` | github.com/meta/astryx (`plugins/astryx`) | 312604ad | MIT | nothing |
 | `security-audit` | github.com/cloudflare/security-audit-skill | c1c8a8c1 | MIT | manifest written here |
+| `crew` | github.com/affaan-m/ECC (`agents/`) | d2ef2680 | MIT | manifest written here; descriptions shortened, models set, skill sections added, references to its own commands removed |
 
 To take a newer version of one, replace its folder from the source at a new
 commit, scan it with `almanac skill scan`, and update this table.
