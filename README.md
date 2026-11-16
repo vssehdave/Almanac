@@ -344,6 +344,28 @@ To change the text, put a file with the same name (`opus.md`, `sonnet.md`,
 `haiku.md` or `common.md`) in the folder `almanac cheatsheet path` prints. It
 replaces the packaged one from the next run.
 
+## Bundled skills and agents
+
+Almanac carries its own set of skills and sub-agents and loads them into every
+session it starts, with Claude Code's `--plugin-dir`. Nothing is copied into
+the Claude config folder, so they are present under any account and only in
+sessions started through `almanac`. They are fixed copies kept in this
+repository (`src/getalmanac/bundle/`), so there is nothing to install or update.
+
+| Plugin | What it adds |
+|---|---|
+| `egm` | Plan before building: brainstorm, draft a design document, review it with fresh reviewers |
+| `interfaces` | How to build and finish an interface: typography, colour, layout, accessibility, review |
+| `astryx` | Working with the Astryx design system |
+| `untangle` | A phased clean-up of a whole codebase (started by hand: `/untangle:untangle-codebase`) |
+| `security-audit` | A multi-phase security audit with validated findings |
+| `crew` | 71 specialist sub-agents (planning, review per language, build fixes, audits), each pointed at the skills above |
+
+The [working rules](#5-working-rules-for-each-model) tell each model when to reach for
+them. Where each plugin came from, at which commit, and what was changed is in
+`src/getalmanac/bundle/SOURCES.md`. `almanac config set bundle.enabled false`
+turns the whole bundle off.
+
 ## Installing skills safely
 
 Skills and plugins from other people run with your permissions. Almanac puts a
