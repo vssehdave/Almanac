@@ -362,6 +362,7 @@ repository (`src/getalmanac/bundle/`), so there is nothing to install or update.
 | `crew` | 71 specialist sub-agents (planning, review per language, build fixes, audits); 62 of them are pointed at the skills above |
 | `api-anything` | Calling a website through its own data requests, for scrapers and sites with no API. Runs locally only: nothing goes to its shared catalog |
 | `bla` | Hardening release artifacts against automated reverse engineering |
+| `almanac` | Almanac's own skill: how to write a [playbook](#playbooks) |
 
 The [working rules](#5-working-rules-for-each-model) tell each model when to reach for
 them, so no slash command is needed: every bundled skill may be started by
@@ -373,6 +374,55 @@ turns the whole bundle off.
 
 `api-anything` and `bla` each start a small server through `npx` at a fixed
 version (Node 22 or newer). That code comes from npm on first use.
+
+## Playbooks
+
+A playbook is a recorded way of doing a task you repeat: when it applies, the
+ordered list of decisions, which skills and agents were used, and, where the
+job is mechanical, a script that does all of it with no model in the loop. The
+point is that the next run does not work the approach out again, and where a
+script exists the job is one tool call.
+
+Playbooks live in `~/.almanac/playbooks/<name>/` (`almanac playbook path`
+prints it): `playbook.json` and, optionally, `run.py`. A name is lowercase
+letters, digits and hyphens. A playbook has `triggers`, short lowercase
+phrases; a trigger hits when every word of it is in your request. A playbook
+can be tied to one project or apply everywhere.
+
+**How a match shows up.** For the newest request you typed in the main
+conversation (not sub-agents), Almanac scores the playbooks with plain code
+and no model call. The one with the most trigger words hit wins; ties go to the
+one used more, then by name. A request shorter than 12 characters, or a plain
+"yes" or "continue", never matches. A match adds one short note to that
+message, at most 1,500 characters: the playbook's name, when it applies, its
+steps, its skills and agents, and how to run its script. The note is stored the
+first time it is made, so every later request of that conversation, and any
+replay, carries the same text even if you edit or delete the playbook; the
+prompt cache keeps hitting. Each match counts as one use.
+
+**Drafts and approval.** Claude writes playbooks, and a script it writes could
+do anything, so a script is a draft until you approve it. `almanac playbook
+approve NAME` prints the first 40 lines of `run.py` and its hash, then records
+the hash. If `run.py` changes in any way afterwards, the playbook goes back to
+draft. A draft script is never run by Almanac; the note tells Claude the path so
+it can run it with Bash. A playbook with no script has nothing to approve.
+
+**The three tools** (served by `almanac mcp`, with the memory tools):
+
+- `playbook_find {query}`: the top 5 playbooks for some words.
+- `playbook_save {playbook, script}`: write or update a playbook. The bundled
+  `playbook` skill tells Claude when and how.
+- `playbook_run {name, args}`: run an approved script with the Python from
+  Almanac's own environment, in isolated mode, without a shell, in the session's
+  folder, for at most 120 seconds. It returns the exit code, stdout and stderr
+  (20,000 characters each at most).
+
+**Commands.** `almanac playbook list`, `show NAME`, `approve NAME`, `remove
+NAME`, `path`.
+
+**Settings.** `playbooks.enabled` (default `true`) turns the whole feature off;
+`playbooks.inject` (default `true`) set to `false` stops the notes but leaves
+the tools.
 
 ## Installing skills safely
 
@@ -733,6 +783,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac skill audit` | Scan installed skills and plugins not scanned yet, then a table (`--again` for all) |
 | `almanac pack list` | The pinned third-party skills and plugins in `pack.json` |
 | `almanac pack install [NAME]` | Install the pack's skills through the scan; plugins and programs are only shown |
+| `almanac playbook list` | Playbooks: name, status, uses, title. Also `show NAME`, `approve NAME`, `remove NAME`, `path` |
 | `almanac projects` | Projects seen. `projects merge FROM INTO`, `projects rename NAME NEW` |
 | `almanac config [set KEY VALUE \| path]` | Show or change settings |
 | `almanac serve [--port N]` | Run only the proxy, for clients you start yourself |
@@ -771,6 +822,8 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `routing.escalate_turns` | `3` | Turns a raise lasts |
 | `routing.prices`, `routing.work` | see `config.py` | Relative prices and expected work per turn, for pricing a switch |
 | `routing.windows` | 1,000,000 each | Context window per model id (unknown ids count as 200,000) |
+| `playbooks.enabled` | `true` | Match requests against playbooks and give Claude the playbook tools |
+| `playbooks.inject` | `true` | Add the note about the matching playbook to a request |
 | `cheatsheet.mode` | `"on"` | `"off"` stops adding the working rules for each model |
 | `offline.hold_minutes` | `480` | Minutes a model request waits for the network to return (`0` fails at once) |
 | `cloud.auto` | `false` | Keep a running task's snapshot on `origin`'s `almanac/handoff` branch (`on`/`off`) |
@@ -796,6 +849,7 @@ Everything is under `~/.almanac/` (or `ALMANAC_HOME`):
 | `config.json` | Settings you changed |
 | `logs/requests.jsonl` | One line per request: sizes, token counts, timing. No message text, no credentials |
 | `mcp.json` | The entry that tells Claude Code how to start the memory tools |
+| `playbooks/` | One folder per playbook: `playbook.json` and, optionally, `run.py` |
 | `skills.json` | Skills installed by `almanac skill add`: source, commit, content hash, score, verdict, date |
 | `skill-scans.json` | The last scan of each installed skill and plugin, by content hash |
 | `quarantine/` | Fetched sources while they are scanned; removed when the command ends |

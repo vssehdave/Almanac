@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Playbooks.** A playbook records how a repeated task is done: when it
+  applies, an ordered decision list, the skills and agents used, and
+  optionally a script that does the job with no model. Almanac matches each
+  new request against them with plain code and adds a short note naming the
+  one that applies, frozen per conversation so the cache keeps hitting. New
+  tools `playbook_find`, `playbook_save` and `playbook_run`, and
+  `almanac playbook list|show|approve|remove|path`. A script is a draft until
+  you approve its exact text, and goes back to draft when it changes. A bundled
+  `almanac` plugin carries the `playbook` skill that teaches Claude to write
+  them. Settings: `playbooks.enabled`, `playbooks.inject`.
+
 ## 0.2.0 (2026-11-16)
 
 - **Stalled hand-off.** With the automatic hand-off on, when the upstream

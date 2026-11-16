@@ -16,6 +16,7 @@ icons and marketplace files were left out; nothing else was changed unless noted
 | `crew` | github.com/affaan-m/ECC (`agents/`) | d2ef2680 | MIT | manifest written here; descriptions shortened, models set, skill sections added, references to its own commands removed |
 | `api-anything` | github.com/goodnight000/api-anything | d40abd44 | MIT | skill only; manifest written here: MCP server pinned to 0.4.0 and set to local-only, so nothing goes to its shared catalog |
 | `bla` | github.com/qybaihe/bla | 883c5bac | MIT | skill only; manifest written here: MCP server pinned to 3.4.1 |
+| `almanac` | written here | n/a | MIT | the `playbook` skill and its manifest |
 
 In every folder, `disable-model-invocation` was removed from the skills that had
 it, so the model can start any of them without a slash command. In `crew`, 62

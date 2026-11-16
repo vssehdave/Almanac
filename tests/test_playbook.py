@@ -480,5 +480,15 @@ class ToolTest(Home):
         self.assertEqual(launcher.with_memory_tools(["-p"], cfg), ["-p"])
 
 
+class BundleTest(unittest.TestCase):
+    def test_the_playbook_skill_ships_with_a_manifest_and_licence(self):
+        folder = Path(playbook.__file__).parent / "bundle" / "almanac"
+        self.assertEqual(json.loads((folder / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["name"], "almanac")
+        self.assertTrue((folder / "LICENSE").is_file())
+        head = (folder / "skills" / "playbook" / "SKILL.md").read_text(encoding="utf-8").split("---")[1]
+        self.assertIn("name: playbook", head)
+        self.assertIn("| `almanac` |", (folder.parent / "SOURCES.md").read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()
