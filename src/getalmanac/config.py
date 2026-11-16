@@ -19,6 +19,7 @@ DEFAULTS = {
         "stub_chars": 90,  # characters of description kept for a collapsed skill
         "max_full": 6,  # most skills shown in full per message on a match
         "always_full": [],  # skill names never collapsed
+        "scan_on_launch": True,  # scan new or changed skills and plugins with SkillSpector in the background (skills.py)
     },
     "tools": {
         "enabled": True,

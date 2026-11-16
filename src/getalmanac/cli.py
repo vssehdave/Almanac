@@ -5,6 +5,7 @@ import os
 import socket
 import sqlite3
 import ssl
+import subprocess
 import sys
 import time
 from urllib.parse import urlsplit
@@ -26,6 +27,11 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac route pin TIER       keep this project on small, medium or large (`pin off` lifts it)
   almanac cheatsheet show [opus|sonnet|haiku]   the rules added for that model, and their size
   almanac cheatsheet path      where your own copies go (opus.md, sonnet.md, haiku.md, common.md)
+  almanac skill scan PATH|URL  scan a skill or plugin with SkillSpector (exit 0 SAFE, 1 CAUTION, 2 DO_NOT_INSTALL, 3 error)
+  almanac skill add URL|PATH   fetch, scan, and install its skills only if SAFE (--skill NAME, --ref SHA)
+  almanac skill audit          scan installed skills and plugins not scanned yet (--again: all), then a table
+  almanac pack list            the pack: third-party skills and plugins, each pinned to a commit
+  almanac pack install [NAME]  install the pack's skills through the scan; plugins and programs are only shown
   almanac projects             projects seen; `projects merge FROM INTO`, `projects rename NAME NEW`
   almanac status               settings, files and recent activity
   almanac doctor               check that everything needed is in place
@@ -375,6 +381,71 @@ def _cheatsheet(rest):
         print("usage: almanac cheatsheet [show [opus|sonnet|haiku] | path]", file=sys.stderr)
         return 2
     return 0
+def _skill(rest):
+    from . import skills
+
+    parser = argparse.ArgumentParser(prog="almanac skill")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("scan").add_argument("target", help="a local folder or SKILL.md, or an https:// git URL")
+    add = sub.add_parser("add")
+    add.add_argument("source", help="an https:// git URL or a local folder")
+    add.add_argument("--skill", action="append", help="install only this skill folder (repeatable)")
+    add.add_argument("--ref", help="a full commit SHA to fetch instead of the default branch")
+    add.add_argument("--accept-caution", action="store_true", help="install even when the verdict is CAUTION")
+    add.add_argument("--replace", action="store_true", help="overwrite a skill with the same name")
+    audit = sub.add_parser("audit")
+    audit.add_argument("--again", action="store_true", help="scan everything, even unchanged items")
+    audit.add_argument("--pending", type=int, help=argparse.SUPPRESS)  # the background scan started at launch
+    args = parser.parse_args(rest)
+    if args.cmd == "audit":
+        return skills.audit(args.pending, args.again, out=_print)
+    if args.cmd == "add":
+        return skills.add(args.source, args.skill, args.ref, args.accept_caution, args.replace, out=_print)
+    if os.path.exists(args.target):
+        res = skills.scan(args.target)
+    else:
+        box = skills.quarantine()
+        try:
+            res = skills.scan(skills.fetch(args.target, None, box)[0])
+        except (ValueError, OSError, subprocess.SubprocessError) as exc:
+            print(f"almanac: could not fetch {args.target}: {exc}", file=sys.stderr)
+            return skills.ERROR
+        finally:
+            skills.remove(box)
+    _print(skills.render(res, args.target))
+    return skills.code(res)
+
+
+def _pack(rest):
+    from . import skills
+
+    parser = argparse.ArgumentParser(prog="almanac pack")
+    parser.add_argument("--file", help="a pack.json other than the one in the source tree")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("list")
+    install = sub.add_parser("install")
+    install.add_argument("name", nargs="?", help="one entry; default: all of them")
+    install.add_argument("--accept-caution", action="store_true")
+    install.add_argument("--replace", action="store_true")
+    args = parser.parse_args(rest)
+    try:
+        entries = skills.load_pack(args.file)
+    except ValueError as exc:
+        print(f"almanac: {exc}", file=sys.stderr)
+        return 2
+    if not entries:
+        print(f"almanac: no entries in {skills.pack_file(args.file)}; pass --file PATH", file=sys.stderr)
+        return 2
+    if args.cmd == "list":
+        for e in entries:
+            _print(f"{e['name']:<20} {e['kind']:<8} {e.get('source', '')} @ {str(e.get('ref', ''))[:12]}\n    {e.get('note', '')}")
+        return 0
+    if args.name:
+        entries = [e for e in entries if e["name"] == args.name]
+        if not entries:
+            print(f"almanac: the pack has no entry called {args.name!r}; see `almanac pack list`", file=sys.stderr)
+            return 2
+    return skills.pack_install(entries, args.accept_caution, args.replace, out=_print)
 
 
 def _mcp(_rest):
@@ -397,7 +468,8 @@ def _version(_rest):
 
 
 COMMANDS = {"serve": _serve, "report": _report, "status": _status, "doctor": _doctor, "config": _config,
-            "version": _version, "memory": _memory, "projects": _projects, "route": _route, "cheatsheet": _cheatsheet, "mcp": _mcp, "semantic": _semantic}
+            "version": _version, "memory": _memory, "projects": _projects, "route": _route, "cheatsheet": _cheatsheet, "mcp": _mcp, "semantic": _semantic,
+            "skill": _skill, "pack": _pack}
 
 
 def main(argv=None):

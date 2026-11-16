@@ -161,6 +161,12 @@ def run(args, cfg) -> int:
         print("almanac: Claude Code was not found. Install it (https://code.claude.com/docs/en/setup) "
               "or set ALMANAC_CLAUDE to its path.", file=sys.stderr)
         return 127
+    try:
+        from . import skills
+
+        skills.launch_check(cfg)
+    except Exception as exc:  # a broken check must never stop Claude Code from starting
+        print(f"almanac: the skill check failed: {exc}", file=sys.stderr)
     # A base URL the user already set (a company gateway) becomes the upstream.
     outer = os.environ.get("ANTHROPIC_BASE_URL")
     if outer and not os.environ.get("ALMANAC_UPSTREAM"):
