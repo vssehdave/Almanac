@@ -3,9 +3,12 @@
 A local proxy for Claude Code. It makes each session start with less context,
 gives every project a memory, and keeps long conversations inside the context
 window. Nothing leaves your machine except the requests Claude Code was already
-sending to Anthropic. (The exceptions are a model you choose to download, see
-[Search by meaning](#search-by-meaning), and the skill scanner, see
-[Installing skills safely](#installing-skills-safely).)
+sending to Anthropic. (The exceptions are things you choose to do: download a
+model, see [Search by meaning](#search-by-meaning), scan or fetch a skill, see
+[Installing skills safely](#installing-skills-safely), hand a conversation to a
+cloud session, see [Cloud hand-off](#cloud-hand-off), and turn on the
+[automatic hand-off](#automatic-hand-off), which pushes a branch to your git
+remote.)
 
 ```
 Claude Code  ──▶  almanac (127.0.0.1)  ──▶  api.anthropic.com
@@ -469,6 +472,162 @@ steps aside with a one-line notice if you use a proxy it cannot go through
 driven from a phone has not been tested yet, which is why the mode is off by
 default.
 
+## Cloud hand-off
+
+A Claude Code cloud session runs on Anthropic's machines, so it keeps going
+while this machine is offline. It uses the same allowance as your local
+sessions.
+
+A cloud session starts from a prompt and the repository, and nothing else. It
+does not get the local conversation or this memory. So Almanac writes the
+prompt: a hand-off packet, built from what it stored about the conversation and
+from `git`. It holds the last message you typed, your earlier requests, one
+line per exchange of what was done, the transcript of the latest work, and the
+state of the repository.
+
+```bash
+almanac cloud packet          # read the packet first; nothing leaves the machine
+almanac cloud send            # show it again, ask, then start a cloud session
+```
+
+Both use the latest conversation of the project the current folder belongs to.
+`--conversation ID` picks another one.
+
+`send` prints the packet and what the cloud will and will not see, and asks
+before it runs `claude --cloud <packet>` in the current folder. `--yes` skips
+the question; without a terminal to ask in, `send` refuses unless you give it.
+
+The cloud session clones the GitHub remote at your current branch, not this
+folder. So push first. `send` names the branch and its upstream and lists what
+the cloud will not see: commits that are not pushed, changes that are not
+committed, and untracked files.
+
+To get the work back:
+
+- `claude --teleport` pulls a cloud session back to this machine.
+- When GitHub is connected at claude.ai, the session pushes its work to a
+  `claude/` branch.
+
+This proxy and its memory do not travel, apart from the packet. Claude Code
+decides what else a cloud session gets from this machine (settings, hooks, MCP
+servers); Almanac does not know.
+
+- The packet is capped at 24,000 characters, because it travels as one
+  command-line argument. Past that, the oldest lines of "what was done" are
+  left out and the packet says how many. The task is never cut short of 6,000
+  characters. On Windows the packet is made shorter until the quoted command
+  fits the 32,767-character limit.
+- Common secret patterns are taken out of it, the same ones as from stored
+  text. That is best effort, not complete, and the packet also holds file
+  paths and the remote's address. Read it with `almanac cloud packet` first.
+- On Windows, `send` will not run Claude Code through a `claude.cmd` or `.bat`
+  launcher (an npm install), because `cmd.exe` would cut the packet at its
+  first line. Point `ALMANAC_CLAUDE` at `claude.exe`.
+- When `claude --cloud` fails, `send` says so: it needs a Claude Code with
+  `--cloud` and a login with a claude.ai account.
+- An exchange is stored when Claude Code finishes its turn. If you stop it in
+  the middle of a turn, the packet's task is the message before that one. Read
+  the packet first.
+
+**Status:** the packet and the command are tested with the call to Claude Code
+replaced. A cloud session started from a packet has not been tried yet.
+
+## Automatic hand-off
+
+Off by default, and opt-in per repository: it needs `cloud.auto` on **and**
+`almanac cloud on` run inside the repository. A repository you have not turned
+on gets no branch, no heartbeat and no git command from Almanac. When it is on,
+a task that stops because this machine went quiet (offline, asleep, shut down)
+is picked up by a scheduled cloud task.
+
+Nothing can start a cloud session from a machine with no network, so the
+trigger has to wait in the cloud already. It works like this:
+
+- While a task runs, Almanac pushes a snapshot of it to the branch
+  `almanac/handoff` on `origin`, once every heartbeat (10 minutes by default).
+  The snapshot is your current commit plus your uncommitted changes to tracked
+  files, plus the hand-off packet as `ALMANAC_HANDOFF.md` and a small
+  `almanac-handoff.json` (state, time, base branch and commit). Untracked files
+  never go in. A changed tracked file whose name looks like a credential
+  (`.env`, `*.pem`, `id_rsa`, ...), that holds a common secret pattern, that is
+  not text or that is over 1 MB stays at its committed version, and the packet
+  lists it. It is built with a separate index, so your index, HEAD, branches
+  and `git status` stay exactly as they were. Only that one branch is pushed:
+  no tags, whatever `push.followTags` says.
+- "Running" is what the proxy sees: a model request came in within the last
+  heartbeat, or the last reply asked for a tool. When a reply ends the turn,
+  Almanac pushes once with state `idle` and stops until the next request.
+- A scheduled task you create in the cloud runs every hour. If the hand-off
+  branch says `working` and is older than three heartbeats, it takes over: it
+  makes a `claude/almanac-takeover-<commit>` branch, carries on the task,
+  pushes and opens a draft pull request against your branch. Otherwise it
+  stops at once.
+
+All of it runs off the request path. No git, no `origin`, a refused push or
+no network costs one line in the log; requests go out as before.
+
+```bash
+almanac cloud watchdog        # the setup steps and the prompt for the scheduled task
+almanac config set cloud.auto on
+almanac cloud on              # in each repository that should take part (`almanac cloud off` stops it)
+almanac cloud status          # on or off here, the last heartbeat, any takeover branch on origin
+```
+
+Setup, once: connect GitHub (the Claude GitHub App at claude.ai/code, or
+`/web-setup` in Claude Code; on a Team plan an Owner must enable the GitHub
+connector), turn `cloud.auto` on and restart Almanac, run `almanac cloud on` in
+the repository, then in that repository run `/schedule` and create an hourly task with the prompt `almanac cloud
+watchdog` prints.
+
+When a takeover happened, `almanac cloud status` names the branch. Pull the
+work back with `claude --teleport` or `git fetch origin <branch>`.
+
+Know this before you turn it on:
+
+- **What is sent where.** To the `origin` remote of each repository you turned
+  on, branch `almanac/handoff`, force-pushed (that
+  branch only): your uncommitted edits to tracked files, every local commit
+  not pushed yet (they are the snapshot's history), and the packet. The packet
+  is your conversation's task and recent transcript, including tool output
+  such as file contents and command output from outside the repository, and
+  absolute paths. Common secret patterns are taken out of it; that is best
+  effort, not complete. Read one first with `almanac cloud packet`.
+- **Only repositories you turned on.** `almanac cloud on` lists the repository
+  by its project (its remote's address), so every clone of it on this machine
+  takes part. `almanac cloud off` stops it at the next heartbeat check, without
+  a restart; a branch already on origin stays until you delete it. On a public
+  repository the branch is public.
+- Your pre-push hooks run on every push. The commit says `[skip ci]`, which
+  stops GitHub Actions, but other services that build every branch may still
+  build it.
+- **Anyone who can push to `origin` can write that branch.** A collaborator
+  could plant a `working` hand-off, and the scheduled task would carry it out
+  with your GitHub access. Turn this on only for repositories only you push to.
+- `almanac memory forget` does not touch the branch; delete it with
+  `git push origin --delete almanac/handoff`.
+- **Cost.** There is no separate charge for the cloud machine, but each
+  scheduled run uses a little of your plan, even the runs that find nothing to
+  do. On a team with metered usage credits switched on, runs past the plan
+  limit can be billed.
+- **Delay.** A takeover can come up to one schedule interval plus three
+  heartbeats after the machine went quiet (about 1.5 hours with the defaults).
+  The first snapshot of a task is pushed one heartbeat after it starts, so a
+  task that stops sooner leaves nothing to take over.
+- **It cannot tell why the heartbeat stopped.** A laptop put to sleep in the
+  middle of a task looks the same as a dropped network, so the cloud may carry
+  on work you meant to come back to. Stopping a tool with Esc and then closing
+  the laptop looks like a task still running.
+- **One hand-off branch per repository.** Two machines, worktrees or
+  sessions working in one repository overwrite each other's snapshot, and an
+  `idle` from one can hide another that is still working. Work on a detached
+  HEAD is never taken over.
+- The setting is read when Almanac starts, so restart it after a change.
+
+**Status: the cloud side is untested.** The snapshot, the heartbeat, the idle
+push and what lands on the branch are tested against a local bare repository.
+Nothing has been pushed to a real GitHub repository, and the scheduled cloud
+task and its takeover have never been run.
+
 ## Behind a corporate proxy
 
 If your network sends outbound traffic through an HTTP proxy, Almanac goes
@@ -513,6 +672,10 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac memory show ID` | Read one stored exchange or topic |
 | `almanac memory recent` | The latest conversations, by project |
 | `almanac memory forget` | Delete conversations and their saved choices (`--project NAME`, `--conversation ID`, `--all`). Keeps any changed in the last hour unless you add `--force` |
+| `almanac cloud packet` | Print the hand-off packet for a cloud session (`--conversation ID`). Sends nothing |
+| `almanac cloud send` | Show that packet, ask, then start a Claude Code cloud session from it (`--conversation ID`, `--yes`) |
+| `almanac cloud watchdog` | The setup steps and the prompt for the scheduled task of the [automatic hand-off](#automatic-hand-off) |
+| `almanac cloud status` | Whether the automatic hand-off is on, its last heartbeat, and any takeover branch on origin |
 | `almanac semantic install` | Download the model for search by meaning (needs `getalmanac[semantic]`) |
 | `almanac semantic status` | Whether the packages and model are there, and how many exchanges have a vector |
 | `almanac semantic index` | Make vectors for every stored exchange that is waiting |
@@ -567,6 +730,8 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `routing.windows` | 1,000,000 each | Context window per model id (unknown ids count as 200,000) |
 | `cheatsheet.mode` | `"on"` | `"off"` stops adding the working rules for each model |
 | `offline.hold_minutes` | `480` | Minutes a model request waits for the network to return (`0` fails at once) |
+| `cloud.auto` | `false` | Keep a running task's snapshot on `origin`'s `almanac/handoff` branch (`on`/`off`) |
+| `cloud.heartbeat_minutes` | `10` | How often that snapshot is pushed while a task runs |
 | `remote_control` | `false` | Run sessions in HTTPS-proxy mode |
 | `port` | `8787` | Where `almanac serve` listens |
 | `upstream` | `https://api.anthropic.com` | Where requests are sent |
@@ -601,6 +766,10 @@ changed in the last hour, because that one may still be open; close it and run
 forget again, or add `--force`. Saved per-conversation choices are cleaned up
 after 45 days without being used, and a conversation that keeps running keeps
 its choices.
+
+With `cloud.auto` on, a copy of the latest packet and your uncommitted work
+also sits on GitHub, on the `almanac/handoff` branch. Forget does not reach it;
+`git push origin --delete almanac/handoff` deletes it.
 
 ## If something goes wrong
 

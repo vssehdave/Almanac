@@ -54,6 +54,35 @@
   while its request waits is dropped and never served later. `almanac report`
   shows how many requests waited. Tested with a fake upstream, not a real
   outage.
+- **Automatic hand-off (off by default).** With `cloud.auto` on, a task in
+  progress in a repository turned on with `almanac cloud on` (`off` stops it;
+  no other repository is touched) is pushed as a snapshot to `origin`'s
+  `almanac/handoff` branch every `cloud.heartbeat_minutes` (10): HEAD plus
+  uncommitted edits to tracked files (never untracked files; a changed file
+  that may hold a secret stays at its committed version), the hand-off
+  packet and its state. Only that branch is pushed, never tags. When the turn
+  ends it is marked idle. `almanac cloud watchdog` prints the setup and the
+  prompt for an hourly scheduled cloud task that takes over a snapshot whose
+  heartbeat stopped, on a `claude/almanac-takeover-` branch with a draft pull
+  request. `almanac cloud status` shows the last heartbeat and any takeover.
+  The snapshot leaves your index, HEAD and branches alone, runs off the
+  request path, and a failure is one log line. It puts uncommitted work on
+  GitHub; `git push origin --delete almanac/handoff` removes it. Each
+  scheduled run uses a little plan usage even when there is nothing to do.
+- **Cloud hand-off.** `almanac cloud packet` prints a hand-off packet for a
+  stored conversation: the last message you typed, your earlier requests, one
+  line per exchange of what was done, the latest transcript and the state of
+  the repository, capped at 24,000 characters. Common secret patterns are
+  taken out; that is best effort, so read it first. `almanac cloud send`
+  shows the packet, asks, and starts a Claude Code cloud session from it with
+  `claude --cloud`, so the work can go on while this machine is offline. The
+  cloud clones the GitHub remote, so `send` lists the commits that are not
+  pushed and the files that are not committed. On Windows it refuses a
+  `.cmd` launcher and keeps the quoted command under the length limit.
+- **More secret shapes are taken out of stored text:** `DB_PASS=`,
+  `AccountKey=`, `PRIVATE_KEY=`, JSON-escaped `NAME=\"value\"`, `whsec_`
+  and `hf_` keys, Slack webhooks, `Authorization:` values and private keys
+  cut off before their END line.
 - **Security: web pages cannot use the proxy.** A request with an `Origin`
   header, and every `OPTIONS` request, is now refused with a 403 before
   anything is forwarded. Refusals are logged (`"kind": "refused"`), without the
