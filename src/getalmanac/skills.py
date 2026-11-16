@@ -132,8 +132,11 @@ def render(res, label, limit=None) -> str:
     return "\n".join(lines)
 
 
-def tree_hash(path) -> str:
-    """sha256 over sorted relative paths and file bytes, skipping .git, node_modules and links."""
+def tree_hash(path, deadline=None):
+    """sha256 over sorted relative paths and file bytes, skipping .git, node_modules and links.
+
+    None when time.monotonic() passes `deadline` before the last file, so one big folder cannot hold up a start.
+    """
     root, digest = os.path.realpath(path), hashlib.sha256()
     if os.path.isfile(root):
         with open(root, "rb") as handle:
@@ -144,6 +147,8 @@ def tree_hash(path) -> str:
             full = os.path.join(here, name)
             if linked(full):
                 continue
+            if deadline is not None and time.monotonic() > deadline:
+                return None
             digest.update(os.path.relpath(full, root).replace(os.sep, "/").encode("utf-8", "surrogatepass") + b"\0")
             try:
                 with open(full, "rb") as handle:
@@ -169,7 +174,10 @@ def remove(path):
         func(name)
 
     if os.path.exists(path):
-        shutil.rmtree(path, onerror=again)
+        if sys.version_info >= (3, 12):
+            shutil.rmtree(path, onexc=again)
+        else:
+            shutil.rmtree(path, onerror=again)
 
 
 def quarantine() -> Path:
@@ -441,13 +449,14 @@ def installed_items():
 
 def triage(items, budget=None):
     """(flagged, todo, unhashed): stored non-SAFE results still current, items to scan, items left for time."""
-    records, flagged, todo, start = load_json(_scans_path(), {}), [], [], time.monotonic()
+    records, flagged, todo = load_json(_scans_path(), {}), [], []
+    deadline = time.monotonic() + budget if budget else None
     for n, (label, kind, path) in enumerate(items):
-        if budget and time.monotonic() - start > budget:
+        digest, record = tree_hash(path, deadline), records.get(path)
+        if digest is None:  # out of time, part way through this item or before it
             return flagged, todo, items[n:]
-        digest, record = tree_hash(path), records.get(path)
         if isinstance(record, dict) and record.get("hash") == digest:
-            if record.get("verdict") != "SAFE":
+            if record.get("verdict") != "SAFE" and record.get("accepted") != digest:
                 flagged.append((label, path, record))
         else:
             todo.append((label, kind, path, digest))
@@ -551,29 +560,75 @@ def audit(pending=None, again=False, out=print) -> int:
         out(f"scanning {len(todo)} item(s); a plugin can take a few minutes")
         scan_items(todo, out)
     records, worst = load_json(_scans_path(), {}), 0
-    out(f"\n{'VERDICT':<15}{'SCORE':>5}  {'KIND':<6} NAME")
+    out(f"\n{'VERDICT':<24}{'SCORE':>5}  {'KIND':<6} NAME")
     for label, kind, path in items:
         record = records.get(path) or {}
         verdict = record.get("verdict", "UNSCANNED")
         worst = max(worst, VERDICTS.get(verdict, ERROR))
+        if record.get("accepted") and record.get("accepted") == record.get("hash"):
+            verdict = f"accepted {verdict}"
         top = (record.get("issues") or [{}])[0]
         detail = f"  {top.get('severity')} {top.get('category')} {top.get('file')}" if top else ""
         score = record.get("score")
-        out(f"{verdict:<15}{'-' if score is None else score:>5}  {kind:<6} {label}{detail}")
+        out(f"{verdict:<24}{'-' if score is None else score:>5}  {kind:<6} {label}{detail}")
     return worst
+
+
+def _find(which):
+    """(label, kind, path) of the installed item with this name or path, or None."""
+    real = os.path.realpath(which) if os.path.exists(which) else None
+    for item in installed_items():
+        if which in (item[0], item[0].split("@")[0]) or item[2] == real:
+            return item
+    return None
+
+
+def accept(which, out=print) -> int:
+    """Record that the owner has read this item's findings at its current contents. Only the launch warning changes."""
+    item = _find(which)
+    if not item:
+        out(f"almanac: no installed skill or plugin called {which!r}")
+        return 2
+    label, kind, path = item
+    data = load_json(_scans_path(), {})
+    record = data.get(path)
+    if not isinstance(record, dict):
+        out(f"almanac: {label} has no stored scan result; run `almanac skill audit` first")
+        return 2
+    if record.get("hash") != tree_hash(path):
+        out(f"almanac: {label} changed since its last scan; run `almanac skill audit` and look again")
+        return 2
+    out(warning([(label, path, record)]).split("\n", 1)[1].rsplit("\n", 1)[0])
+    record["accepted"] = record["hash"]
+    save_json(_scans_path(), data)
+    out(f"accepted {label} at this exact content. Any change to its files brings the warning back.")
+    return 0
+
+
+def unaccept(which, out=print) -> int:
+    item = _find(which)
+    data = load_json(_scans_path(), {})
+    record = data.get(item[2]) if item else None
+    if not isinstance(record, dict) or "accepted" not in record:
+        out(f"almanac: {which!r} is not accepted")
+        return 2
+    del record["accepted"]
+    save_json(_scans_path(), data)
+    out(f"{item[0]} warns at launch again")
+    return 0
 
 
 # The pack: the owner's list of third-party skills and plugins, each pinned to a commit.
 KINDS = ("skill", "plugin", "binary", "builtin")
 
 
-def pack_file(path=None) -> Path:
-    """pack.json: the given path, else the one beside the source tree, else the current folder."""
+def pack_file(path=None):
+    """pack.json: the given path, else the one shipped in the package."""
     if path:
         return Path(path)
-    # shortcut: an installed wheel has no repo root, so outside a source checkout pass --file
-    beside = Path(__file__).resolve().parents[2] / "pack.json"
-    return beside if beside.exists() else Path("pack.json")
+    from importlib import resources
+
+    return resources.files("getalmanac").joinpath("pack.json")
 
 
 def load_pack(path=None):

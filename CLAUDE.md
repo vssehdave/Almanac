@@ -33,6 +33,9 @@ body, in five ways:
   already talks to. No other host receives conversation content. Never add a
   hosted service or telemetry. The one other host is Hugging Face, contacted only
   by `almanac semantic install` to download a model, with no conversation content.
+  GitHub is contacted only by `almanac skill add` and `almanac pack install`, to
+  fetch what the owner named. The skill scanner sends dependency names and
+  versions to api.osv.dev. Neither receives conversation content.
   Summary calls go to that same upstream, and `memory.summary_model` set to `""`
   turns them off.
 - **Never read, store or log credentials.** Auth headers are forwarded as

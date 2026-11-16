@@ -399,18 +399,26 @@ removed; that is your call. Anything new or changed is scanned by a background
 process, at most 5 per start, because one scan takes from about 15 seconds to
 several minutes. Its results show at the next start. On a machine with many
 skills the first starts work through them 5 at a time; `almanac skill audit`
-scans all of them now and prints a table (`--again` rescans everything). Set
+scans all of them now and prints a table (`--again` rescans everything).
+Hashing stops after 10 seconds, even part way through a folder, and what is
+left waits for the next start.
+
+Once you have read an item's findings, `almanac skill accept NAME` stops its
+launch warning. It prints what you are accepting and needs a stored scan of the
+item as it is now. The acceptance holds for those exact files only: any change
+brings the scan and the warning back. `almanac skill unaccept NAME` undoes it.
+Accepting changes nothing in `skill add`, where DO_NOT_INSTALL still has no
+override. Set
 `skills.scan_on_launch` to `false` to turn this off.
 
 **The pack**
 
-`pack.json` in this repo lists third-party skills and plugins, each pinned to a
+`pack.json` (shipped with Almanac) lists third-party skills and plugins, each pinned to a
 full commit SHA. `almanac pack list` shows them. `almanac pack install [NAME]`
 installs the skill entries through the same scan as `skill add`, at the pinned
 commit. Plugin entries are only scanned and shown with their manual commands,
-and program entries (the scanner, a secret scanner) are only listed.
-`pack.json` is read from the source checkout; with an installed package, pass
-`--file PATH`.
+and program entries (the scanner, a secret scanner) are only listed. `--file
+PATH` reads another pack file.
 
 ## Why the cache keeps working
 
@@ -515,6 +523,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac cheatsheet path` | Where your own copies of the rules go |
 | `almanac skill scan PATH\|URL` | Scan a skill or plugin (exit 0 SAFE, 1 CAUTION, 2 DO_NOT_INSTALL, 3 not scanned) |
 | `almanac skill add URL\|PATH` | Fetch into quarantine, scan, install the skills only if SAFE (`--skill`, `--ref`, `--accept-caution`, `--replace`) |
+| `almanac skill accept NAME` | Stop the launch warning for an item at its current contents (`skill unaccept NAME` undoes it) |
 | `almanac skill audit` | Scan installed skills and plugins not scanned yet, then a table (`--again` for all) |
 | `almanac pack list` | The pinned third-party skills and plugins in `pack.json` |
 | `almanac pack install [NAME]` | Install the pack's skills through the scan; plugins and programs are only shown |
