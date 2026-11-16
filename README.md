@@ -589,6 +589,19 @@ trigger has to wait in the cloud already. It works like this:
   makes a `claude/almanac-takeover-<commit>` branch, carries on the task,
   pushes and opens a draft pull request against your branch. Otherwise it
   stops at once.
+- If the upstream itself keeps failing while this machine can still reach
+  GitHub (an API outage or overload, not a dead network), waiting 30 minutes
+  would be wasted. After `cloud.stall_after` failed attempts in a row (5 by
+  default; `0` turns this off) Almanac pushes the snapshot at once with state
+  `stalled`, and the next hourly run takes it over without the age check.
+  Only a connection error, a timeout or a status of 500 or more counts, 529
+  included. A 429 is your plan's usage limit, which a cloud session draws on
+  too, and 400, 401 and 403 are not outages, so none of them count. Any reply
+  below 400 resets the count and pushes `working` again at once. One `stalled`
+  push per stall; if it fails, the normal heartbeat rules go on.
+  **Known limit:** if the local session recovers after a takeover has started,
+  both carry on: the cloud one on its own `claude/almanac-takeover-...`
+  branch. Almanac cannot stop it, so check `almanac cloud status`.
 
 All of it runs off the request path. No git, no `origin`, a refused push or
 no network costs one line in the log; requests go out as before.
@@ -759,6 +772,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `offline.hold_minutes` | `480` | Minutes a model request waits for the network to return (`0` fails at once) |
 | `cloud.auto` | `false` | Keep a running task's snapshot on `origin`'s `almanac/handoff` branch (`on`/`off`) |
 | `cloud.heartbeat_minutes` | `10` | How often that snapshot is pushed while a task runs |
+| `cloud.stall_after` | `5` | Failed upstream attempts in a row (connection error or status 500+) before the snapshot is pushed at once as `stalled`; `0` is off |
 | `remote_control` | `false` | Run sessions in HTTPS-proxy mode |
 | `port` | `8787` | Where `almanac serve` listens |
 | `upstream` | `https://api.anthropic.com` | Where requests are sent |

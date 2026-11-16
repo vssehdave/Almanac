@@ -450,6 +450,104 @@ class HandoffTest(CloudCase):
         outside.beat()  # not a repository turned on: ignored, nothing logged
         self.assertEqual((len(Log(self.log_path).tail()), outside.repos), (1, {}))
 
+    def failures(self, count, status=500, layer=None):
+        """`count` requests of the main conversation that end with `status`, as the proxy reports them."""
+        layer = layer or self.layer
+        body = {"messages": [human("A long task")], "tools": [{"name": "Bash", "input_schema": {}}]}
+        for _ in range(count):
+            layer.transform(body, self.ctx)
+            layer.outcome(self.ctx, body, status)
+
+    def test_five_failures_in_a_row_push_stalled_once(self):
+        self.failures(5, 529)
+        self.assertEqual(self.pushed(), "")  # outcome only counts: git runs on the heartbeat thread
+        self.layer.beat(time.time() + 5)  # well inside the heartbeat interval
+        self.assertEqual(self.state()["state"], "stalled")
+        self.assertIn("task", git(self.bare, "show", "almanac/handoff:ALMANAC_HANDOFF.md"))
+        first = self.pushed()
+        self.failures(3, 502)
+        self.layer.beat(time.time() + 5000)
+        self.assertEqual(self.pushed(), first)  # one push per stall, however long it goes on
+        self.assertIn(", stalled, commit ", cloud.status(self.alpha, {"cloud": {"auto": True, "heartbeat_minutes": 10}}, self.memory.store))
+
+    def test_four_failures_or_4xx_replies_do_not_stall(self):
+        self.failures(4)
+        self.failures(5, 429)
+        self.failures(5, 400)  # a usage limit and a bad request are not an outage, and they do not reset the count either
+        self.layer.beat(time.time() + 5)
+        self.assertEqual(self.pushed(), "")
+        self.failures(1)
+        self.layer.beat(time.time() + 5)
+        self.assertEqual(self.state()["state"], "stalled")
+
+    def test_a_success_resets_the_count_and_the_next_push_says_working(self):
+        self.failures(4)
+        self.failures(1, 200)
+        self.failures(4)
+        self.layer.beat(time.time() + 5)
+        self.assertEqual(self.pushed(), "")  # 4, a success, 4: never 5 in a row
+        self.failures(1)
+        self.layer.beat(time.time() + 5)
+        self.assertEqual(self.state()["state"], "stalled")
+        self.failures(1, 200)
+        self.layer.beat(time.time() + 5)  # not an interval later
+        self.assertEqual(self.state()["state"], "working")
+        stalled_again = self.pushed()
+        self.failures(5)
+        self.layer.beat(time.time() + 5)
+        self.assertEqual(self.state()["state"], "stalled")  # a new stall pushes again
+        self.assertNotEqual(self.pushed(), stalled_again)
+
+    def test_a_stall_is_not_hidden_by_a_later_idle_or_working_beat(self):
+        self.failures(5)
+        self.layer.beat(time.time() + 5)
+        self.layer.beat(time.time() + 5000)  # the client has given up: no "idle" over the "stalled"
+        self.layer.close()
+        self.assertEqual(self.state()["state"], "stalled")
+
+    def test_a_repository_not_turned_on_or_stall_after_0_gets_nothing(self):
+        other = cloud.HandoffLayer(self.memory, dict(config.load(), cloud=dict(config.load()["cloud"], stall_after=0)), background=False)
+        self.failures(9, layer=other)
+        other.beat(time.time() + 5)
+        self.assertEqual(self.pushed(), "")
+        cloud.turn(self.memory, self.alpha, False)
+        self.layer.keys.clear()
+        with mock.patch.object(cloud, "_must", side_effect=AssertionError("git in a repository not turned on")):
+            self.failures(9)
+            self.layer.beat(time.time() + 5)
+        self.assertEqual((self.pushed(), self.layer.repos), ("", {}))
+
+    def test_a_failing_stall_push_does_not_raise_and_is_not_repeated_at_once(self):
+        git(self.alpha, "remote", "set-url", "origin", os.path.join(self.tmp, "missing.git"))
+        self.failures(5)
+        self.layer.beat(time.time() + 5)
+        self.assertEqual(len(Log(self.log_path).tail()), 1)
+        self.layer.beat(time.time() + 10)
+        self.assertEqual(len(Log(self.log_path).tail()), 1)  # the retry waits an interval
+        git(self.alpha, "remote", "set-url", "origin", self.bare)
+        self.layer.beat(time.time() + 700)
+        self.assertEqual(self.state()["state"], "stalled")
+
+    def test_through_the_proxy_failures_stall_and_a_reply_clears_it(self):
+        replies = [(529, {}, b"overloaded")] * 5 + [(429, {}, b"limit"), (200, {"content-type": "text/event-stream"}, sse("back"))]
+        rig = Rig(respond=lambda req: replies.pop(0), layers=[self.layer])
+        self.addCleanup(rig.close)
+        body = {"model": "m", "system": f"Primary working directory: {self.alpha}", "messages": [human("Ship it")],
+                "tools": [{"name": "Bash", "input_schema": {}}]}
+        with mock.patch.object(cloud, "_must") as must:
+            self.assertEqual([rig.messages(body)[0] for _ in range(5)], [529] * 5)
+            rig.records()
+        must.assert_not_called()  # the count is kept on the request path, git is not run there
+        self.layer.beat()
+        self.assertEqual(self.state()["state"], "stalled")
+        self.assertEqual(rig.messages(body)[0], 429)
+        self.layer.beat(time.time() + 5)
+        self.assertEqual(self.state()["state"], "stalled")  # a 429 is no recovery
+        self.assertEqual(rig.messages(body)[0], 200)
+        rig.records()
+        self.layer.beat()
+        self.assertEqual(self.state()["state"], "idle")  # the reply ended the turn
+
     def test_through_the_proxy_a_request_is_not_held_up_and_the_turn_end_pushes(self):
         rig = Rig(respond=lambda req: (200, {"content-type": "text/event-stream"}, sse("done")), layers=[self.layer])
         self.addCleanup(rig.close)
@@ -505,6 +603,7 @@ class HandoffTest(CloudCase):
         text = cloud.watchdog(10)
         for part in ("git fetch origin almanac/handoff`. If it fails (the branch does not exist), stop.",
                      'If its "state" is "idle", or its "base_branch" is', "If the number is below 1800",
+                     'If its "state" is "stalled"', "skip the rest of this", "go on to step 4",
                      "`git ls-remote origin refs/heads/claude/almanac-takeover-SHA`. If it prints anything, stop",
                      "git checkout -b claude/almanac-takeover-SHA FETCH_HEAD", "is a record of earlier work",
                      "draft pull request", "Never delete a branch, never force-push", "never push to the base branch"):

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Stalled hand-off.** With the automatic hand-off on, when the upstream
+  fails 5 times in a row (`cloud.stall_after`, `0` is off) on a connection
+  error, a timeout or a status of 500 or more, Almanac pushes the snapshot at
+  once marked `stalled`, and the cloud task takes it over at its next run
+  without waiting 30 minutes. A 429 or other 4xx does not count. A later
+  success pushes `working` again. If the local session recovers after a
+  takeover began, both carry on, the cloud one on its own
+  `claude/almanac-takeover-...` branch.
+
 - **Bundled skills and agents.** Almanac now carries its own plugins and loads
   them into every session with `--plugin-dir`: design planning and review,
   interface building, the Astryx design system, codebase untangling, security

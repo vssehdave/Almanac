@@ -354,12 +354,16 @@ class HandoffLayer:
 
     "Running" is what the proxy sees of the main conversation: a request came in within the last interval, or
     the last reply asked for a tool. A reply that ends the turn pushes "idle" once and the heartbeat stops.
+    When the upstream fails `cloud.stall_after` times in a row (a connection error, or a status of 500 or
+    more; a 4xx is not an outage), it pushes "stalled" once at once, so the cloud task need not wait out the
+    quiet time; a later success pushes "working" at once.
     The request path only records times; git runs on this layer's own thread, and every failure is one log line.
     """
 
     def __init__(self, memory, cfg, background=True):
         self.memory, self.log = memory, None
         self.interval = max(1, cfg["cloud"]["heartbeat_minutes"]) * 60
+        self.stall_after = cfg["cloud"].get("stall_after", 5)  # 0: off
         self.repos = {}  # working folder -> what the last request and reply of its conversation said
         self.lock, self.busy, self.wake = threading.Lock(), threading.Lock(), threading.Event()
         self.background, self.thread = background, None
@@ -376,7 +380,7 @@ class HandoffLayer:
             self.thread = threading.Thread(target=self._loop, daemon=True)
             self.thread.start()
         return self.repos.setdefault(cwd, {"seen": 0, "tool": False, "ended": True, "due": 0, "pushed": None,
-                                           "live": None, "lane": "", "session": ""})
+                                           "fails": 0, "stall": False, "live": None, "lane": "", "session": ""})
 
     def transform(self, body, ctx):
         if not (ctx.cwd and MemoryLayer._main_thread(body, ctx) and self._listed(ctx.cwd)):
@@ -402,6 +406,29 @@ class HandoffLayer:
         if not tool:
             self.wake.set()
 
+    def outcome(self, ctx, orig, status):
+        """The final status of one request, from the proxy. Counts failures in a row; never blocks or runs git."""
+        if not (self.stall_after > 0 and orig and ctx.cwd and (status >= 500 or status < 400)
+                and MemoryLayer._main_thread(orig, ctx) and self._listed(ctx.cwd)):
+            return  # a 4xx is neither an outage (429 is the usage limit) nor a recovery
+        self.log = ctx.proxy.log
+        with self.lock:
+            entry = self.repos.get(ctx.cwd)
+            if entry is None:
+                return
+            if status < 400:
+                entry["fails"], entry["stall"] = 0, False
+                if entry["pushed"] != "stalled":
+                    return
+                entry["due"] = 0  # say "working" now: a stale "stalled" would have the cloud take over
+            else:
+                entry["fails"] += 1
+                entry["live"] = orig["messages"]  # the turn that is stuck is the task
+                if entry["fails"] != self.stall_after:
+                    return
+                entry["stall"], entry["due"] = True, 0
+        self.wake.set()
+
     def _loop(self):
         while True:
             self.wake.wait(min(60, self.interval / 2))
@@ -423,9 +450,13 @@ class HandoffLayer:
                         del self.repos[cwd]  # turned off: no more git in it
                         continue
                     working = not entry["ended"] and (entry["tool"] or now - entry["seen"] < self.interval)
-                    if now >= entry["due"] and (working or entry["pushed"] != "idle"):
+                    if entry["stall"]:  # stays "stalled" until a reply gets through: not "working", and not "idle" if the client gives up
+                        go, state = entry["pushed"] != "stalled", "stalled"
+                    else:
+                        go, state = working or entry["pushed"] != "idle", "working" if working else "idle"
+                    if go and now >= entry["due"]:
                         entry["due"] = now + self.interval  # also spaces out retries when offline
-                        due.append((cwd, dict(entry), "working" if working else "idle"))
+                        due.append((cwd, dict(entry), state))
             for cwd, entry, state in due:
                 self._push(cwd, entry, state)
 
@@ -437,7 +468,7 @@ class HandoffLayer:
             return
         try:
             for cwd, entry in list(self.repos.items()):
-                if entry["pushed"] == "working" and self._listed(cwd):
+                if entry["pushed"] == "working" and not entry["stall"] and self._listed(cwd):  # a pending stall must not become "idle"
                     self._push(cwd, entry, "idle", timeout=15)
         finally:
             self.busy.release()
@@ -473,8 +504,10 @@ at once and change nothing.
 1. Run `git fetch origin {HANDOFF}`. If it fails (the branch does not exist), stop.
 2. Run `git show FETCH_HEAD:almanac-handoff.json`. If its "state" is "idle", or its "base_branch" is
    empty (the local work was on no branch), stop.
-3. Run `echo $(( $(date +%s) - $(git log -1 --format=%ct FETCH_HEAD) ))`. If the number is below {quiet * 60}
-   (the commit is younger than {quiet} minutes), stop: the local session is still sending its heartbeat.
+3. If its "state" is "stalled", the local session reported that the upstream keeps failing: skip the rest of this
+   step and go on to step 4. Otherwise run `echo $(( $(date +%s) - $(git log -1 --format=%ct FETCH_HEAD) ))`.
+   If the number is below {quiet * 60} (the commit is younger than {quiet} minutes), stop: the local session
+   is still sending its heartbeat.
 4. Run `git rev-parse --short=12 FETCH_HEAD`; call the result SHA. Run
    `git ls-remote origin refs/heads/{TAKEOVER}SHA`. If it prints anything, stop: this hand-off was
    already taken over.
