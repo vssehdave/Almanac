@@ -33,6 +33,7 @@ prompt = no
 CN = Almanac session CA (this machine only)
 [ext]
 basicConstraints = critical,CA:TRUE,pathlen:0
+subjectKeyIdentifier = hash
 keyUsage = critical,keyCertSign
 nameConstraints = critical,permitted;DNS:{host}
 """
@@ -43,6 +44,7 @@ prompt = no
 CN = {host}
 [ext]
 subjectAltName = DNS:{host}
+authorityKeyIdentifier = keyid
 basicConstraints = critical,CA:FALSE
 keyUsage = critical,digitalSignature,keyEncipherment
 extendedKeyUsage = serverAuth
