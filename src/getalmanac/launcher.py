@@ -30,9 +30,16 @@ def find_claude():
     return None
 
 
-def child_env(url: str, parent=None) -> dict:
+def own_context(env: dict, cfg) -> dict:
+    """Switch off Claude Code's own auto-compaction, when Almanac keeps the context (compaction on, `own_the_context`)."""
+    if cfg and cfg["compaction"]["enabled"] and cfg["compaction"]["own_the_context"]:
+        env["DISABLE_AUTO_COMPACT"] = "1"
+    return env
+
+
+def child_env(url: str, parent=None, cfg=None) -> dict:
     """Claude Code's environment. Its login is left alone: no key or token is set here."""
-    env = dict(os.environ if parent is None else parent)
+    env = own_context(dict(os.environ if parent is None else parent), cfg)
     env["ANTHROPIC_BASE_URL"] = url
     # A custom base URL makes Claude Code hide model features it cannot verify through
     # a gateway. This relay changes none of them, so say it is the first-party API.
@@ -90,9 +97,9 @@ def https_session(cfg):
     return None
 
 
-def https_env(session, port: int, parent=None) -> dict:
+def https_env(session, port: int, parent=None, cfg=None) -> dict:
     """Claude Code's environment in HTTPS-proxy mode: its base URL untouched, this proxy as HTTPS_PROXY."""
-    env = dict(os.environ if parent is None else parent)
+    env = own_context(dict(os.environ if parent is None else parent), cfg)
     for name in ("ANTHROPIC_BASE_URL", "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL", "https_proxy", "no_proxy"):
         env.pop(name, None)
     env["HTTPS_PROXY"] = session.proxy_url(port)
@@ -187,7 +194,7 @@ def run(args, cfg) -> int:
     if not url:
         proxy, server, url = start(cfg)
         proxy.tls = session
-    env = https_env(session, server.server_address[1]) if session else child_env(url)
+    env = https_env(session, server.server_address[1], cfg=cfg) if session else child_env(url, cfg=cfg)
     args = with_memory_tools(list(args), cfg)
     args = with_bundle(args, cfg)
     # Ctrl+C belongs to Claude Code. A handler (not SIG_IGN) so the child does not inherit it.
