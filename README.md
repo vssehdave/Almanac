@@ -464,6 +464,49 @@ NAME`, `path`.
 `playbooks.inject` (default `true`) set to `false` stops the notes but leaves
 the tools.
 
+**Finding playbooks by itself.** Almanac can also notice a task you repeat in
+your past sessions and write it up, with no effort from you.
+
+- `almanac playbook mine [--days 30] [--min 3]` uses no model. It reads Claude
+  Code's own session files (`<config folder>/projects/<project>/<session>.jsonl`)
+  in `~/.claude`, in `$CLAUDE_CONFIG_DIR` if set, and in every folder listed in
+  `playbooks.transcript_dirs` (for a second account, for example
+  `almanac config set playbooks.transcript_dirs '["~/.claude-work"]'`). It only
+  reads: nothing in those folders is changed. It skips sub-agent lines, files
+  older than `--days`, and folders of Almanac's and other tools' own background
+  sessions (names containing `claude-mem-observer`, `AppData-Local-Temp` or
+  `-Temp-`). For each request you typed that was followed by at least 3 tool
+  calls, it keeps the text (secrets removed, cut to 600 characters), the
+  session, the project, the names of the tools used (for Bash only the first
+  two words of the command) and the tokens spent. It never keeps a tool result,
+  Claude's replies or a command's full text. Requests with similar wording are
+  grouped; a group with at least `--min` requests from at least 2 sessions, that
+  no playbook's triggers already match, is a candidate. The top 20 by tokens
+  are saved in `~/.almanac/playbooks/_candidates.json` and printed as a table
+  with the count, sessions, tokens and a first example.
+- `almanac playbook compile [--top 1] [--dry-run]` takes the best candidate not
+  yet compiled and runs one headless Claude Code session (Sonnet, in a fresh
+  temporary folder, allowed only to read and write there and to run Python) to
+  write it as `playbook.json` and, if every step is mechanical, `run.py` with a
+  self-test. The candidate is given to it as quoted data, not as instructions.
+  Almanac, not the model, then reads the two files, checks them like any
+  playbook, saves them as a draft with source `miner`, and deletes the folder.
+  A candidate that does not produce a valid playbook is not tried again for 7
+  days. `--dry-run` prints the prompt and the command and runs nothing.
+- **In the background.** Each time `almanac` starts Claude Code, a detached
+  process mines your sessions if the candidates are more than a day old and
+  then compiles within the daily limit. It never delays the start and prints
+  nothing into the session (its log is `~/.almanac/logs/playbook-miner.log`).
+  The cost is at most `playbooks.compile_per_day` Sonnet sessions a day on your
+  Claude Code login (one by default; `0` turns compiling off). When a draft made
+  this way waits for your approval, the next start shows one line with its name.
+  A script it wrote runs only after `almanac playbook approve NAME`, like any
+  other.
+
+Settings for this: `playbooks.background` (default `true`),
+`playbooks.compile_per_day` (default `1`) and `playbooks.transcript_dirs`
+(default `[]`).
+
 ## Installing skills safely
 
 Skills and plugins from other people run with your permissions. Almanac puts a
@@ -823,7 +866,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac skill audit` | Scan installed skills and plugins not scanned yet, then a table (`--again` for all) |
 | `almanac pack list` | The pinned third-party skills and plugins in `pack.json` |
 | `almanac pack install [NAME]` | Install the pack's skills through the scan; plugins and programs are only shown |
-| `almanac playbook list` | Playbooks: name, status, uses, title. Also `show NAME`, `approve NAME`, `remove NAME`, `path` |
+| `almanac playbook list` | Playbooks: name, status, uses, title. Also `show NAME`, `approve NAME`, `remove NAME`, `path`, `mine [--days N] [--min N]`, `compile [--top N] [--dry-run]` |
 | `almanac projects` | Projects seen. `projects merge FROM INTO`, `projects rename NAME NEW` |
 | `almanac config [set KEY VALUE \| path]` | Show or change settings |
 | `almanac serve [--port N]` | Run only the proxy, for clients you start yourself |
@@ -868,6 +911,9 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `routing.windows` | 1,000,000 each | Context window per model id (unknown ids count as 200,000) |
 | `playbooks.enabled` | `true` | Match requests against playbooks and give Claude the playbook tools |
 | `playbooks.inject` | `true` | Add the note about the matching playbook to a request |
+| `playbooks.transcript_dirs` | `[]` | More Claude Code config folders to mine for repeated tasks (`~/.claude` and `$CLAUDE_CONFIG_DIR` are always read), for example `["~/.claude-work"]` |
+| `playbooks.background` | `true` | Mine and compile in the background at each start |
+| `playbooks.compile_per_day` | `1` | Most Sonnet sessions a day that write a playbook from a repeated task (`0` is off) |
 | `cheatsheet.mode` | `"on"` | `"off"` stops adding the working rules for each model |
 | `offline.hold_minutes` | `480` | Minutes a model request waits for the network to return (`0` fails at once) |
 | `cloud.auto` | `false` | Keep a running task's snapshot on `origin`'s `almanac/handoff` branch (`on`/`off`) |

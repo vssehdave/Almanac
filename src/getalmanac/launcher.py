@@ -186,6 +186,12 @@ def run(args, cfg) -> int:
         skills.launch_check(cfg)
     except Exception as exc:  # a broken check must never stop Claude Code from starting
         print(f"almanac: the skill check failed: {exc}", file=sys.stderr)
+    try:
+        from . import mine
+
+        mine.launch_check(cfg)
+    except Exception:  # the playbook miner is an extra: it must never stop Claude Code from starting
+        pass
     # A base URL the user already set (a company gateway) becomes the upstream.
     outer = os.environ.get("ANTHROPIC_BASE_URL")
     if outer and not os.environ.get("ALMANAC_UPSTREAM"):

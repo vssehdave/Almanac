@@ -40,4 +40,8 @@ apply, and load them before you start. Say in one line which you used.
   language reviewer or `crew:security-reviewer`. Start its prompt with a
   `Difficulty:` line. Do small things yourself: no agent for a job of a few
   tool calls, and never more than two agents at once.
+- When a note says an Almanac playbook matches the request, follow it, and
+  where it has an approved script run that with `playbook_run` and do not redo
+  the steps by hand. At the end of a multi-step task that will come up again,
+  record it with the `almanac:playbook` skill.
 - If a skill or agent named here is not in your list, carry on without it.
