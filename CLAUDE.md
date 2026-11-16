@@ -57,4 +57,5 @@ body, in four ways:
 - One branch per phase, then a pull request, then merge.
 - Do not name other tools this project drew ideas from in commits, comments or
   docs.
-- Publishing to PyPI needs the owner's explicit yes.
+- Almanac is the owner's personal tool in a private repository. It is installed
+  from the checkout (`pip install -e .`) and is never published to PyPI.
