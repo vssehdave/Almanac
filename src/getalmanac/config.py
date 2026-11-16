@@ -21,6 +21,9 @@ DEFAULTS = {
         "always_full": [],  # skill names never collapsed
         "scan_on_launch": True,  # scan new or changed skills and plugins with SkillSpector in the background (skills.py)
     },
+    "startup": {
+        "agent_chars": 60,  # characters of description kept for a listed agent type; 0 leaves the agent listing alone
+    },
     "tools": {
         "enabled": True,
         # deferred unless the conversation or the project's history calls for them
@@ -127,11 +130,14 @@ def load() -> dict:
     cfg = _merge(copy.deepcopy(DEFAULTS), _file())
     if os.environ.get("ALMANAC_UPSTREAM"):
         cfg["upstream"] = os.environ["ALMANAC_UPSTREAM"]
-    # ALMANAC_DISABLE=skills,tools,memory,compaction turns layers off for one run
+    # ALMANAC_DISABLE=skills,agents,tools,memory,compaction turns layers off for one run
     for name in filter(None, (os.environ.get("ALMANAC_DISABLE") or "").replace(" ", "").split(",")):
         if name == "all":
             for layer in ("skills", "tools", "memory", "compaction"):
                 cfg[layer]["enabled"] = False
+            cfg["startup"]["agent_chars"] = 0
+        elif name == "agents":
+            cfg["startup"]["agent_chars"] = 0
         elif isinstance(cfg.get(name), dict):
             cfg[name]["enabled"] = False
     return cfg

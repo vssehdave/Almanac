@@ -1,9 +1,9 @@
-"""The startup layer: a shorter skill listing and deferred tool schemas.
+"""The startup layer: shorter skill and agent listings and deferred tool schemas.
 
 Both rewrites are decided once per conversation and then frozen, so every later
 request in that conversation is rewritten to the same bytes and the prompt
-cache keeps hitting. Nothing is removed for good: a collapsed skill can still
-be invoked by name, and a deferred tool is loaded by the client's own tool
+cache keeps hitting. Nothing is removed for good: a collapsed skill or agent can
+still be invoked by name, and a deferred tool is loaded by the client's own tool
 search, which the API expands from the request's tool list.
 """
 import re
@@ -13,6 +13,9 @@ from .match import Index
 
 SKILL_MARK = "The following skills are available for use with the Skill tool:"
 SKILL_NOTE = ("Descriptions ending in … are shortened to save context. Every skill listed can be invoked by its "
+              "name, and its full description is shown when a message calls for it.")
+AGENT_MARK = "Available agent types for the Agent tool:"
+AGENT_NOTE = ("Descriptions ending in … are shortened to save context. Every agent listed can still be used by its "
               "name, and its full description is shown when a message calls for it.")
 _ENTRY = re.compile(r"(?m)^- ([\w.\-/]+(?::[\w.\-/]+)*): ")
 DEFER_MARK = "The following deferred tools are now available via ToolSearch."
@@ -32,12 +35,18 @@ def _frozen(ctx, name, compute):
     return ctx.store.frozen(f"{name}:{ctx.lane}", compute)
 
 
-def parse_listing(text: str):
-    """(start, end, [(name, description)]) of the skill listing in `text`, or None."""
-    start = text.find(SKILL_MARK)
+def _untooled(description: str) -> str:
+    """An agent line's description without its trailing `(Tools: ...)`."""
+    at = description.rfind(" (Tools: ")
+    return description[:at] if at >= 0 and description.endswith(")") else description
+
+
+def parse_listing(text: str, mark: str = SKILL_MARK):
+    """(start, end, [(name, description)]) of the listing that opens with `mark` in `text`, or None."""
+    start = text.find(mark)
     if start < 0:
         return None
-    first = start + len(SKILL_MARK)
+    first = start + len(mark)
     tail = re.search(r"\n\n(?!- )", text[first:])  # the listing ends at a blank line not followed by an entry
     end = first + tail.start() if tail else len(text)
     chunk = text[first:end]
@@ -67,30 +76,47 @@ def _insert_before_last(msg, text):
         content.insert(max(0, len(content) - 1), block)
 
 
-class SkillsLayer:
-    """Collapse skill descriptions to a stub; show the full text when a message matches."""
+class _ListingLayer:
+    """Collapse a listing's descriptions to a stub; show the full text when a message matches."""
+
+    MARK, NOTE, KEY, HEADER, GAP = "", "", "", "", "\n\n"  # GAP: what separates the note from the first entry
 
     def __init__(self):
         self._indexes = {}
+
+    def settings(self, ctx):
+        """(stub characters, most entries shown in full per message), or None when the layer is off."""
+        raise NotImplementedError
+
+    def pinned(self, ctx, catalog) -> set:
+        """Names this layer always shows in full."""
+        return set()
+
+    def shorten(self, description: str, chars: int) -> str:
+        return stub(description, chars)
+
+    def searchable(self, description: str) -> str:
+        return description
 
     def _index(self, entries) -> Index:
         key = hash(tuple(entries))
         if key not in self._indexes:
             if len(self._indexes) > 16:
                 self._indexes.clear()
-            self._indexes[key] = Index({name: desc for name, desc in entries})
+            self._indexes[key] = Index({name: self.searchable(desc) for name, desc in entries})
         return self._indexes[key]
 
     def transform(self, body, ctx):
-        cfg = ctx.cfg["skills"]
-        if not cfg["enabled"]:
+        chars_max = self.settings(ctx)
+        if not chars_max:
             return
+        chars, max_full = chars_max
         messages = body.get("messages") or []
         found = None
         for msg in messages[:8]:
             for block in rq.blocks(msg) if isinstance(msg.get("content"), list) else []:
-                if block.get("type") == "text" and SKILL_MARK in (block.get("text") or ""):
-                    found = (block, parse_listing(block["text"]))
+                if block.get("type") == "text" and self.MARK in (block.get("text") or ""):
+                    found = (block, parse_listing(block["text"], self.MARK))
                     break
             if found:
                 break
@@ -103,36 +129,67 @@ class SkillsLayer:
         first = rq.human_text(messages[turns[0]]) if turns else ""
 
         def decide():
-            keep = set(cfg["always_full"])
-            keep.update(name for name, _ in index.search(first, limit=cfg["max_full"]))
-            if ctx.store is not None:
-                used = ctx.store.recently_used("skill", _project(ctx))
-                keep.update(name for name, count in used.items() if count >= 2)
+            keep = self.pinned(ctx, catalog)
+            keep.update(name for name, _ in index.search(first, limit=max_full))
             return sorted(keep & set(catalog))
 
-        full = set(_frozen(ctx, "skills", decide))
-        lines = [f"- {name}: {desc if name in full else stub(desc, cfg['stub_chars'])}" for name, desc in entries]
+        full = set(_frozen(ctx, self.KEY, decide))
+        lines = [f"- {name}: {desc if name in full else self.shorten(desc, chars)}" for name, desc in entries]
         text = block["text"]
-        listing = SKILL_MARK + "\n" + SKILL_NOTE + "\n\n" + "\n".join(lines)
+        listing = self.MARK + "\n" + self.NOTE + self.GAP + "\n".join(lines)
         if len(listing) >= end - start:
             return  # nothing to gain: leave the request alone
         block["text"] = text[:start] + listing + text[end:]
         saved = (end - start) - len(listing)
 
-        # Later human turns: show the full description of collapsed skills they match.
+        # Later human turns: show the full description of collapsed entries they match.
         shown, budget = set(full), EXPAND_LIMIT
         for at in turns[1:]:
-            hits = [n for n, _ in index.search(rq.human_text(messages[at]), limit=cfg["max_full"]) if n not in shown]
+            hits = [n for n, _ in index.search(rq.human_text(messages[at]), limit=max_full) if n not in shown]
             hits = hits[:budget]
             if not hits:
                 continue
             budget -= len(hits)
             shown.update(hits)
-            note = ("<system-reminder>\nFull descriptions of skills that may be relevant to this message:\n"
+            note = ("<system-reminder>\n" + self.HEADER + "\n"
                     + "\n".join(f"- {n}: {catalog[n]}" for n in hits) + "\n</system-reminder>")
             _insert_before_last(messages[at], note)
             saved -= len(note)
-        ctx.stats["skills"] = {"listed": len(entries), "full": len(shown), "saved_chars": saved}
+        ctx.stats[self.KEY] = {"listed": len(entries), "full": len(shown), "saved_chars": saved}
+
+
+class SkillsLayer(_ListingLayer):
+    MARK, NOTE, KEY = SKILL_MARK, SKILL_NOTE, "skills"
+    HEADER = "Full descriptions of skills that may be relevant to this message:"
+
+    def settings(self, ctx):
+        cfg = ctx.cfg["skills"]
+        return (cfg["stub_chars"], cfg["max_full"]) if cfg["enabled"] else None
+
+    def pinned(self, ctx, catalog) -> set:
+        keep = set(ctx.cfg["skills"]["always_full"])
+        if ctx.store is not None:
+            used = ctx.store.recently_used("skill", _project(ctx))
+            keep.update(name for name, count in used.items() if count >= 2)
+        return keep
+
+
+class AgentsLayer(_ListingLayer):
+    """The same for the agent listing, whose lines end in `(Tools: ...)`; a stubbed line drops that suffix."""
+
+    MARK, NOTE, KEY, GAP = AGENT_MARK, AGENT_NOTE, "agents", "\n"
+    HEADER = "Full descriptions of agent types that may be relevant to this message:"
+
+    def settings(self, ctx):
+        chars = ctx.cfg["startup"]["agent_chars"]
+        return (chars, ctx.cfg["skills"]["max_full"]) if chars > 0 else None
+
+    def shorten(self, description: str, chars: int) -> str:
+        cut = stub(_untooled(description), chars)
+        return cut if cut.endswith("…") else description
+
+    def searchable(self, description: str) -> str:
+        return _untooled(description)
 
 
 class ToolsLayer:
