@@ -223,5 +223,98 @@ class Add(Base):
                 skills.fetch(source, ref, box)
 
 
+class Launch(Base):
+    cfg = {"skills": {"scan_on_launch": True}}
+
+    def launch(self, cfg=None):
+        lines, started = [], []
+        skills.launch_check(cfg or self.cfg, out=lines.append, start=started.append)
+        return "\n".join(lines), started
+
+    def worker(self, n):
+        return skills.audit(pending=n, out=lambda _: None)
+
+    def scans(self):
+        return len(self.log.read_text().splitlines()) if self.log.exists() else 0
+
+    def test_hash_sees_changes_but_not_git_or_node_modules(self):
+        folder = make_skill(self.src, "h", extra={"a/b.txt": "1"})
+        first = skills.tree_hash(folder)
+        (folder / ".git").mkdir()
+        (folder / ".git" / "HEAD").write_text("x")
+        (folder / "node_modules" / "m").mkdir(parents=True)
+        (folder / "node_modules" / "m" / "i.js").write_text("x")
+        self.assertEqual(skills.tree_hash(folder), first)
+        (folder / "a" / "b.txt").write_text("2")
+        second = skills.tree_hash(folder)
+        self.assertNotEqual(second, first)
+        (folder / "a" / "b.txt").rename(folder / "a" / "c.txt")
+        self.assertNotIn(skills.tree_hash(folder), (first, second))
+
+    def test_cap_of_five_then_the_rest(self):
+        for n in range(7):
+            make_skill(self.claude / "skills", f"s{n}", "CAUTION 30" if n == 0 else None)
+        (self.claude / "skills" / "notaskill").mkdir()
+        text, started = self.launch()
+        self.assertEqual(started, [5])
+        self.assertIn("pending (2)", text)
+        self.assertEqual(self.worker(5), 1)
+        self.assertEqual(self.scans(), 5)
+        text, started = self.launch()
+        self.assertEqual(started, [2])
+        self.assertIn("s0 (skill): CAUTION, score 30/100", text)
+        self.assertIn("almanac skill scan", text)
+        self.worker(5)
+        self.assertEqual(self.scans(), 7)
+        text, started = self.launch()
+        self.assertEqual(started, [])
+        self.assertIn("CAUTION", text)  # warned again: the owner decides, nothing is removed
+        self.assertTrue((self.claude / "skills" / "s0").exists())
+
+    def test_changed_skill_is_scanned_again(self):
+        folder = make_skill(self.claude / "skills", "x")
+        self.launch()
+        self.worker(5)
+        self.assertEqual(self.launch()[1], [])
+        (folder / "verdict.txt").write_text("DO_NOT_INSTALL 95")
+        self.assertEqual(self.launch()[1], [1])
+        self.worker(5)
+        text, started = self.launch()
+        self.assertIn("x (skill): DO_NOT_INSTALL, score 95/100", text)
+        self.assertIn("HIGH Supply Chain  run.sh:3", text)
+
+    def test_installed_plugins_are_checked(self):
+        plugin = make_skill(self.tmp / "cache", "plug")
+        (self.claude / "plugins").mkdir(parents=True)
+        (self.claude / "plugins" / "installed_plugins.json").write_text(json.dumps(
+            {"version": 2, "plugins": {"plug@mk": [{"installPath": str(plugin)}], "gone@mk": [{"installPath": str(self.tmp / "no")}]}}))
+        self.assertEqual([(i[0], i[1]) for i in skills.installed_items()], [("plug@mk", "plugin")])
+
+    def test_add_records_so_launch_does_not_rescan(self):
+        make_skill(self.src, "fresh")
+        self.assertEqual(self.add(str(self.src))[0], 0)
+        self.assertEqual(self.launch()[1], [])
+
+    def test_scanner_missing_is_one_line_and_off_does_nothing(self):
+        make_skill(self.claude / "skills", "y")
+        with mock.patch.object(skills, "scanner", return_value=None):
+            text, started = self.launch()
+            self.assertEqual((started, len(text.splitlines())), ([], 1))
+            self.assertIn(skills.INSTALL, text)
+            self.assertEqual(skills.audit(out=lambda _: None), 3)
+        self.assertEqual(self.launch({"skills": {"scan_on_launch": False}}), ("", []))
+
+    def test_running_scan_is_not_doubled_and_time_budget_holds(self):
+        make_skill(self.claude / "skills", "z")
+        skills._lock_path().write_text("")
+        text, started = self.launch()
+        self.assertEqual(started, [])
+        self.assertIn("still running", text)
+        self.assertEqual(self.worker(5), 3)
+        skills._lock_path().unlink()
+        flagged, todo, unhashed = skills.triage(skills.installed_items(), budget=1e-12)
+        self.assertEqual((todo, len(unhashed)), ([], 1))
+
+
 if __name__ == "__main__":
     unittest.main()

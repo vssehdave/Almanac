@@ -29,6 +29,7 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac cheatsheet path      where your own copies go (opus.md, sonnet.md, haiku.md, common.md)
   almanac skill scan PATH|URL  scan a skill or plugin with SkillSpector (exit 0 SAFE, 1 CAUTION, 2 DO_NOT_INSTALL, 3 error)
   almanac skill add URL|PATH   fetch, scan, and install its skills only if SAFE (--skill NAME, --ref SHA)
+  almanac skill audit          scan installed skills and plugins not scanned yet (--again: all), then a table
   almanac projects             projects seen; `projects merge FROM INTO`, `projects rename NAME NEW`
   almanac status               settings, files and recent activity
   almanac doctor               check that everything needed is in place
@@ -390,7 +391,12 @@ def _skill(rest):
     add.add_argument("--ref", help="a full commit SHA to fetch instead of the default branch")
     add.add_argument("--accept-caution", action="store_true", help="install even when the verdict is CAUTION")
     add.add_argument("--replace", action="store_true", help="overwrite a skill with the same name")
+    audit = sub.add_parser("audit")
+    audit.add_argument("--again", action="store_true", help="scan everything, even unchanged items")
+    audit.add_argument("--pending", type=int, help=argparse.SUPPRESS)  # the background scan started at launch
     args = parser.parse_args(rest)
+    if args.cmd == "audit":
+        return skills.audit(args.pending, args.again, out=_print)
     if args.cmd == "add":
         return skills.add(args.source, args.skill, args.ref, args.accept_caution, args.replace, out=_print)
     if os.path.exists(args.target):

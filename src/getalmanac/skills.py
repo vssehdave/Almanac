@@ -372,6 +372,7 @@ def add(source, wanted=None, ref=None, accept_caution=False, replace=False, plug
             digest = tree_hash(dest)
             installed[name] = {"name": name, "source": source, "commit": commit, "tree": digest, "score": res["score"],
                                "verdict": res["verdict"], "date": time.strftime("%Y-%m-%d %H:%M:%S")}
+            note_scan(dest, "skill", digest, res, name)
             out(f"installed {name} -> {dest}")
         save_json(_records_path(), records)
         return worst
@@ -393,3 +394,170 @@ def _plugin(tree, source, parts, out):
         out(f"  {line}")
     return code(res)
 
+
+
+# The launch check. A scan takes 15 s for a one-file skill and minutes for a plugin, so launch only
+# hashes and reads stored results; new or changed items are scanned by a background process, and
+# what it finds is shown at the next start.
+LAUNCH_SCANS = 5
+LOCK_STALE = 3600
+
+
+def _scans_path():
+    return config.home() / "skill-scans.json"
+
+
+def _lock_path():
+    return config.home() / "skill-scan.lock"
+
+
+def note_scan(path, kind, digest, res, label=""):
+    """Remember a verdict for this folder at this hash, so it is not scanned again until it changes."""
+    data = load_json(_scans_path(), {})
+    data[os.path.realpath(path)] = {"label": label or Path(path).name, "kind": kind, "hash": digest,
+                                    "verdict": res["verdict"], "score": res["score"], "issues": res["issues"][:3],
+                                    "error": res["error"], "date": time.strftime("%Y-%m-%d %H:%M:%S")}
+    save_json(_scans_path(), data)
+
+
+def installed_items():
+    """[(label, kind, real path)] for each folder under <claude config>/skills and each installed plugin."""
+    root, items = claude_dir(), []
+    if (root / "skills").is_dir():
+        for entry in sorted((root / "skills").iterdir()):
+            real = os.path.realpath(entry)
+            # what Claude Code loads: <name>/SKILL.md, not hidden folders (a trash, a half-done install)
+            if os.path.isfile(os.path.join(real, "SKILL.md")) and not entry.name.startswith("."):
+                items.append((entry.name, "skill", real))
+    # the plugin list, not plugins/cache: the cache also holds old versions and half-finished downloads
+    plugins = load_json(root / "plugins" / "installed_plugins.json", {}).get("plugins") or {}
+    for name, installs in sorted(plugins.items()) if isinstance(plugins, dict) else []:
+        for install in installs if isinstance(installs, list) else []:
+            path = install.get("installPath") if isinstance(install, dict) else None
+            if isinstance(path, str) and os.path.isdir(path):
+                items.append((name, "plugin", os.path.realpath(path)))
+    return items
+
+
+def triage(items, budget=None):
+    """(flagged, todo, unhashed): stored non-SAFE results still current, items to scan, items left for time."""
+    records, flagged, todo, start = load_json(_scans_path(), {}), [], [], time.monotonic()
+    for n, (label, kind, path) in enumerate(items):
+        if budget and time.monotonic() - start > budget:
+            return flagged, todo, items[n:]
+        digest, record = tree_hash(path), records.get(path)
+        if isinstance(record, dict) and record.get("hash") == digest:
+            if record.get("verdict") != "SAFE":
+                flagged.append((label, path, record))
+        else:
+            todo.append((label, kind, path, digest))
+    return flagged, todo, []
+
+
+def busy() -> bool:
+    try:
+        return time.time() - _lock_path().stat().st_mtime < LOCK_STALE
+    except OSError:
+        return False
+
+
+def scan_items(todo, out=print) -> int:
+    """Scan and record each item, one scan at a time across processes. Returns the worst exit code."""
+    lock = _lock_path()
+    if not busy():
+        lock.unlink(missing_ok=True)
+    try:
+        os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+    except FileExistsError:
+        out("almanac: another skill scan is running; try again when it finishes")
+        return ERROR
+    worst = 0
+    try:
+        for label, kind, path, digest in todo:
+            res = scan(path)
+            out(render(res, f"{label} ({kind})", limit=3))
+            if res["error"] == "missing":
+                return ERROR
+            note_scan(path, kind, digest, res, label)
+            worst = max(worst, code(res))
+            os.utime(lock)  # still alive
+    finally:
+        lock.unlink(missing_ok=True)
+    return worst
+
+
+def spawn(limit: int):
+    """Start `almanac skill audit --pending N` in the background, detached from this console."""
+    logs = config.home() / "logs"
+    logs.mkdir(exist_ok=True)
+    flags = {"creationflags": 0x08000000 | 0x00000200} if os.name == "nt" else {"start_new_session": True}  # no window, own Ctrl+C group
+    with open(logs / "skill-scan.log", "ab") as log:
+        subprocess.Popen([sys.executable, "-m", "getalmanac", "skill", "audit", "--pending", str(limit)],
+                         stdin=subprocess.DEVNULL, stdout=log, stderr=log, close_fds=True, **flags)
+
+
+def warning(flagged) -> str:
+    lines = ["almanac: WARNING: SkillSpector flagged installed skills or plugins:"]
+    for label, path, record in flagged:
+        if record.get("verdict") == "ERROR":
+            lines.append(f"  {label} ({record.get('kind')}): not scanned, the scan failed: {record.get('error')}")
+        else:
+            lines.append(f"  {label} ({record.get('kind')}): {record.get('verdict')}, score {record.get('score')}/100")
+        for i in record.get("issues") or []:
+            lines.append(f"      {i.get('severity')} {i.get('category')}  {i.get('file')}" + (f":{i['line']}" if i.get("line") else ""))
+        lines.append(f'      detail: almanac skill scan "{path}"')
+    lines.append("  Almanac does not block or remove anything; that is your call.")
+    return "\n".join(lines)
+
+
+def launch_check(cfg, out=None, start=spawn):
+    """Warn about flagged items and start a background scan of new or changed ones. Never blocks for long."""
+    out = out or (lambda text: print(text, file=sys.stderr))
+    if not cfg["skills"].get("scan_on_launch", True):
+        return
+    flagged, todo, unhashed = triage(installed_items(), budget=10)
+    if flagged:
+        out(warning(flagged))
+    waiting = [t[0] for t in todo] + [u[0] for u in unhashed]
+    if not waiting:
+        return
+    if not scanner():
+        out(f"almanac: skill scans are off ({len(waiting)} unscanned); turn them on with: {INSTALL}")
+        return
+    if busy():
+        out(f"almanac: a background skill scan is still running; {len(waiting)} item(s) wait for it.")
+        return
+    now = min(LAUNCH_SCANS, len(todo))
+    if now:
+        start(now)
+    rest = waiting[now:]
+    out(f"almanac: scanning {now} new or changed skill(s)/plugin(s) in the background; results show at the next start."
+        + (f"\n  pending ({len(rest)}): {', '.join(rest[:10])}{' ...' if len(rest) > 10 else ''}; "
+           "`almanac skill audit` scans them all now" if rest else ""))
+
+
+def audit(pending=None, again=False, out=print) -> int:
+    """Scan installed items not yet scanned at their current contents (all with `again`), then print a table."""
+    items = installed_items()
+    _, todo, _ = triage(items)
+    if again:
+        todo = [(label, kind, path, tree_hash(path)) for label, kind, path in items]
+    if pending is not None:
+        return scan_items(todo[:pending], out) if todo else 0
+    if todo and not scanner():
+        out(render(result("ERROR", error="missing"), "skills"))
+        return ERROR
+    if todo:
+        out(f"scanning {len(todo)} item(s); a plugin can take a few minutes")
+        scan_items(todo, out)
+    records, worst = load_json(_scans_path(), {}), 0
+    out(f"\n{'VERDICT':<15}{'SCORE':>5}  {'KIND':<6} NAME")
+    for label, kind, path in items:
+        record = records.get(path) or {}
+        verdict = record.get("verdict", "UNSCANNED")
+        worst = max(worst, VERDICTS.get(verdict, ERROR))
+        top = (record.get("issues") or [{}])[0]
+        detail = f"  {top.get('severity')} {top.get('category')} {top.get('file')}" if top else ""
+        score = record.get("score")
+        out(f"{verdict:<15}{'-' if score is None else score:>5}  {kind:<6} {label}{detail}")
+    return worst
