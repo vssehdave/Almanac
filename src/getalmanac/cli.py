@@ -5,6 +5,7 @@ import os
 import socket
 import sqlite3
 import ssl
+import subprocess
 import sys
 import time
 from urllib.parse import urlsplit
@@ -26,6 +27,8 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac route pin TIER       keep this project on small, medium or large (`pin off` lifts it)
   almanac cheatsheet show [opus|sonnet|haiku]   the rules added for that model, and their size
   almanac cheatsheet path      where your own copies go (opus.md, sonnet.md, haiku.md, common.md)
+  almanac skill scan PATH|URL  scan a skill or plugin with SkillSpector (exit 0 SAFE, 1 CAUTION, 2 DO_NOT_INSTALL, 3 error)
+  almanac skill add URL|PATH   fetch, scan, and install its skills only if SAFE (--skill NAME, --ref SHA)
   almanac projects             projects seen; `projects merge FROM INTO`, `projects rename NAME NEW`
   almanac status               settings, files and recent activity
   almanac doctor               check that everything needed is in place
@@ -375,6 +378,34 @@ def _cheatsheet(rest):
         print("usage: almanac cheatsheet [show [opus|sonnet|haiku] | path]", file=sys.stderr)
         return 2
     return 0
+def _skill(rest):
+    from . import skills
+
+    parser = argparse.ArgumentParser(prog="almanac skill")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("scan").add_argument("target", help="a local folder or SKILL.md, or an https:// git URL")
+    add = sub.add_parser("add")
+    add.add_argument("source", help="an https:// git URL or a local folder")
+    add.add_argument("--skill", action="append", help="install only this skill folder (repeatable)")
+    add.add_argument("--ref", help="a full commit SHA to fetch instead of the default branch")
+    add.add_argument("--accept-caution", action="store_true", help="install even when the verdict is CAUTION")
+    add.add_argument("--replace", action="store_true", help="overwrite a skill with the same name")
+    args = parser.parse_args(rest)
+    if args.cmd == "add":
+        return skills.add(args.source, args.skill, args.ref, args.accept_caution, args.replace, out=_print)
+    if os.path.exists(args.target):
+        res = skills.scan(args.target)
+    else:
+        box = skills.quarantine()
+        try:
+            res = skills.scan(skills.fetch(args.target, None, box)[0])
+        except (ValueError, OSError, subprocess.SubprocessError) as exc:
+            print(f"almanac: could not fetch {args.target}: {exc}", file=sys.stderr)
+            return skills.ERROR
+        finally:
+            skills.remove(box)
+    _print(skills.render(res, args.target))
+    return skills.code(res)
 
 
 def _mcp(_rest):
@@ -397,7 +428,8 @@ def _version(_rest):
 
 
 COMMANDS = {"serve": _serve, "report": _report, "status": _status, "doctor": _doctor, "config": _config,
-            "version": _version, "memory": _memory, "projects": _projects, "route": _route, "cheatsheet": _cheatsheet, "mcp": _mcp, "semantic": _semantic}
+            "version": _version, "memory": _memory, "projects": _projects, "route": _route, "cheatsheet": _cheatsheet, "mcp": _mcp, "semantic": _semantic,
+            "skill": _skill}
 
 
 def main(argv=None):

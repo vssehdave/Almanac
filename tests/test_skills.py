@@ -1,0 +1,227 @@
+"""The scan gate, with a fake scanner: no test needs the network or SkillSpector."""
+import io
+import json
+import os
+import sys
+import tempfile
+import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
+from unittest import mock
+
+import helpers  # noqa: F401  (sets a temporary ALMANAC_HOME)
+
+from getalmanac import cli, skills
+
+# Reads verdict.txt in the scanned folder: "SAFE 5", "CAUTION 30", "DO_NOT_INSTALL 90", "ERROR" or "JUNK".
+FAKE = r'''
+import json, os, sys
+target = sys.argv[2]
+with open(os.environ["FAKE_LOG"], "a") as log:
+    log.write(json.dumps(sys.argv[1:]) + "\n")
+spec = "SAFE 5"
+if os.path.isfile(os.path.join(target, "verdict.txt")):
+    spec = open(os.path.join(target, "verdict.txt")).read().strip()
+if spec == "ERROR":
+    sys.stderr.write("Error: boom\n"); sys.exit(2)
+if spec == "JUNK":
+    print("not json"); sys.exit(0)
+verdict, score = spec.split()
+issue = {"severity": "HIGH", "category": "Supply Chain", "location": {"file": "run.sh", "start_line": 3}}
+print(json.dumps({"risk_assessment": {"score": int(score), "recommendation": verdict},
+                  "issues": [] if verdict == "SAFE" else [issue, issue],
+                  "execution_successful": True, "analysis_completeness": {"is_complete": True}}))
+sys.exit(0 if int(score) <= 50 else 1)
+'''
+
+
+def make_skill(root, name, verdict=None, extra=None):
+    folder = Path(root) / name
+    folder.mkdir(parents=True)
+    (folder / "SKILL.md").write_text(f"---\nname: {name}\n---\nhello\n")
+    if verdict:
+        (folder / "verdict.txt").write_text(verdict)
+    for rel, text in (extra or {}).items():
+        (folder / rel).parent.mkdir(parents=True, exist_ok=True)
+        (folder / rel).write_text(text)
+    return folder
+
+
+class Base(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="almanac-skill-"))
+        fake = self.tmp / "fake_scanner.py"
+        fake.write_text(FAKE)
+        self.log = self.tmp / "calls.log"
+        self.claude = self.tmp / "claude"
+        self.env = mock.patch.dict(os.environ, {"ALMANAC_SKILLSPECTOR": json.dumps([sys.executable, str(fake)]),
+                                                "FAKE_LOG": str(self.log), "CLAUDE_CONFIG_DIR": str(self.claude),
+                                                "ALMANAC_HOME": str(self.tmp / "home")})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        self.src = self.tmp / "src"
+
+    def add(self, *args, **kw):
+        lines = []
+        rc = skills.add(*args, out=lines.append, **kw)
+        return rc, "\n".join(lines)
+
+    def installed(self):
+        root = self.claude / "skills"
+        return sorted(p.name for p in root.iterdir()) if root.exists() else []
+
+    def quarantine_empty(self):
+        box = self.tmp / "home" / "quarantine"
+        return not box.exists() or not any(box.iterdir())
+
+
+class Verdicts(Base):
+    def test_parse_maps_report_not_exit_code(self):
+        report = lambda v, s: json.dumps({"risk_assessment": {"score": s, "recommendation": v}, "issues": []}).encode()
+        self.assertEqual(skills.code(skills.parse(0, report("SAFE", 3), b"")), 0)
+        self.assertEqual(skills.code(skills.parse(0, report("CAUTION", 40), b"")), 1)
+        self.assertEqual(skills.code(skills.parse(1, report("DO_NOT_INSTALL", 90), b"")), 2)
+        self.assertEqual(skills.code(skills.parse(0, report("LOOKS_FINE", 0), b"")), 3)
+        self.assertEqual(skills.code(skills.parse(2, b"", b"Error: x")), 3)
+        self.assertEqual(skills.code(skills.parse(0, b"{}", b"")), 3)
+
+    def test_incomplete_safe_is_caution_and_failed_run_is_error(self):
+        base = {"risk_assessment": {"score": 0, "recommendation": "SAFE"}, "issues": []}
+        partial = dict(base, analysis_completeness={"is_complete": False})
+        self.assertEqual(skills.parse(0, json.dumps(partial).encode(), b"")["verdict"], "CAUTION")
+        failed = dict(base, execution_successful=False)
+        self.assertEqual(skills.parse(0, json.dumps(failed).encode(), b"")["verdict"], "ERROR")
+
+    def test_scan_command_exit_codes_and_no_llm(self):
+        for spec, want in (("SAFE 2", 0), ("CAUTION 30", 1), ("DO_NOT_INSTALL 80", 2), ("ERROR", 3), ("JUNK", 3)):
+            folder = make_skill(self.src, spec.split()[0].lower() + str(want), spec)
+            with redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(cli.main(["skill", "scan", str(folder)]), want, spec)
+            if want in (1, 2):
+                self.assertIn("HIGH", out.getvalue())
+                self.assertIn("run.sh:3", out.getvalue())
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertTrue(all("--no-llm" in c and c[0] == "scan" for c in calls))
+
+    def test_scanner_missing_prints_install_and_exits_3(self):
+        folder = make_skill(self.src, "a")
+        with mock.patch.object(skills, "scanner", return_value=None), redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(cli.main(["skill", "scan", str(folder)]), 3)
+        self.assertIn(skills.INSTALL, out.getvalue())
+        with mock.patch.object(skills, "scanner", return_value=None):
+            rc, text = self.add(str(folder))
+        self.assertEqual((rc, self.installed()), (3, []))
+
+
+class Add(Base):
+    def test_safe_installs_and_records(self):
+        make_skill(self.src, "one")
+        make_skill(self.src, "two", extra={"refs/notes.md": "x"})
+        rc, text = self.add(str(self.src))
+        self.assertEqual(rc, 0, text)
+        self.assertEqual(self.installed(), ["one", "two"])
+        self.assertTrue((self.claude / "skills" / "two" / "refs" / "notes.md").exists())
+        record = json.loads((self.tmp / "home" / "skills.json").read_text())["skills"]["one"]
+        self.assertEqual(record["verdict"], "SAFE")
+        self.assertEqual(record["tree"], skills.tree_hash(self.claude / "skills" / "one"))
+        self.assertTrue(self.quarantine_empty())
+
+    def test_caution_refused_unless_accepted(self):
+        make_skill(self.src, "c", "CAUTION 30")
+        rc, text = self.add(str(self.src))
+        self.assertEqual((rc, self.installed()), (1, []))
+        self.assertIn("--accept-caution", text)
+        rc, _ = self.add(str(self.src), accept_caution=True)
+        self.assertEqual((rc, self.installed()), (1, ["c"]))
+
+    def test_do_not_install_and_errors_have_no_override(self):
+        for spec in ("DO_NOT_INSTALL 90", "ERROR", "JUNK"):
+            src = self.tmp / ("src-" + spec.split()[0])
+            make_skill(src, "bad", spec)
+            make_skill(src, "good")  # one bad skill stops the whole source
+            rc, text = self.add(str(src), accept_caution=True, replace=True)
+            self.assertGreaterEqual(rc, 2, spec)
+            self.assertEqual(self.installed(), [], spec)
+            self.assertTrue(self.quarantine_empty())
+
+    def test_existing_skill_needs_replace(self):
+        make_skill(self.src, "dup")
+        self.assertEqual(self.add(str(self.src))[0], 0)
+        (self.src / "dup" / "SKILL.md").write_text("new")
+        rc, text = self.add(str(self.src))
+        self.assertEqual(rc, 3)
+        self.assertIn("--replace", text)
+        self.assertEqual(self.add(str(self.src), replace=True)[0], 0)
+        self.assertEqual((self.claude / "skills" / "dup" / "SKILL.md").read_text(), "new")
+
+    def test_pick_by_name_or_path(self):
+        make_skill(self.src / "skills", "alpha")
+        make_skill(self.src / "plugins" / "p" / "skills", "beta")
+        rc, _ = self.add(str(self.src), ["plugins/p/skills/beta"])
+        self.assertEqual((rc, self.installed()), (0, ["beta"]))
+        rc, _ = self.add(str(self.src), ["alpha"])
+        self.assertEqual((rc, self.installed()), (0, ["alpha", "beta"]))
+
+    def test_path_traversal_refused(self):
+        make_skill(self.src, "ok")
+        outside = make_skill(self.tmp / "elsewhere", "victim")
+        for bad in ("../elsewhere/victim", "ok/../../elsewhere/victim", str(outside), "/etc", "C:\\Windows", "..\\x"):
+            rc, text = self.add(str(self.src), [bad])
+            self.assertEqual(rc, 3, bad)
+        self.assertEqual(self.installed(), [])
+        root = make_skill(self.tmp, "rootskill")
+        with self.assertRaises(ValueError):
+            skills.find_skills(root, None, "..")  # a whole-tree skill named after a bad source
+
+    def test_bad_folder_name_refused(self):
+        make_skill(self.src, "bad name!")
+        rc, text = self.add(str(self.src))
+        self.assertEqual((rc, self.installed()), (3, []))
+        self.assertIn("not allowed", text)
+
+    def test_links_inside_source_are_not_followed_or_copied(self):
+        secret = self.tmp / "secret"
+        secret.mkdir()
+        (secret / "key.txt").write_text("private")
+        folder = make_skill(self.src, "linky")
+        try:
+            os.symlink(secret, folder / "dirlink", target_is_directory=True)
+            os.symlink(secret / "key.txt", folder / "filelink")
+        except (OSError, NotImplementedError):
+            if os.name != "nt":
+                self.skipTest("this machine cannot make symlinks")
+            import _winapi  # Windows without developer mode: a junction needs no privilege
+
+            _winapi.CreateJunction(str(secret), str(folder / "dirlink"))
+        rc, text = self.add(str(self.src))
+        self.assertEqual(rc, 0, text)
+        dest = self.claude / "skills" / "linky"
+        self.assertEqual(sorted(p.name for p in dest.iterdir()), ["SKILL.md"])
+        self.assertEqual(skills.tree_hash(folder), skills.tree_hash(dest))
+
+    def test_plugin_with_hooks_is_shown_not_installed(self):
+        (self.src / ".claude-plugin").mkdir(parents=True)
+        (self.src / ".claude-plugin" / "plugin.json").write_text(json.dumps(
+            {"name": "plug", "mcpServers": {"srv": {"command": "npx", "args": ["-y", "pkg"]}}}))
+        (self.src / ".claude-plugin" / "marketplace.json").write_text(json.dumps({"name": "mk", "plugins": [{"name": "plug"}]}))
+        (self.src / "hooks").mkdir()
+        (self.src / "hooks" / "hooks.json").write_text(json.dumps(
+            {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "node start.js"}]}]}}))
+        make_skill(self.src / "skills", "inner")
+        rc, text = self.add(str(self.src))
+        self.assertEqual((rc, self.installed()), (0, []))
+        for want in ("does not install plugins", "SessionStart: node start.js", "srv: npx -y pkg",
+                     "claude plugin install plug@mk"):
+            self.assertIn(want, text)
+
+    def test_fetch_refuses_other_transports_and_short_refs(self):
+        box = self.tmp / "box"
+        box.mkdir()
+        for source, ref in (("ext::sh -c touch% /tmp/x", None), ("git@github.com:a/b", None),
+                            ("https://example.com/r", "abc123")):
+            with self.assertRaises(ValueError):
+                skills.fetch(source, ref, box)
+
+
+if __name__ == "__main__":
+    unittest.main()
