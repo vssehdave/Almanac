@@ -312,7 +312,9 @@ class Launch(Base):
         self.assertIn("still running", text)
         self.assertEqual(self.worker(5), 3)
         skills._lock_path().unlink()
-        flagged, todo, unhashed = skills.triage(skills.installed_items(), budget=1e-12)
+        clock = iter(range(0, 100, 5))  # Windows' clock is too coarse to see a real step
+        with mock.patch.object(skills.time, "monotonic", lambda: next(clock)):
+            flagged, todo, unhashed = skills.triage(skills.installed_items(), budget=1)
         self.assertEqual((todo, len(unhashed)), ([], 1))
 
 
