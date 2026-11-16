@@ -271,6 +271,21 @@ class Memory:
                 best, score = topic["id"], similarity
         return best or self._add_node(convo_id, project, None, "topic", seq, title, "", "", vec)
 
+    def _resumed(self, lane, session, group, done):
+        """Move an earlier conversation onto `lane` when this new lane carries it on (a resume under a new
+        session id): every exchange stored for it equals this lane's exchange at the same place, word for word.
+        Two such conversations, or none, and nothing moves: a separate copy loses nothing."""
+        first = exchange(group(0))["mark"]
+        found = []
+        for row in self.store.run("select c.id from convo c join node n on n.convo = c.id and n.kind = 'leaf' "
+                                  "and n.seq = 0 where c.lane != ? and n.mark = ?", (lane, first)):
+            marks = [r["mark"] for r in self.store.run(
+                "select mark from node where convo = ? and kind = 'leaf' order by seq", (row["id"],))]
+            if len(marks) <= done and all(mark == exchange(group(seq))["mark"] for seq, mark in enumerate(marks)):
+                found.append(row["id"])
+        if len(found) == 1:
+            self.store.run("update convo set lane = ?, session = ? where id = ?", (lane, session, found[0]))
+
     def index(self, lane, session, project, messages, reply=None, finished=False) -> int:
         """Store the finished exchanges of a conversation. Returns how many were written.
 
@@ -280,8 +295,20 @@ class Memory:
         turns = rq.human_turns(messages)
         if not turns:
             return 0
+        # A new conversation is indexed after its first reply; a lane first seen with a later human turn
+        # (the caller's `finished` means one more follows) is one carried on from somewhere else.
+        carried = len(turns) + (1 if finished else 0) >= 2
         finished = finished or (reply is not None and reply.get("stop_reason") != "tool_use")
+
+        def group(seq):
+            last = seq == len(turns) - 1
+            end = turns[seq + 1] if not last else len(messages)
+            return messages[turns[seq]:end] + ([{"role": "assistant", "content": reply["content"]}] if last and reply else [])
+
+        done = len(turns) if finished else len(turns) - 1
         with self.store.lock:
+            if carried and done and not self.store.run("select 1 from convo where lane = ?", (lane,)):
+                self._resumed(lane, session, group, done)
             convo = self._convo(lane, session, project, _first_line(clean(rq.human_text(messages[turns[0]]))))
             stale = [r["id"] for r in self.store.run(
                 "select id from node where convo = ? and kind = 'leaf' and seq >= ?", (convo["id"], len(turns)))]
@@ -295,13 +322,10 @@ class Memory:
             if previous:
                 last_project = previous[0]["project"]
             for seq in range(start_at, len(turns)):
-                last = seq == len(turns) - 1
-                if last and not finished:
+                if seq >= done:
                     break
-                end = turns[seq + 1] if not last else len(messages)
-                group = messages[turns[seq]:end] + ([{"role": "assistant", "content": reply["content"]}] if last and reply else [])
-                record = exchange(group)
-                last_project = self.projects.for_turn(group, last_project)
+                record = exchange(group(seq))
+                last_project = self.projects.for_turn(group(seq), last_project)
                 old = self.store.run("select id, mark, parent from node where convo = ? and kind = 'leaf' and seq = ?",
                                      (convo["id"], seq))
                 if old and old[0]["mark"] == record["mark"]:
@@ -312,7 +336,7 @@ class Memory:
                 vec = embed.embed(record["title"] + "\n" + record["text"])
                 topic = self._topic_for(convo["id"], last_project, seq, record["title"], vec)
                 leaf = self._add_node(convo["id"], last_project, topic, "leaf", seq, record["title"], record["text"], record["mark"], vec)
-                self.store.run("insert or replace into detail (node, text) values (?, ?)", (leaf, transcript(group)))
+                self.store.run("insert or replace into detail (node, text) values (?, ?)", (leaf, transcript(group(seq))))
                 touched.add(topic)
                 written += 1
             for topic in touched - {None}:
