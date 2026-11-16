@@ -229,7 +229,11 @@ class IndexTest(Case):
 
     def test_more_secret_shapes_are_removed(self):
         for line, secret in (("DB_PASS=s3cretValue99", "s3cretValue99"), ("AccountKey=abcdEFGH1234abcdEFGH1234==", "abcdEFGH1234"),
-                             ("STRIPE=whsec_abcdefghijklmnop1234", "abcdefghijklmnop1234"), ("dbpassword=hunter2hunter2", "hunter2")):
+                             ("STRIPE=whsec_abcdefghijklmnop1234", "abcdefghijklmnop1234"), ("dbpassword=hunter2hunter2", "hunter2"),
+                             ("PRIVATE_KEY=0x4c0883a69102937d62", "4c0883a69102937d62"),
+                             (json.dumps({"command": 'export SECRET="topsecretvalue"'}), "topsecretvalue"),
+                             ("https://hooks.slack.com/services/T0000/B0000/XXXXXXXXXXXX", "XXXXXXXXXXXX"),
+                             ("-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA12345", "MIIEpAIBAAKCAQEA")):
             self.assertNotIn(secret, redact(line), line)
         for line in ("BYPASS=something12", "compass: northwest", "max_tokens: 150000", "passes: everything"):
             self.assertEqual(redact(line), line)
