@@ -316,5 +316,39 @@ class Launch(Base):
         self.assertEqual((todo, len(unhashed)), ([], 1))
 
 
+class Pack(Base):
+    def test_repo_pack_is_pinned_and_valid(self):
+        entries = skills.load_pack(Path(__file__).resolve().parents[1] / "pack.json")
+        self.assertGreaterEqual(len(entries), 11)
+        self.assertEqual(len({e["name"] for e in entries}), len(entries))
+        for e in entries:
+            self.assertRegex(e["ref"], r"^[0-9a-f]{40}$", e["name"])
+            self.assertTrue(e["source"].startswith("https://github.com/"), e["name"])
+
+    def test_install_routes_by_kind(self):
+        make_skill(self.src / "skills", "packed")
+        plugin = self.tmp / "plugin"
+        make_skill(plugin / "skills", "insideplugin")
+        (plugin / ".claude-plugin").mkdir()
+        entries = [{"name": "a", "kind": "skill", "source": str(self.src)},
+                   {"name": "b", "kind": "plugin", "source": str(plugin)},
+                   {"name": "c", "kind": "binary", "source": "https://example.com/tool", "note": "by hand"}]
+        lines = []
+        rc = skills.pack_install(entries, out=lines.append)
+        text = "\n".join(lines)
+        self.assertEqual(rc, 0, text)
+        self.assertEqual(self.installed(), ["packed"])
+        self.assertIn("does not install plugins", text)
+        self.assertIn("Install it by hand: https://example.com/tool", text)
+
+    def test_bad_kind_refused(self):
+        path = self.tmp / "pack.json"
+        path.write_text(json.dumps({"entries": [{"name": "x", "kind": "script", "source": "https://x"}]}))
+        with self.assertRaises(ValueError):
+            skills.load_pack(path)
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.main(["pack", "--file", str(path), "list"]), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

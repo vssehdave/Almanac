@@ -561,3 +561,40 @@ def audit(pending=None, again=False, out=print) -> int:
         score = record.get("score")
         out(f"{verdict:<15}{'-' if score is None else score:>5}  {kind:<6} {label}{detail}")
     return worst
+
+
+# The pack: the owner's list of third-party skills and plugins, each pinned to a commit.
+KINDS = ("skill", "plugin", "binary", "builtin")
+
+
+def pack_file(path=None) -> Path:
+    """pack.json: the given path, else the one beside the source tree, else the current folder."""
+    if path:
+        return Path(path)
+    # shortcut: an installed wheel has no repo root, so outside a source checkout pass --file
+    beside = Path(__file__).resolve().parents[2] / "pack.json"
+    return beside if beside.exists() else Path("pack.json")
+
+
+def load_pack(path=None):
+    data = load_json(pack_file(path), {})
+    entries = [e for e in data.get("entries") or [] if isinstance(e, dict)]
+    for entry in entries:
+        if entry.get("kind") not in KINDS or not isinstance(entry.get("name"), str):
+            raise ValueError(f"pack entry {entry.get('name')!r}: kind must be one of {', '.join(KINDS)}")
+    return entries
+
+
+def pack_install(entries, accept_caution=False, replace=False, out=print) -> int:
+    """Skills go through `add` pinned to their ref; plugins are scanned and shown; binaries are listed."""
+    worst = 0
+    for entry in entries:
+        out(f"\n== {entry['name']} ({entry['kind']}): {entry.get('note', '')}")
+        if entry["kind"] in ("skill", "plugin"):
+            rc = add(entry["source"], entry.get("skills"), entry.get("ref"), accept_caution, replace,
+                     plugin=entry["kind"] == "plugin", out=out)
+        else:
+            out(f"Not a skill, so there is nothing for the scanner to check. Install it by hand: {entry.get('source')}")
+            rc = 0
+        worst = max(worst, rc)
+    return worst

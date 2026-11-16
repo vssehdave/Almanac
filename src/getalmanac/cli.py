@@ -30,6 +30,8 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac skill scan PATH|URL  scan a skill or plugin with SkillSpector (exit 0 SAFE, 1 CAUTION, 2 DO_NOT_INSTALL, 3 error)
   almanac skill add URL|PATH   fetch, scan, and install its skills only if SAFE (--skill NAME, --ref SHA)
   almanac skill audit          scan installed skills and plugins not scanned yet (--again: all), then a table
+  almanac pack list            the pack: third-party skills and plugins, each pinned to a commit
+  almanac pack install [NAME]  install the pack's skills through the scan; plugins and programs are only shown
   almanac projects             projects seen; `projects merge FROM INTO`, `projects rename NAME NEW`
   almanac status               settings, files and recent activity
   almanac doctor               check that everything needed is in place
@@ -414,6 +416,38 @@ def _skill(rest):
     return skills.code(res)
 
 
+def _pack(rest):
+    from . import skills
+
+    parser = argparse.ArgumentParser(prog="almanac pack")
+    parser.add_argument("--file", help="a pack.json other than the one in the source tree")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("list")
+    install = sub.add_parser("install")
+    install.add_argument("name", nargs="?", help="one entry; default: all of them")
+    install.add_argument("--accept-caution", action="store_true")
+    install.add_argument("--replace", action="store_true")
+    args = parser.parse_args(rest)
+    try:
+        entries = skills.load_pack(args.file)
+    except ValueError as exc:
+        print(f"almanac: {exc}", file=sys.stderr)
+        return 2
+    if not entries:
+        print(f"almanac: no entries in {skills.pack_file(args.file)}; pass --file PATH", file=sys.stderr)
+        return 2
+    if args.cmd == "list":
+        for e in entries:
+            _print(f"{e['name']:<20} {e['kind']:<8} {e.get('source', '')} @ {str(e.get('ref', ''))[:12]}\n    {e.get('note', '')}")
+        return 0
+    if args.name:
+        entries = [e for e in entries if e["name"] == args.name]
+        if not entries:
+            print(f"almanac: the pack has no entry called {args.name!r}; see `almanac pack list`", file=sys.stderr)
+            return 2
+    return skills.pack_install(entries, args.accept_caution, args.replace, out=_print)
+
+
 def _mcp(_rest):
     from . import mcp
 
@@ -435,7 +469,7 @@ def _version(_rest):
 
 COMMANDS = {"serve": _serve, "report": _report, "status": _status, "doctor": _doctor, "config": _config,
             "version": _version, "memory": _memory, "projects": _projects, "route": _route, "cheatsheet": _cheatsheet, "mcp": _mcp, "semantic": _semantic,
-            "skill": _skill}
+            "skill": _skill, "pack": _pack}
 
 
 def main(argv=None):
