@@ -1,0 +1,5 @@
+{
+  "name": "security-audit",
+  "description": "Multi-phase security audit of a codebase with validated findings.",
+  "version": "0.0.0"
+}
