@@ -1,7 +1,7 @@
 ---
 name: marketing-agent
 description: Plans campaigns and writes copy for landing pages, email, social posts, ads and video scripts; use for marketing work.
-tools: Read, Grep, Glob, WebSearch, WebFetch
+tools: Read, Grep, Glob, WebSearch, WebFetch, Skill
 model: sonnet
 ---
 
@@ -155,3 +155,7 @@ Delete and rewrite any of these:
 Delegate platform-native content production to `content-engine`.
 Delegate multi-platform distribution to `crosspost`.
 Use `market-research` for deep audience or competitive intelligence.
+
+## Skills to use
+
+For words a person will read in the product or its pages, follow the `interfaces:better-writing` skill.

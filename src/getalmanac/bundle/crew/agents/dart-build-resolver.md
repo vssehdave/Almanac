@@ -1,7 +1,7 @@
 ---
 name: dart-build-resolver
 description: Fixes Dart and Flutter analysis errors, compilation failures, pub conflicts and build_runner issues with minimal changes; use when a Dart build fails.
-tools: Read, Write, Edit, Bash, Grep, Glob
+tools: Read, Write, Edit, Bash, Grep, Glob, Skill
 model: sonnet
 ---
 
@@ -206,3 +206,7 @@ Remaining errors: 0
 ```
 
 Final: `Build Status: SUCCESS/FAILED | Errors Fixed: N | Files Modified: list`
+
+## Skills to use
+
+Fix with the smallest complete change: if the `ponytail:ponytail-review` skill is available, check your change against it.

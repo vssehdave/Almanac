@@ -1,7 +1,6 @@
 ---
 name: afk
 description: Works through a project while you're away, finding improvements and new ideas, building the best of them on a local branch and leaving a report for when you're back.
-disable-model-invocation: true
 ---
 
 # AFK

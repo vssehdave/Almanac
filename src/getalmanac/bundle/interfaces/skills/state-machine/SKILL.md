@@ -1,7 +1,6 @@
 ---
 name: state-machine
 description: Renders every state of a component you choose on a throwaway page, with mock data and a switcher, so you can work on each state.
-disable-model-invocation: true
 ---
 
 # State machine

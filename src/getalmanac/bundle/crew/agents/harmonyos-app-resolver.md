@@ -1,7 +1,7 @@
 ---
 name: harmonyos-app-resolver
 description: Reviews and fixes HarmonyOS ArkTS and ArkUI code for state management, navigation, API use and performance; use for HarmonyOS apps.
-tools: Read, Write, Edit, Bash, Grep, Glob
+tools: Read, Write, Edit, Bash, Grep, Glob, Skill
 model: sonnet
 ---
 
@@ -178,3 +178,7 @@ Created: ViewModel using @ObservedV2 with @Trace for observable properties, cons
 ```
 
 Final: `Status: SUCCESS/NEEDS_WORK | Issues Found: N | Files Modified: list`
+
+## Skills to use
+
+Fix with the smallest complete change: if the `ponytail:ponytail-review` skill is available, check your change against it.

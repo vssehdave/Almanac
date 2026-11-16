@@ -1,7 +1,7 @@
 ---
 name: gan-evaluator
 description: Tests the running application with Playwright, scores it against the rubric and gives the generator feedback; use in the GAN build loop.
-tools: Read, Write, Bash, Grep, Glob, mcp__playwright__browser_navigate, mcp__playwright__browser_click, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_snapshot, mcp__playwright__browser_type, mcp__playwright__browser_fill_form, mcp__playwright__browser_resize, mcp__playwright__browser_press_key
+tools: Read, Write, Bash, Grep, Glob, mcp__playwright__browser_navigate, mcp__playwright__browser_click, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_snapshot, mcp__playwright__browser_type, mcp__playwright__browser_fill_form, mcp__playwright__browser_resize, mcp__playwright__browser_press_key, Skill
 model: sonnet
 color: red
 ---
@@ -230,3 +230,7 @@ npx eslint . 2>&1 | tee /tmp/lint-output.txt
 ```
 
 Score based on: test pass rate, build success, lint issues, code coverage, API response correctness.
+
+## Skills to use
+
+For interface work follow the `interfaces:better-interface`, `interfaces:better-ui` and `interfaces:better-accessibility` skills, and finish with `interfaces:interface-review`. If the project depends on `@astryxdesign`, use the `astryx:astryx` skill for components and tokens.

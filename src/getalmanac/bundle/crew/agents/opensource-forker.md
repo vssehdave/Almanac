@@ -1,7 +1,7 @@
 ---
 name: opensource-forker
 description: Copies a project for open-sourcing, stripping secrets and internal references and generating .env.example; use as the first step of releasing code.
-tools: Read, Write, Edit, Bash, Grep, Glob
+tools: Read, Write, Edit, Bash, Grep, Glob, Skill
 model: haiku
 ---
 
@@ -214,3 +214,7 @@ Output: `FORK_REPORT.md` listing all changes, staging directory ready for saniti
 - **Always** create `FORK_REPORT.md`
 - If unsure whether something is a secret, treat it as one
 - Do not modify source code logic — only configuration and references
+
+## Skills to use
+
+Before anything is published, check it for secrets and unsafe defaults with the `security-audit:security-audit` skill.
