@@ -3,10 +3,11 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from helpers import Rig, sse
 
-from getalmanac import startup
+from getalmanac import config, startup
 from getalmanac.match import Index, tokens
 from getalmanac.store import Store
 
@@ -19,8 +20,16 @@ SKILLS = {
     "charts": "Build a chart, graph or plot from tabular data.\nTRIGGER when the user mentions a dashboard." + LONG * 3,
 }
 LISTING = startup.SKILL_MARK + "\n\n" + "\n".join(f"- {n}: {d}" for n, d in SKILLS.items())
+AGENTS = {
+    "claude": "Catch-all for any task that does not fit a more specific agent. (Tools: *)",
+    "crew:db-reviewer": "Reviews database schemas, migrations and SQL queries for correctness." + LONG + " (Tools: Read, Grep, Bash)",
+    "infra-planner": "Plans terraform infrastructure changes before they are applied." + LONG + " (Tools: Read, Glob)",
+    **{f"helper-{i}": f"Handles routine chore number {i}." + LONG + " (Tools: Read, Edit)" for i in range(4)},
+}
+AGENT_LISTING = startup.AGENT_MARK + "\n" + "\n".join(f"- {n}: {d}" for n, d in AGENTS.items())
 SESSION_TEXT = ("SessionStart hook: hi\n\n# Environment\n - Primary working directory: /repo/demo\n\n"
-                + startup.DEFER_TEXT + "\nWebFetch\nWebSearch\n\n" + LISTING + "\n\nToday's date is 2026-01-01.")
+                + startup.DEFER_TEXT + "\nWebFetch\nWebSearch\n\n" + LISTING + "\n\n" + AGENT_LISTING
+                + "\n\nToday's date is 2026-01-01.")
 
 
 def tool(name, text="does a thing " * 40):
@@ -37,9 +46,9 @@ def body(prompt="hello there", extra=(), tools=None):
                          {"role": "system", "content": [{"type": "text", "text": SESSION_TEXT}]}, *extra]}
 
 
-def listing_of(sent):
+def listing_of(sent, mark=startup.SKILL_MARK):
     text = sent["messages"][1]["content"][0]["text"]
-    return dict(startup.parse_listing(text)[2])
+    return dict(startup.parse_listing(text, mark)[2])
 
 
 class MatchTest(unittest.TestCase):
@@ -60,7 +69,7 @@ class ListingTest(unittest.TestCase):
         start, end, entries = startup.parse_listing(SESSION_TEXT)
         self.assertEqual([n for n, _ in entries], list(SKILLS))
         self.assertEqual(dict(entries)["charts"], SKILLS["charts"])
-        self.assertTrue(SESSION_TEXT[end:].startswith("\n\nToday's date"))
+        self.assertTrue(SESSION_TEXT[end:].startswith("\n\nAvailable agent types"))
 
     def test_stub_cuts_at_a_word_and_keeps_short_text(self):
         self.assertEqual(startup.stub("Short one.", 90), "Short one.")
@@ -72,7 +81,7 @@ class ListingTest(unittest.TestCase):
 class LayerCase(unittest.TestCase):
     def setUp(self):
         self.store = Store(os.path.join(tempfile.mkdtemp(prefix="almanac-db-"), "a.db"))
-        self.rig = Rig(layers=[startup.SkillsLayer(), startup.ToolsLayer()], store=self.store)
+        self.rig = Rig(layers=[startup.SkillsLayer(), startup.AgentsLayer(), startup.ToolsLayer()], store=self.store)
         self.addCleanup(self.rig.close)
         self.addCleanup(self.store.close)
 
@@ -136,6 +145,93 @@ class SkillsLayerTest(LayerCase):
         self.rig.cfg["skills"]["enabled"] = False
         self.rig.messages(body("hello"))
         self.assertEqual(listing_of(self.rig.sent())["slides"], SKILLS["slides"])
+
+
+class AgentsLayerTest(LayerCase):
+    def agents(self):
+        return listing_of(self.rig.sent(), startup.AGENT_MARK)
+
+    def alone(self, layer=None):
+        """A rig where only the agents layer runs, so an untouched request is byte for byte what was sent."""
+        rig = Rig(layers=[layer or startup.AgentsLayer()], store=self.store)
+        self.addCleanup(rig.close)
+        return rig
+
+    def test_unmatched_agents_collapse_and_every_name_survives(self):
+        self.rig.messages(body("fix the failing test in parser.py"))
+        sent = self.agents()
+        self.assertEqual(list(sent), list(AGENTS))
+        stubbed = sent["crew:db-reviewer"]
+        self.assertTrue(stubbed.endswith("…") and "Tools" not in stubbed and len(stubbed) <= 61)
+        self.assertEqual(sent["claude"], AGENTS["claude"])  # already short: kept whole, with its tools
+        text = self.rig.sent()["messages"][1]["content"][0]["text"]
+        self.assertIn(startup.AGENT_NOTE, text)
+        self.assertTrue(text.endswith("Today's date is 2026-01-01."))
+        self.assertGreater(self.rig.records()[-1]["agents"]["saved_chars"], 400)
+        self.assertTrue(listing_of(self.rig.sent())["slides"].endswith("…"))  # the skills layer still ran
+
+    def test_matched_agent_keeps_its_full_line(self):
+        self.rig.messages(body("review this database migration query"))
+        sent = self.agents()
+        self.assertEqual(sent["crew:db-reviewer"], AGENTS["crew:db-reviewer"])
+        self.assertTrue(sent["infra-planner"].endswith("…"))
+
+    def test_same_request_is_rewritten_to_the_same_bytes(self):
+        request = body("fix the failing test")
+        self.rig.messages(copy.deepcopy(request))
+        self.rig.messages(copy.deepcopy(request))
+        a, b = (r["body"] for r in self.rig.upstream.requests[-2:])
+        self.assertEqual(a, b)
+
+    def test_later_message_restores_the_full_line_once(self):
+        later = [{"role": "assistant", "content": [{"type": "text", "text": "done"}]},
+                 {"role": "user", "content": [{"type": "text", "text": "now plan the terraform infrastructure changes"}]},
+                 {"role": "assistant", "content": [{"type": "text", "text": "ok"}]},
+                 {"role": "user", "content": "and the terraform infrastructure changes again"}]
+        self.rig.messages(body("fix the failing test", extra=later))
+        sent = self.rig.sent()["messages"]
+        note, human = sent[3]["content"]
+        self.assertIn("- infra-planner: " + AGENTS["infra-planner"], note["text"])
+        self.assertEqual(human["text"], "now plan the terraform infrastructure changes")
+        self.assertEqual(sent[5]["content"], "and the terraform infrastructure changes again")
+
+    def test_listing_without_entries_is_untouched(self):
+        request = body("hello")
+        request["messages"][1]["content"][0]["text"] = startup.AGENT_MARK + "\n(none)\n\nToday's date is 2026-01-01."
+        raw = json.dumps(request).encode()
+        rig = self.alone()
+        rig.messages(raw)
+        self.assertEqual(rig.upstream.requests[-1]["body"], raw)
+
+    def test_zero_turns_the_layer_off(self):
+        self.rig.cfg["startup"]["agent_chars"] = 0
+        self.rig.messages(body("hello"))
+        self.assertEqual(self.agents(), AGENTS)
+        self.assertNotIn("agents", self.rig.records()[-1])
+
+    def test_disable_list_names_agents(self):
+        with mock.patch.dict(os.environ, {"ALMANAC_DISABLE": "agents"}):
+            cfg = config.load()
+        self.assertEqual(cfg["startup"]["agent_chars"], 0)
+        self.assertTrue(cfg["skills"]["enabled"])
+
+    def test_a_malformed_block_fails_open(self):
+        request = body("hello")
+        request["messages"][1]["content"][0]["text"] = 5
+        raw = json.dumps(request).encode()
+        rig = self.alone()
+        rig.messages(raw)
+        self.assertEqual(rig.upstream.requests[-1]["body"], raw)
+        self.assertIn("TypeError", rig.records()[-1]["error"])
+
+    def test_a_layer_that_raises_fails_open(self):
+        layer = startup.AgentsLayer()
+        layer.shorten = lambda *args: 1 / 0
+        rig = self.alone(layer)
+        raw = json.dumps(body("hello")).encode()
+        rig.messages(raw)
+        self.assertEqual(rig.upstream.requests[-1]["body"], raw)
+        self.assertIn("ZeroDivisionError", rig.records()[-1]["error"])
 
 
 class ToolsLayerTest(LayerCase):

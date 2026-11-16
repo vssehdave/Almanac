@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Shorter agent list.** The list of agent types Claude Code sends at session
+  start (about 6,400 tokens with 88 agents) is cut to a 60-character stub per
+  agent, without the `(Tools: ...)` suffix on cut lines
+  (`startup.agent_chars`, `0` is off, `ALMANAC_DISABLE=agents`). The choice is
+  frozen per conversation, and an agent whose description matches a message gets
+  its full line back, the way skills do. Names are never changed.
+
 ## 0.2.0 (2026-11-16)
 
 - **Stalled hand-off.** With the automatic hand-off on, when the upstream
