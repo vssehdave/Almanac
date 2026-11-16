@@ -165,6 +165,43 @@ class IndexTest(Case):
         self.assertEqual(self.memory.counts()["exchanges"], 1)
         self.assertEqual(self.memory.search("test cache warm", project=key), [])
 
+    def test_a_conversation_resumed_under_a_new_session_is_stored_once(self):
+        key = self.memory.projects.see(self.alpha)
+        self.memory.index("lane-1", "s1", key, self.convo(), reply("Added it."))
+        more = self.convo() + [said("Added it."), human("Explain the cache key format in the proxy")]
+        self.assertEqual(self.memory.index("lane-2", "s2", key, more, reply("It hashes the prefix.")), 1)
+        self.assertEqual(self.memory.counts(), {"convos": 1, "exchanges": 3, "topics": self.memory.counts()["topics"]})
+        self.assertEqual(sorted(self.memory.leaves("lane-2")), [0, 1, 2])
+        # The old session going on its own way afterwards is kept whole, beside the resumed one.
+        other = self.convo() + [said("Added it."), human("Rename the proxy module to gateway")]
+        self.memory.index("lane-1", "s1", key, other, reply("Renamed."))
+        self.assertEqual(self.memory.counts()["exchanges"], 6)
+        self.assertEqual(sorted(self.memory.leaves("lane-1")), [0, 1, 2])
+
+    def test_a_resumed_conversation_compacted_on_its_first_request_is_stored_once(self):
+        key = self.memory.projects.see(self.alpha)
+        self.memory.index("lane-1", "s1", key, self.convo(), reply("Added it."))
+        more = self.convo() + [said("Added it."), human("Explain the cache key format in the proxy")]
+        self.assertEqual(self.memory.index("lane-2", "s2", key, more[:-1], finished=True), 0)  # what compaction does
+        self.assertEqual(self.memory.counts()["convos"], 1)
+        self.assertEqual(sorted(self.memory.leaves("lane-2")), [0, 1])
+
+    def test_same_first_prompt_with_a_different_answer_stays_separate(self):
+        key = self.memory.projects.see(self.alpha)
+        self.memory.index("lane-1", "s1", key, self.convo()[:3], reply("The tools array changed."))
+        self.memory.index("lane-2", "s2", key, self.convo()[:3], reply("A hook rewrote the system prompt."))
+        self.assertEqual(self.memory.counts()["convos"], 2)
+        self.assertEqual(self.memory.counts()["exchanges"], 2)
+
+    def test_a_new_conversation_with_the_same_opening_stays_separate(self):
+        key = self.memory.projects.see(self.alpha)
+        self.memory.index("lane-1", "s1", key, self.convo()[:3], reply("The tools array changed."))
+        self.memory.index("lane-2", "s2", key, self.convo()[:3], reply("The tools array changed."))
+        later = self.convo()[:3] + [said("The tools array changed."), human("Now bake sourdough bread with rye")]
+        self.memory.index("lane-2", "s2", key, later, reply("Mix flour and starter."))
+        self.assertEqual(self.memory.counts()["convos"], 2)
+        self.assertEqual(self.memory.counts()["exchanges"], 3)
+
     def test_search_needs_two_words_and_respects_the_project(self):
         key = self.memory.projects.see(self.alpha)
         self.memory.index("lane-1", "s1", key, self.convo(), reply("Added it."))
