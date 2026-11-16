@@ -19,7 +19,7 @@ import tempfile
 import threading
 import time
 
-from . import request as rq
+from . import config, project, request as rq
 from .memory import QUOTED, MemoryLayer, _first_line, clean, redact, transcript
 
 # shortcut: the packet travels as one command-line argument, so it is capped; send it through a file or stdin if the CLI gains one
@@ -226,7 +226,8 @@ def travels(facts) -> str:
     if not facts:
         return "  repository  none: this folder is not a git repository, so the cloud session gets no files"
     where = f"upstream {facts['upstream']}" if facts["upstream"] else "it has no upstream, so the remote may not have it"
-    lines = [f"  repository  the cloud clones the GitHub remote at branch {facts['branch']} ({where}),",
+    branch = facts["upstream"].split("/", 1)[-1] if facts["upstream"] else facts["branch"]  # the remote's name for it
+    lines = [f"  repository  the cloud clones the GitHub remote at branch {branch} ({where}),",
              "              not this folder. Push first: nothing listed below is in the cloud's copy."]
     changed = [line[3:] for line in facts["status"] if not line.startswith("??")]
     for name, items in (("unpushed", facts["unpushed"]), ("uncommitted", changed), ("untracked", facts["untracked"])):
@@ -348,7 +349,8 @@ def snapshot(cwd, text, state, session) -> tuple:
 
 
 class HandoffLayer:
-    """With `cloud.auto` on: while a task runs, push a snapshot to origin's almanac/handoff every heartbeat.
+    """With `cloud.auto` on: while a task runs in a repository turned on with `almanac cloud on`, push a snapshot
+    to its origin's almanac/handoff every heartbeat. Any other folder is ignored: no entry, no git.
 
     "Running" is what the proxy sees of the main conversation: a request came in within the last interval, or
     the last reply asked for a tool. A reply that ends the turn pushes "idle" once and the heartbeat stops.
@@ -361,6 +363,13 @@ class HandoffLayer:
         self.repos = {}  # working folder -> what the last request and reply of its conversation said
         self.lock, self.busy, self.wake = threading.Lock(), threading.Lock(), threading.Event()
         self.background, self.thread = background, None
+        self.allowed, self.keys = set(cfg["cloud"].get("repos") or []), {}  # project keys turned on; folder -> its key
+
+    def _listed(self, cwd) -> bool:
+        """Whether `cwd` belongs to a repository turned on. Reads files only: no git runs in a folder not listed."""
+        if cwd not in self.keys:
+            self.keys[cwd] = self.memory.projects.resolve(project.describe(cwd)[0] or "")
+        return bool(self.keys[cwd]) and self.keys[cwd] in self.allowed
 
     def _entry(self, cwd):
         if self.background and self.thread is None:
@@ -370,7 +379,7 @@ class HandoffLayer:
                                            "live": None, "lane": "", "session": ""})
 
     def transform(self, body, ctx):
-        if not (ctx.cwd and MemoryLayer._main_thread(body, ctx)):
+        if not (ctx.cwd and MemoryLayer._main_thread(body, ctx) and self._listed(ctx.cwd)):
             return
         now = time.time()
         with self.lock:
@@ -380,7 +389,7 @@ class HandoffLayer:
             entry.update(seen=now, ended=False, lane=ctx.lane, session=ctx.session)
 
     def observe(self, ctx, orig, reply):
-        if not (ctx.cwd and MemoryLayer._main_thread(orig, ctx)):
+        if not (ctx.cwd and MemoryLayer._main_thread(orig, ctx) and self._listed(ctx.cwd)):
             return
         self.log = ctx.proxy.log
         tool = reply.get("stop_reason") == "tool_use"
@@ -405,10 +414,14 @@ class HandoffLayer:
     def beat(self, now=None):
         """Push what is due: "working" once per interval while a task runs, "idle" once when it stops."""
         now = time.time() if now is None else now
+        self.allowed = set(config.load()["cloud"]["repos"])  # `almanac cloud off` takes effect without a restart
         with self.busy:
             with self.lock:
                 due = []
-                for cwd, entry in self.repos.items():
+                for cwd, entry in list(self.repos.items()):
+                    if not self._listed(cwd):
+                        del self.repos[cwd]  # turned off: no more git in it
+                        continue
                     working = not entry["ended"] and (entry["tool"] or now - entry["seen"] < self.interval)
                     if now >= entry["due"] and (working or entry["pushed"] != "idle"):
                         entry["due"] = now + self.interval  # also spaces out retries when offline
@@ -424,7 +437,7 @@ class HandoffLayer:
             return
         try:
             for cwd, entry in list(self.repos.items()):
-                if entry["pushed"] == "working":
+                if entry["pushed"] == "working" and self._listed(cwd):
                     self._push(cwd, entry, "idle", timeout=15)
         finally:
             self.busy.release()
@@ -476,9 +489,28 @@ at once and change nothing.
 Never delete a branch, never force-push, and never push to the base branch or to {HANDOFF}."""
 
 
-def status(cwd, cfg, store) -> str:
+def key_of(memory, cwd) -> str:
+    """The project key `almanac cloud on` lists for `cwd`, or "" outside git."""
+    return memory.projects.see(cwd, touch=False) if project.repo_root(cwd) else ""
+
+
+def turn(memory, cwd, on) -> str:
+    """`almanac cloud on|off` in `cwd`: add or remove its repository from cloud.repos. Returns what happened."""
+    key = key_of(memory, cwd)
+    if not key:
+        return "almanac: this folder is not in a git repository, so it cannot take part in the hand-off."
+    repos = [k for k in config.load()["cloud"]["repos"] if k != key] + ([key] if on else [])
+    config.set_value("cloud.repos", json.dumps(repos))
+    if on:
+        return f"almanac: hand-off on for {key}. It also needs cloud.auto on (then restart almanac)."
+    return (f"almanac: hand-off off for {key}; no more heartbeats or git from almanac here. A branch already on origin "
+            f"stays: delete it with `git push origin --delete {HANDOFF}`.")
+
+
+def status(cwd, cfg, store, listed=False) -> str:
     """Whether the hand-off is on, its last heartbeat from this machine, and any takeover branch on origin."""
-    lines = [f"  auto        {'on' if cfg['cloud']['auto'] else 'off'} (heartbeat every {cfg['cloud']['heartbeat_minutes']} minutes)"]
+    lines = [f"  auto        {'on' if cfg['cloud']['auto'] is True else 'off'} (heartbeat every {cfg['cloud']['heartbeat_minutes']} minutes)",
+             f"  this repo   {'on' if listed else 'off: `almanac cloud on` here turns it on'}"]
     top = _git(cwd, "rev-parse", "--show-toplevel")
     if not top:
         return "\n".join(lines + ["  repository  none: this folder is not a git repository"])

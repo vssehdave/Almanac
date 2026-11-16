@@ -36,7 +36,8 @@
   shows how many requests waited. Tested with a fake upstream, not a real
   outage.
 - **Automatic hand-off (off by default).** With `cloud.auto` on, a task in
-  progress in a git repository is pushed as a snapshot to `origin`'s
+  progress in a repository turned on with `almanac cloud on` (`off` stops it;
+  no other repository is touched) is pushed as a snapshot to `origin`'s
   `almanac/handoff` branch every `cloud.heartbeat_minutes` (10): HEAD plus
   uncommitted edits to tracked files (never untracked files; a changed file
   that may hold a secret stays at its committed version), the hand-off

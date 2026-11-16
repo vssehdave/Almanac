@@ -228,7 +228,7 @@ QUIET_GIT = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}  # the
 class HandoffTest(CloudCase):
     def setUp(self):
         super().setUp()
-        patcher = mock.patch.dict(os.environ, QUIET_GIT)
+        patcher = mock.patch.dict(os.environ, dict(QUIET_GIT, ALMANAC_HOME=tempfile.mkdtemp(prefix="almanac-cfg-")))
         patcher.start()
         self.addCleanup(patcher.stop)
         git(self.alpha, "config", "user.name", "t")
@@ -237,8 +237,9 @@ class HandoffTest(CloudCase):
         git(self.tmp, "init", "-q", "--bare", self.bare)
         git(self.alpha, "remote", "set-url", "origin", self.bare)
         self.log_path = os.path.join(self.tmp, "requests.jsonl")
+        cloud.turn(self.memory, self.alpha, True)  # `almanac cloud on` in alpha
         cfg = config.load()
-        cfg["cloud"] = {"auto": True, "heartbeat_minutes": 10}
+        cfg["cloud"].update(auto=True, heartbeat_minutes=10)
         self.layer = cloud.HandoffLayer(self.memory, cfg, background=False)
         self.ctx = mock.Mock(cwd=self.alpha, agent="", lane="lane-1", session="s1", proxy=mock.Mock(log=Log(self.log_path)))
 
@@ -361,7 +362,7 @@ class HandoffTest(CloudCase):
         self.assertEqual(self.pushed(), first)
 
     def test_the_heartbeat_thread_pushes_on_its_own(self):
-        layer = cloud.HandoffLayer(self.memory, {"cloud": {"heartbeat_minutes": 10}})
+        layer = cloud.HandoffLayer(self.memory, config.load())
         body ={"messages": [human("A long task")], "tools": [{"name": "Bash", "input_schema": {}}]}
         layer.transform(body, self.ctx)
         layer.observe(self.ctx, body, reply("done", stop="end_turn"))  # a turn end wakes the thread
@@ -370,6 +371,42 @@ class HandoffTest(CloudCase):
                 break
             time.sleep(0.1)
         self.assertEqual(self.state()["state"], "idle")
+
+    def test_only_a_repository_turned_on_takes_part(self):
+        beta = self.beta  # cloud.auto on, but never turned on here
+        git(beta, "init", "-q", "-b", "work")
+        with open(os.path.join(beta, "f.txt"), "w") as handle:
+            handle.write("x\n")
+        git(beta, "add", ".")
+        git(beta, "commit", "-q", "-m", "first")
+        other = os.path.join(self.tmp, "other.git")
+        git(self.tmp, "init", "-q", "--bare", other)
+        git(beta, "remote", "set-url", "origin", other)
+        ctx = mock.Mock(cwd=beta, agent="", lane="lane-b", session="s2", proxy=self.ctx.proxy)
+        body = {"messages": [human("A long task")], "tools": [{"name": "Bash", "input_schema": {}}]}
+        with mock.patch.object(cloud, "_must", side_effect=AssertionError("git in a repository not turned on")):
+            self.layer.transform(body, ctx)
+            self.layer.observe(ctx, body, reply("Working on it.", stop="tool_use"))
+            self.layer.beat(time.time() + 601)
+        self.assertNotIn(beta, self.layer.repos)
+        self.assertEqual(git(other, "for-each-ref"), "")
+        self.turn([human("A long task")], "tool_use")
+        self.layer.beat(time.time() + 601)
+        self.assertEqual(self.state()["state"], "working")  # alpha is on: pushed
+        first = self.pushed()
+        out = io.StringIO()
+        with redirect_stdout(out), mock.patch.object(cli, "_memory_handle", return_value=self.memory), \
+                mock.patch.object(os, "getcwd", return_value=self.alpha):
+            self.assertEqual(cli.main(["cloud", "off"]), 0)
+            self.assertEqual(cli.main(["cloud", "status"]), 0)
+        self.assertIn("hand-off off for", out.getvalue())
+        self.assertIn("this repo   off", out.getvalue())
+        with mock.patch.object(cloud, "_must", side_effect=AssertionError("git after off")):
+            self.turn([human("A long task")], "tool_use")
+            self.layer.beat(time.time() + 5000)
+            self.layer.close()
+        self.assertEqual(self.pushed(), first)
+        self.assertEqual(self.layer.repos, {})
 
     def test_idle_is_pushed_once_when_the_turn_ends_and_the_heartbeat_stops(self):
         now = time.time()
@@ -410,8 +447,8 @@ class HandoffTest(CloudCase):
         outside = cloud.HandoffLayer(self.memory, {"cloud": {"heartbeat_minutes": 10}}, background=False)
         outside.observe(mock.Mock(cwd=self.tmp, agent="", lane="x", session="s", proxy=self.ctx.proxy),
                         {"messages": [human("y")], "tools": [{"input_schema": {}}]}, reply("ok"))
-        outside.beat()  # not a git repository: logged, not raised
-        self.assertEqual(len(Log(self.log_path).tail()), 2)
+        outside.beat()  # not a repository turned on: ignored, nothing logged
+        self.assertEqual((len(Log(self.log_path).tail()), outside.repos), (1, {}))
 
     def test_through_the_proxy_a_request_is_not_held_up_and_the_turn_end_pushes(self):
         rig = Rig(respond=lambda req: (200, {"content-type": "text/event-stream"}, sse("done")), layers=[self.layer])

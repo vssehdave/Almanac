@@ -24,6 +24,7 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac cloud packet         print the hand-off packet for a Claude Code cloud session (--conversation ID)
   almanac cloud send           show that packet, ask, then run `claude --cloud` with it (--conversation ID, --yes)
   almanac cloud watchdog       the setup and the prompt for a scheduled cloud task that takes over a stalled one
+  almanac cloud on|off         let this repository take part in the automatic hand-off, or stop it
   almanac cloud status         hand-off on or off, its last heartbeat, and any takeover branch on origin
   almanac semantic [install|status|index|on|off]   search memory by meaning (optional model)
   almanac route [status]       what model routing is set to and what it decided lately
@@ -246,7 +247,9 @@ WATCHDOG_STEPS = """One-time setup, so a cloud task can take over when this mach
 1. Connect GitHub: install the Claude GitHub App at claude.ai/code, or run /web-setup in Claude Code.
    On a Team plan an Owner must first enable the GitHub connector.
 2. almanac config set cloud.auto on      (then restart almanac)
-3. In Claude Code, in this repository, run /schedule and create an hourly task with the prompt below
+3. almanac cloud on                      (in this repository; no other repository takes part)
+   This repository is {here}.
+4. In Claude Code, in this repository, run /schedule and create an hourly task with the prompt below
    (or create it at claude.ai/code/routines).
 
 The prompt for the scheduled task:
@@ -265,15 +268,22 @@ def _cloud(rest):
     for name in ("packet", "send"):
         sub.add_parser(name).add_argument("--conversation", type=int, help="default: the latest one of this folder's project")
     sub.choices["send"].add_argument("--yes", action="store_true", help="send without asking")
-    sub.add_parser("status")
-    sub.add_parser("watchdog")
+    for name in ("status", "watchdog", "on", "off"):
+        sub.add_parser(name)
     args = parser.parse_args(rest)
     memory, cwd, cfg = _memory_handle(), os.getcwd(), config.load()
+    if args.cmd in ("on", "off"):
+        text = cloud.turn(memory, cwd, args.cmd == "on")
+        _print(text)
+        return 2 if "cannot" in text else 0
+    key = cloud.key_of(memory, cwd)
+    listed = bool(key) and key in cfg["cloud"]["repos"]
     if args.cmd == "watchdog":
-        _print(WATCHDOG_STEPS.format(prompt=cloud.watchdog(cfg["cloud"]["heartbeat_minutes"])))
+        here = "on" if listed else "off"
+        _print(WATCHDOG_STEPS.format(prompt=cloud.watchdog(cfg["cloud"]["heartbeat_minutes"]), here=here))
         return 0
     if args.cmd == "status":
-        _print(cloud.status(cwd, cfg, memory.store))
+        _print(cloud.status(cwd, cfg, memory.store, listed))
         return 0
     if args.conversation is None:
         found = memory.recent(project=memory.projects.see(cwd, touch=False), limit=1)

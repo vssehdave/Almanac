@@ -454,8 +454,11 @@ replaced. A cloud session started from a packet has not been tried yet.
 
 ## Automatic hand-off
 
-Off by default. When it is on, a task that stops because this machine went
-quiet (offline, asleep, shut down) is picked up by a scheduled cloud task.
+Off by default, and opt-in per repository: it needs `cloud.auto` on **and**
+`almanac cloud on` run inside the repository. A repository you have not turned
+on gets no branch, no heartbeat and no git command from Almanac. When it is on,
+a task that stops because this machine went quiet (offline, asleep, shut down)
+is picked up by a scheduled cloud task.
 
 Nothing can start a cloud session from a machine with no network, so the
 trigger has to wait in the cloud already. It works like this:
@@ -486,13 +489,14 @@ no network costs one line in the log; requests go out as before.
 ```bash
 almanac cloud watchdog        # the setup steps and the prompt for the scheduled task
 almanac config set cloud.auto on
-almanac cloud status          # on or off, the last heartbeat, any takeover branch on origin
+almanac cloud on              # in each repository that should take part (`almanac cloud off` stops it)
+almanac cloud status          # on or off here, the last heartbeat, any takeover branch on origin
 ```
 
 Setup, once: connect GitHub (the Claude GitHub App at claude.ai/code, or
 `/web-setup` in Claude Code; on a Team plan an Owner must enable the GitHub
-connector), turn `cloud.auto` on and restart Almanac, then in this repository
-run `/schedule` and create an hourly task with the prompt `almanac cloud
+connector), turn `cloud.auto` on and restart Almanac, run `almanac cloud on` in
+the repository, then in that repository run `/schedule` and create an hourly task with the prompt `almanac cloud
 watchdog` prints.
 
 When a takeover happened, `almanac cloud status` names the branch. Pull the
@@ -500,17 +504,19 @@ work back with `claude --teleport` or `git fetch origin <branch>`.
 
 Know this before you turn it on:
 
-- **What is sent where.** To the `origin` remote of whichever repository a
-  Claude Code session works in, branch `almanac/handoff`, force-pushed (that
+- **What is sent where.** To the `origin` remote of each repository you turned
+  on, branch `almanac/handoff`, force-pushed (that
   branch only): your uncommitted edits to tracked files, every local commit
   not pushed yet (they are the snapshot's history), and the packet. The packet
   is your conversation's task and recent transcript, including tool output
   such as file contents and command output from outside the repository, and
   absolute paths. Common secret patterns are taken out of it; that is best
   effort, not complete. Read one first with `almanac cloud packet`.
-- **The setting is global.** When it is on, every repository with an `origin`
-  you open through Almanac gets the branch, a work repository included. On a
-  public repository the branch is public.
+- **Only repositories you turned on.** `almanac cloud on` lists the repository
+  by its project (its remote's address), so every clone of it on this machine
+  takes part. `almanac cloud off` stops it at the next heartbeat check, without
+  a restart; a branch already on origin stays until you delete it. On a public
+  repository the branch is public.
 - Your pre-push hooks run on every push. The commit says `[skip ci]`, which
   stops GitHub Actions, but other services that build every branch may still
   build it.

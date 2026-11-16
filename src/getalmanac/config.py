@@ -73,6 +73,7 @@ DEFAULTS = {
     "cloud": {
         "auto": False,  # true keeps a running task's snapshot on origin's almanac/handoff branch (see cloud.py)
         "heartbeat_minutes": 10,
+        "repos": [],  # project keys of the repositories that take part; `almanac cloud on` / `off` in one changes it
     },
 }
 
