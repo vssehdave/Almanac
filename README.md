@@ -357,14 +357,17 @@ repository (`src/getalmanac/bundle/`), so there is nothing to install or update.
 | `egm` | Plan before building: brainstorm, draft a design document, review it with fresh reviewers |
 | `interfaces` | How to build and finish an interface: typography, colour, layout, accessibility, review |
 | `astryx` | Working with the Astryx design system |
-| `untangle` | A phased clean-up of a whole codebase (started by hand: `/untangle:untangle-codebase`) |
+| `untangle` | A phased clean-up of a whole codebase |
 | `security-audit` | A multi-phase security audit with validated findings |
-| `crew` | 71 specialist sub-agents (planning, review per language, build fixes, audits), each pointed at the skills above |
+| `crew` | 71 specialist sub-agents (planning, review per language, build fixes, audits); 62 of them are pointed at the skills above |
 | `api-anything` | Calling a website through its own data requests, for scrapers and sites with no API. Runs locally only: nothing goes to its shared catalog |
 | `bla` | Hardening release artifacts against automated reverse engineering |
 
 The [working rules](#5-working-rules-for-each-model) tell each model when to reach for
-them. Where each plugin came from, at which commit, and what was changed is in
+them, so no slash command is needed: every bundled skill may be started by
+the model itself. Fable gets only that part of the rules (`fable.md` and
+`skills.md`), since its own working method is the one the others are taught.
+Where each plugin came from, at which commit, and what was changed is in
 `src/getalmanac/bundle/SOURCES.md`. `almanac config set bundle.enabled false`
 turns the whole bundle off.
 

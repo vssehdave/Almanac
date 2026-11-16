@@ -11,6 +11,12 @@
   takeover began, both carry on, the cloud one on its own
   `claude/almanac-takeover-...` branch.
 
+- **Skills without slash commands.** Every bundled skill may now be started by
+  the model, the rules for when to use each are in their own file
+  (`skills.md`), and Fable and Mythos receive that file too. More crew agents
+  point at the skills (62 of 71).
+- CI runs on Windows only.
+
 - **Bundled skills and agents.** Almanac now carries its own plugins and loads
   them into every session with `--plugin-dir`: design planning and review,
   interface building, the Astryx design system, codebase untangling, security

@@ -1,7 +1,7 @@
 ---
 name: go-build-resolver
 description: Fixes Go build, vet and linter errors with minimal changes; use when a Go build fails.
-tools: Read, Write, Edit, Bash, Grep, Glob
+tools: Read, Write, Edit, Bash, Grep, Glob, Skill
 model: sonnet
 ---
 
@@ -99,3 +99,7 @@ Remaining errors: 3
 ```
 
 Final: `Build Status: SUCCESS/FAILED | Errors Fixed: N | Files Modified: list`
+
+## Skills to use
+
+Fix with the smallest complete change: if the `ponytail:ponytail-review` skill is available, check your change against it.

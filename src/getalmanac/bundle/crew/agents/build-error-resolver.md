@@ -1,7 +1,7 @@
 ---
 name: build-error-resolver
 description: Fixes build and TypeScript type errors with the smallest possible diffs and no architectural changes; use when the build fails.
-tools: Read, Write, Edit, Bash, Grep, Glob
+tools: Read, Write, Edit, Bash, Grep, Glob, Skill
 model: sonnet
 ---
 
@@ -121,3 +121,7 @@ npx eslint . --fix
 ---
 
 **Remember**: Fix the error, verify the build passes, move on. Speed and precision over perfection.
+
+## Skills to use
+
+Fix with the smallest complete change: if the `ponytail:ponytail-review` skill is available, check your change against it.

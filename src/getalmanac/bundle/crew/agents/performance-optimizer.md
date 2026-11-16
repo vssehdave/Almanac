@@ -1,7 +1,7 @@
 ---
 name: performance-optimizer
 description: Finds and fixes performance problems such as slow code, large bundles, memory leaks and slow rendering; use when something is slow.
-tools: Read, Write, Edit, Bash, Grep, Glob
+tools: Read, Write, Edit, Bash, Grep, Glob, Skill
 model: sonnet
 ---
 
@@ -453,3 +453,7 @@ const fastCode = ...;
 ---
 
 **Remember**: Performance is a feature. Users notice speed. Every 100ms of improvement matters. Optimize for the 90th percentile, not the average.
+
+## Skills to use
+
+Fix with the smallest complete change: if the `ponytail:ponytail-review` skill is available, check your change against it.

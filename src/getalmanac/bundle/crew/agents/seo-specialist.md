@@ -1,7 +1,7 @@
 ---
 name: seo-specialist
 description: Audits technical SEO, on-page optimization, structured data and Core Web Vitals; use for site audits, meta tags, sitemaps and robots issues.
-tools: Read, Grep, Glob, WebSearch, WebFetch
+tools: Read, Grep, Glob, WebSearch, WebFetch, Skill
 model: sonnet
 ---
 
@@ -65,3 +65,7 @@ Fix: Exact change to make
 - no manipulative pattern recommendations
 - no advice detached from the actual site structure
 - recommendations should be implementable by the receiving engineer or content owner
+
+## Skills to use
+
+For words a person will read in the product or its pages, follow the `interfaces:better-writing` skill.

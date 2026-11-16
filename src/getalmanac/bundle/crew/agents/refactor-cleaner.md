@@ -97,4 +97,4 @@ After each batch:
 
 Judge the change by the smallest-complete-change rules: if the `ponytail:ponytail-review` skill is available, use it.
 
-For a clean-up of a whole codebase, stop and tell the owner to run `/untangle:untangle-codebase`; you cannot start it yourself.
+For a clean-up of a whole codebase that the owner asked for, use the `untangle:untangle-codebase` skill on a clean branch.

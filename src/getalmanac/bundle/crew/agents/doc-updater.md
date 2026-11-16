@@ -1,7 +1,7 @@
 ---
 name: doc-updater
 description: Updates codemaps, READMEs and guides from the source code; use when architecture, routes or dependencies change.
-tools: Read, Write, Edit, Bash, Grep, Glob
+tools: Read, Write, Edit, Bash, Grep, Glob, Skill
 model: haiku
 ---
 
@@ -113,3 +113,7 @@ Links to other codemaps
 ---
 
 **Remember**: Documentation that doesn't match reality is worse than no documentation. Always generate from the source of truth.
+
+## Skills to use
+
+For words a person will read in the product or its pages, follow the `interfaces:better-writing` skill.
