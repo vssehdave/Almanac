@@ -38,3 +38,6 @@ almanac = "getalmanac.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+getalmanac = ["cheatsheets/*.md"]

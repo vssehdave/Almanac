@@ -24,6 +24,8 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac semantic [install|status|index|on|off]   search memory by meaning (optional model)
   almanac route [status]       what model routing is set to and what it decided lately
   almanac route pin TIER       keep this project on small, medium or large (`pin off` lifts it)
+  almanac cheatsheet show [opus|sonnet|haiku]   the rules added for that model, and their size
+  almanac cheatsheet path      where your own copies go (opus.md, sonnet.md, haiku.md, common.md)
   almanac projects             projects seen; `projects merge FROM INTO`, `projects rename NAME NEW`
   almanac status               settings, files and recent activity
   almanac doctor               check that everything needed is in place
@@ -359,6 +361,22 @@ def _route(rest):
     return 0
 
 
+def _cheatsheet(rest):
+    from . import cheatsheet
+    from .compact import CHARS_PER_TOKEN
+
+    if rest[:1] == ["path"] and len(rest) == 1:
+        print(cheatsheet.override_dir())
+    elif rest[:1] == ["show"] and len(rest) <= 2 and all(name in cheatsheet.FAMILIES for name in rest[1:]):
+        for name in rest[1:] or cheatsheet.FAMILIES:
+            text = cheatsheet.text_for(name)
+            _print(f"--- {name}: about {round(len(text) / CHARS_PER_TOKEN)} tokens ---\n{text}\n")
+    else:
+        print("usage: almanac cheatsheet [show [opus|sonnet|haiku] | path]", file=sys.stderr)
+        return 2
+    return 0
+
+
 def _mcp(_rest):
     from . import mcp
 
@@ -379,7 +397,7 @@ def _version(_rest):
 
 
 COMMANDS = {"serve": _serve, "report": _report, "status": _status, "doctor": _doctor, "config": _config,
-            "version": _version, "memory": _memory, "projects": _projects, "route": _route, "mcp": _mcp, "semantic": _semantic}
+            "version": _version, "memory": _memory, "projects": _projects, "route": _route, "cheatsheet": _cheatsheet, "mcp": _mcp, "semantic": _semantic}
 
 
 def main(argv=None):
