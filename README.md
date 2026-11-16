@@ -3,8 +3,9 @@
 A local proxy for Claude Code. It makes each session start with less context,
 gives every project a memory, and keeps long conversations inside the context
 window. Nothing leaves your machine except the requests Claude Code was already
-sending to Anthropic. (The one exception is a model you choose to download, see
-[Search by meaning](#search-by-meaning).)
+sending to Anthropic. (The exceptions are a model you choose to download, see
+[Search by meaning](#search-by-meaning), and the skill scanner, see
+[Installing skills safely](#installing-skills-safely).)
 
 ```
 Claude Code  ──▶  almanac (127.0.0.1)  ──▶  api.anthropic.com
@@ -340,6 +341,77 @@ To change the text, put a file with the same name (`opus.md`, `sonnet.md`,
 `haiku.md` or `common.md`) in the folder `almanac cheatsheet path` prints. It
 replaces the packaged one from the next run.
 
+## Installing skills safely
+
+Skills and plugins from other people run with your permissions. Almanac puts a
+scan in front of them, using NVIDIA's SkillSpector, which you install once:
+
+```bash
+uv tool install git+https://github.com/NVIDIA/skillspector.git
+```
+
+Almanac runs it as a separate program, always with `--no-llm`, so no file
+contents are sent to a model. SkillSpector still sends the names and versions of
+dependencies it finds to api.osv.dev to look up known vulnerabilities. Without
+SkillSpector nothing is scanned, and Almanac says so; it never treats a skill as
+fine because it could not check it.
+
+**Scan something**
+
+```bash
+almanac skill scan ~/.claude/skills/some-skill
+almanac skill scan https://github.com/someone/skills
+```
+
+It prints the score, the verdict and each issue with its file and line. The
+exit code is 0 for SAFE (score 0 to 20), 1 for CAUTION (21 to 50), 2 for
+DO_NOT_INSTALL (51 to 100) and 3 when the scanner is missing or failed. The
+verdict is a pattern check: a security skill that explains attacks can score
+high without doing anything harmful, so read the issues.
+
+**Install a skill**
+
+```bash
+almanac skill add https://github.com/someone/skills --skill their-skill --ref <full commit SHA>
+```
+
+The source is fetched into `~/.almanac/quarantine/` with git hooks, links,
+submodules and LFS turned off, and nothing in it is run. Each folder with a
+`SKILL.md` that would be installed is scanned. Only if every one is SAFE are
+they copied (without links or `.git`) to `~/.claude/skills/<name>`, or under
+`CLAUDE_CONFIG_DIR` when that is set. CAUTION is refused unless you add
+`--accept-caution`. DO_NOT_INSTALL or a failed scan is always refused; there is
+no flag to override it. An existing skill is kept unless you add `--replace`.
+Each install is recorded in `~/.almanac/skills.json` with its source, commit,
+content hash, score and verdict. Skill names with `..`, a drive or an absolute
+path are refused.
+
+A repo that is a Claude Code plugin with hooks or MCP servers is not installed.
+Almanac scans it, lists the hooks and MCP commands it declares, and prints the
+`claude plugin` commands for you to run yourself.
+
+**At every start**
+
+`almanac` hashes each skill folder and each installed plugin. Anything flagged
+by an earlier scan, and still unchanged, is shown in a warning block before
+Claude Code starts, with the command for the full report. It is not blocked or
+removed; that is your call. Anything new or changed is scanned by a background
+process, at most 5 per start, because one scan takes from about 15 seconds to
+several minutes. Its results show at the next start. On a machine with many
+skills the first starts work through them 5 at a time; `almanac skill audit`
+scans all of them now and prints a table (`--again` rescans everything). Set
+`skills.scan_on_launch` to `false` to turn this off.
+
+**The pack**
+
+`pack.json` in this repo lists third-party skills and plugins, each pinned to a
+full commit SHA. `almanac pack list` shows them. `almanac pack install [NAME]`
+installs the skill entries through the same scan as `skill add`, at the pinned
+commit. Plugin entries are only scanned and shown with their manual commands,
+and program entries (the scanner, a secret scanner) are only listed.
+`pack.json` is read from the source checkout; with an installed package, pass
+`--file PATH`.
+
 ## Why the cache keeps working
 
 A proxy that rewrites requests can easily make every turn a cache miss. Almanac
@@ -441,6 +513,11 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac route pin small\|medium\|large\|off` | Keep this project on one tier, or lift the pin |
 | `almanac cheatsheet show [opus\|sonnet\|haiku]` | The working rules added for that model, and their size |
 | `almanac cheatsheet path` | Where your own copies of the rules go |
+| `almanac skill scan PATH\|URL` | Scan a skill or plugin (exit 0 SAFE, 1 CAUTION, 2 DO_NOT_INSTALL, 3 not scanned) |
+| `almanac skill add URL\|PATH` | Fetch into quarantine, scan, install the skills only if SAFE (`--skill`, `--ref`, `--accept-caution`, `--replace`) |
+| `almanac skill audit` | Scan installed skills and plugins not scanned yet, then a table (`--again` for all) |
+| `almanac pack list` | The pinned third-party skills and plugins in `pack.json` |
+| `almanac pack install [NAME]` | Install the pack's skills through the scan; plugins and programs are only shown |
 | `almanac projects` | Projects seen. `projects merge FROM INTO`, `projects rename NAME NEW` |
 | `almanac config [set KEY VALUE \| path]` | Show or change settings |
 | `almanac serve [--port N]` | Run only the proxy, for clients you start yourself |
@@ -455,6 +532,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `skills.enabled` | `true` | Collapse skill descriptions |
 | `skills.stub_chars` | `90` | Characters kept for a collapsed skill |
 | `skills.always_full` | `[]` | Skills never collapsed |
+| `skills.scan_on_launch` | `true` | Scan new or changed skills and plugins in the background at each start, and warn about flagged ones |
 | `tools.enabled` | `true` | Defer cold tool schemas |
 | `tools.cold` | six tools | Tools deferred unless called for |
 | `tools.hot` | `[]` | Tools never deferred |
@@ -500,6 +578,10 @@ Everything is under `~/.almanac/` (or `ALMANAC_HOME`):
 | `config.json` | Settings you changed |
 | `logs/requests.jsonl` | One line per request: sizes, token counts, timing. No message text, no credentials |
 | `mcp.json` | The entry that tells Claude Code how to start the memory tools |
+| `skills.json` | Skills installed by `almanac skill add`: source, commit, content hash, score, verdict, date |
+| `skill-scans.json` | The last scan of each installed skill and plugin, by content hash |
+| `quarantine/` | Fetched sources while they are scanned; removed when the command ends |
+| `logs/skill-scan.log` | Output of the background scans started at launch |
 
 The memory holds conversation text in plain SQLite on your disk. Delete any of
 it with `almanac memory forget`, or all of it by removing the folder. Forget
