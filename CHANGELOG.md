@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.0 (2026-11-16)
+
 - **Stalled hand-off.** With the automatic hand-off on, when the upstream
   fails 5 times in a row (`cloud.stall_after`, `0` is off) on a connection
   error, a timeout or a status of 500 or more, Almanac pushes the snapshot at

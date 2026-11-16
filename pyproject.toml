@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "getalmanac"
-version = "0.1.0"
+version = "0.2.0"
 description = "A local proxy for Claude Code: smaller startup context and per-project memory, with nothing leaving your machine (stdlib only)."
 readme = "README.md"
 requires-python = ">=3.10"
