@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Working rules for each model.** Each conversation thread now gets a short
+  set of working rules at the end of its system prompt, picked by the model
+  the request goes out on: Opus and Sonnet get their own text plus a common
+  part, Haiku gets a shorter text, other models get nothing. It is on by
+  default; `almanac config set cheatsheet.mode off` turns it off. Files with
+  the same names under `ALMANAC_HOME/cheatsheets/` replace the packaged ones.
+  New commands: `almanac cheatsheet show` and `almanac cheatsheet path`. The
+  text is the same on every request, so the prompt cache keeps hitting.
 - **Model routing.** Almanac can now choose the model for you. With
   `routing.mode` set to `subagents` or `all` (it is `off` by default and then
   changes nothing), each prompt goes to Haiku (simple work), Sonnet (coding) or

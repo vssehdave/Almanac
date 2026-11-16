@@ -3,7 +3,7 @@
 Almanac is a local proxy for Claude Code. `almanac` starts a server on
 127.0.0.1 and launches Claude Code pointed at it. The proxy forwards every
 request to Anthropic with Claude Code's own login, and changes only the request
-body, in four ways:
+body, in five ways:
 
 1. **Startup layer.** Skill descriptions are shortened and rarely used tool
    schemas are deferred. Each loads in full when a message needs it.
@@ -22,6 +22,10 @@ body, in four ways:
    `Difficulty:` line. A model switch rewrites the history into the new model's
    cache, so a move down on the main thread is priced first. The choice is
    frozen per turn and a refused model falls back to the original request.
+5. **Cheatsheets** (`cheatsheet.mode`, on by default). Each conversation thread
+   gets short working rules at the end of its system prompt, chosen by the
+   model the request is sent with after routing. The text is read once per run
+   and placed so that no cache breakpoint is added or moved.
 
 ## Rules that hold everywhere
 

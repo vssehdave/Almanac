@@ -316,6 +316,30 @@ estimated cost of staying and of switching, and whether it was applied.
 declined, raises after failures, and tokens per model, read from the replies'
 own `usage`. The request log also records the model that really answered.
 
+### 5. Working rules for each model
+
+Every conversation thread, main or sub-agent, gets a short set of working
+rules added to the end of its system prompt. The text depends on the model the
+request is sent with, after routing: Opus gets `opus.md` and then `common.md`,
+Sonnet gets `sonnet.md` and then `common.md`, Haiku gets `haiku.md` alone. Any
+other model gets nothing. Requests without tools (titles, quota checks) and
+Almanac's own background calls are left alone.
+
+The text is read once per run and added in the same place every time, so the
+system prompt keeps the same bytes and the cache keeps hitting. No cache
+breakpoint is added or moved. If a routed request is refused and sent again on
+the original model, the retry carries that model's rules.
+
+```bash
+almanac cheatsheet show haiku    # the exact text added, and its size in tokens
+almanac cheatsheet path          # where your own copies go
+almanac config set cheatsheet.mode off
+```
+
+To change the text, put a file with the same name (`opus.md`, `sonnet.md`,
+`haiku.md` or `common.md`) in the folder `almanac cheatsheet path` prints. It
+replaces the packaged one from the next run.
+
 ## Why the cache keeps working
 
 A proxy that rewrites requests can easily make every turn a cache miss. Almanac
@@ -415,6 +439,8 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac semantic on \| off` | Use the model when it is there, or stay keyword-based |
 | `almanac route [status]` | Routing mode, pin, unavailable tiers and the last 10 decisions |
 | `almanac route pin small\|medium\|large\|off` | Keep this project on one tier, or lift the pin |
+| `almanac cheatsheet show [opus\|sonnet\|haiku]` | The working rules added for that model, and their size |
+| `almanac cheatsheet path` | Where your own copies of the rules go |
 | `almanac projects` | Projects seen. `projects merge FROM INTO`, `projects rename NAME NEW` |
 | `almanac config [set KEY VALUE \| path]` | Show or change settings |
 | `almanac serve [--port N]` | Run only the proxy, for clients you start yourself |
@@ -452,6 +478,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `routing.escalate_turns` | `3` | Turns a raise lasts |
 | `routing.prices`, `routing.work` | see `config.py` | Relative prices and expected work per turn, for pricing a switch |
 | `routing.windows` | 1,000,000 each | Context window per model id (unknown ids count as 200,000) |
+| `cheatsheet.mode` | `"on"` | `"off"` stops adding the working rules for each model |
 | `offline.hold_minutes` | `480` | Minutes a model request waits for the network to return (`0` fails at once) |
 | `remote_control` | `false` | Run sessions in HTTPS-proxy mode |
 | `port` | `8787` | Where `almanac serve` listens |

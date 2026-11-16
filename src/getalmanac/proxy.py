@@ -583,6 +583,7 @@ def relay(a, b):
 
 def build(cfg=None) -> Proxy:
     """A proxy with every layer attached. Each layer reads its own on/off setting."""
+    from .cheatsheet import CheatsheetLayer
     from .compact import CompactLayer
     from .memory import Memory, MemoryLayer, ProjectLayer
     from .routing import RoutingLayer
@@ -598,5 +599,7 @@ def build(cfg=None) -> Proxy:
     threading.Thread(target=semantic.active, daemon=True).start()  # the first recall should not wait a second for the model
     # Order matters: the project first, then the history is settled, then the parts inside it.
     # Routing comes after them: it prices the prefix as it will really be sent.
-    layers = [ProjectLayer(memory), CompactLayer(memory), MemoryLayer(memory), SkillsLayer(), ToolsLayer(), RoutingLayer(), SummaryLayer(memory)]
+    # The cheatsheet comes after routing: it is chosen by the model the request goes out on.
+    layers = [ProjectLayer(memory), CompactLayer(memory), MemoryLayer(memory), SkillsLayer(), ToolsLayer(), RoutingLayer(),
+              CheatsheetLayer(), SummaryLayer(memory)]
     return Proxy(cfg or config.load(), store=store, layers=layers)
