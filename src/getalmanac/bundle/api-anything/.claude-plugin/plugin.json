@@ -1,0 +1,13 @@
+{
+  "name": "api-anything",
+  "version": "0.4.0",
+  "description": "Call websites through their own data requests: learn an operation once, replay it over HTTP with a browser fallback.",
+  "license": "MIT",
+  "mcpServers": {
+    "api-anything": {
+      "command": "npx",
+      "args": ["-y", "api-anything@0.4.0", "mcp"],
+      "env": { "API_ANYTHING_LOCAL_ONLY": "1" }
+    }
+  }
+}
