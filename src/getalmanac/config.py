@@ -14,6 +14,12 @@ DEFAULTS = {
     "upstream_proxy": "",
     "upstream_ca": "",  # a CA file to trust for the upstream, for a proxy that re-signs TLS
     "offline": {"hold_minutes": 480},  # how long a model request waits for the network to return; 0 fails at once
+    "accounts": {
+        # Claude Code config folders to carry on with when the login in use is out of usage,
+        # for example ["~/.claude-work", "~/.claude"]. Empty turns this off (see accounts.py)
+        "fallback": [],
+        "cooldown_minutes": 30,  # how long a login that ran out of usage is left alone before it is tried again
+    },
     "skills": {
         "enabled": True,
         "stub_chars": 90,  # characters of description kept for a collapsed skill
@@ -151,6 +157,7 @@ def load() -> dict:
             cfg["startup"]["agent_chars"] = 0
             cfg["cheatsheet"]["mode"] = "off"  # "all" means no change to the request at all
             cfg["playbooks"]["enabled"] = False
+            cfg["accounts"]["fallback"] = []
         elif name == "agents":
             cfg["startup"]["agent_chars"] = 0
         elif isinstance(cfg.get(name), dict):

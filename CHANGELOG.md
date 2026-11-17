@@ -11,6 +11,16 @@
   shortest ttl they asked for) with the cache writes they cost, and the ttl
   values seen. `almanac report --json` adds the same data under `meter`.
   Nothing about a request or reply changes.
+- **A second login takes over when the first is out of usage.** With
+  `accounts.fallback` set to a list of Claude Code config folders (off by
+  default), a model request that comes back with a usage-limit 429 is sent
+  again once with the next valid login's token, and later requests skip the
+  spent login until its usage comes back (read from the reply's reset
+  header, `retry-after` or "resets 2:30am" wording, else
+  `accounts.cooldown_minutes`). A plain rate limit, an expired alternative
+  or two spent logins return the original reply unchanged.
+  Almanac never refreshes or writes a login. `almanac status` shows the
+  folders and the log records which one was used.
 - **The Opus rules cover working against a deadline.** Write the handover
   first and keep it current, stop starting things near the end, know which
   login the work is charged to, and audit anything that runs on its own.

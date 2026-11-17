@@ -1146,6 +1146,41 @@ protect:
 - Injected instructions. Stored text is marked as a quoted record, but a model
   can still be fooled by it.
 
+## Two accounts
+
+If you use two Claude logins (for example `~/.claude` and `~/.claude-work`),
+Almanac can carry on with the other one when the first runs out of usage. It is
+off until you set `accounts.fallback` to a list of Claude Code config folders:
+
+    almanac config set accounts.fallback '["~/.claude-work", "~/.claude"]'
+
+When Anthropic answers a model request with a usage-limit error, Almanac sends
+the same request again with the other login's token, once. If that works, Claude
+Code never sees the error, and later requests go straight out on the other login
+until the first login's usage comes back, then the first is tried again (and if
+it is still refused, the new reset time replaces the old one). Almanac works out
+that time from the reply: the `anthropic-ratelimit-unified-reset` header, else
+`retry-after`, else a phrase like "resets 2:30am" in the message (read as local
+time, or in the zone given in brackets), else `accounts.cooldown_minutes` (30)
+from now. The time is kept between 1 minute and 7 days away.
+A plain rate limit (slow down) is passed through as it is. If the other login
+cannot take the request either, Claude Code gets the original limit message.
+The first switch prints one line on the proxy's stderr with the reset time,
+`almanac status` lists the folders and when the first login is tried again, and
+the request log records `account` with the folder name (never a token).
+
+Things to know:
+
+- Almanac only uses a login that is already valid. It never refreshes a token
+  and never writes a credentials file. If the other login's token has expired,
+  start Claude Code once with that account to renew it.
+- The prompt cache is per account, so the first request after a switch is a full
+  cache write.
+- A switch means the other account's plan is used.
+- Only Claude Code's own model requests are switched. Its side requests that
+  Almanac does not touch still use the login Claude Code started with.
+- Tested against a fake upstream and fake credential folders, not a real limit.
+
 ## When the network drops
 
 If the upstream cannot be reached, Almanac holds a model request and sends it
