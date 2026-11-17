@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 from . import config
+from . import request as rq
 from .memory import MemoryLayer
 from .routing import CONTINUE, _digest, handwritten, person_text, person_turns
 from .startup import _insert_before_last
@@ -392,7 +393,7 @@ class PlaybookLayer:
             if len(low) < MIN_REQUEST or CONTINUE.match(low):
                 text = ""  # decided by the words alone, so nothing is stored
             else:
-                text = ctx.store.frozen(key, lambda: self._first(ctx, low))
+                text = ctx.store.frozen(key, lambda: self._first(ctx, low, key))
         # Earlier turns got their note when they were new: put it back, byte for byte, so the cached prefix holds.
         # When compaction changed the history the turns no longer line up, and there is nothing to put back.
         if len(mine) == len(seen):
@@ -400,12 +401,48 @@ class PlaybookLayer:
                 old = ctx.store.get(self._key(ctx, turn, person_text(orig[seen[turn]])))
                 if old:
                     _insert_before_last(messages[mine[turn]], old)
+        for turn in range(last):  # a reminder that went into an earlier turn's tool loop stays where it was put
+            earlier = self._key(ctx, turn, person_text(orig[seen[turn]]))
+            self._place(messages, orig, ctx.store.get("playbookskip" + earlier[len("playbook"):]))
         if text:
             _insert_before_last(messages[mine[-1]], text)
             ctx.stats.setdefault("playbook", {})["chars"] = len(text)
+            self._place(messages, orig, self._skipped(ctx, orig, seen[last], key))
 
     @staticmethod
-    def _first(ctx, low) -> str:
+    def _place(messages, orig, kept):
+        """Put a stored reminder back after the tool results of the message it first went into, or nowhere
+        when the history no longer lines up (compacted or rewound)."""
+        if not kept or len(messages) != len(orig) or not 0 <= kept["at"] < len(messages):
+            return
+        msg = messages[kept["at"]]
+        if isinstance(msg, dict) and rq.is_tool_result(msg) and isinstance(msg.get("content"), list):
+            msg["content"].append({"type": "text", "text": kept["text"]})
+
+    @staticmethod
+    def _skipped(ctx, orig, start, key):
+        """The reminder for this turn: decided once, when the model has made 2 tool calls without taking an offered script."""
+        suffix = key[len("playbook"):]
+        kept = ctx.store.get("playbookskip" + suffix)
+        name = ctx.store.get("playbookoffer" + suffix)
+        if kept or not name:
+            return kept
+        calls = [b.get("name") or "" for m in orig[start + 1:] if isinstance(m, dict) and m.get("role") == "assistant"
+                 for b in rq.blocks(m) if b.get("type") == "tool_use"]
+        calls = [c for c in calls if c != "ToolSearch"]
+        if len(calls) < 2 or any(c.endswith("playbook_run") for c in calls) or not rq.is_tool_result(orig[-1]):
+            return None
+        pb = load(name)
+        if pb is None or not runnable(pb):
+            return None
+        args = ", ".join(f"<{a['name']}>" for a in pb["args"])
+        text = (f'<system-reminder>\nAlmanac playbook "{name}" has an approved script that does this job. Call the tool '
+                f'`playbook_run` with name "{name}" and args [{args}] now instead of continuing by hand, '
+                "unless this request really differs from the playbook.\n</system-reminder>")
+        return ctx.store.frozen("playbookskip" + suffix, lambda: {"at": len(orig) - 1, "text": text})
+
+    @staticmethod
+    def _first(ctx, low, key) -> str:
         best = find(low, ctx.project, limit=1)
         if not best:
             return ""
@@ -414,8 +451,12 @@ class PlaybookLayer:
                 and ctx.cwd and Path(ctx.cwd).is_dir():
             try:  # holds the store's lock for at most AUTO_TIMEOUT seconds, once per typed turn
                 head, out, err, code = _execute(done["name"], [], ctx.cwd, AUTO_TIMEOUT)
+                text = ran_note(done, head, out, err)
             except Exception:  # a script that cannot run leaves the ordinary note
-                return note(done)
-            ctx.stats["playbook"] = {"ran": done["name"], **({"exit": code} if code is not None else {"timeout": True})}
-            return ran_note(done, head, out, err)
+                pass
+            else:
+                ctx.stats["playbook"] = {"ran": done["name"], **({"exit": code} if code is not None else {"timeout": True})}
+                return text
+        if runnable(done):  # offered, not run: remember it, so a skipped offer can be called back
+            ctx.store.put("playbookoffer" + key[len("playbook"):], done["name"])
         return note(done)

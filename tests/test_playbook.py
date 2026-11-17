@@ -436,8 +436,8 @@ class LayerTest(Home):
 COUNT = "open('count.txt', 'a').write('x')\n"
 
 
-class AutoTest(Home):
-    """A playbook approved with --auto is run by the proxy before the model sees the request."""
+class Rigged(Home):
+    """A store, a working folder and a rig with the playbook layer."""
 
     def setUp(self):
         super().setUp()
@@ -465,6 +465,10 @@ class AutoTest(Home):
 
     def ask(self, rig, *more, cwd=None, session="s1"):
         return self.send(rig, body(human(ASK), *more, cwd=self.cwd if cwd is None else cwd), session=session)
+
+
+class AutoTest(Rigged):
+    """A playbook approved with --auto is run by the proxy before the model sees the request."""
 
     def test_the_script_runs_once_and_every_request_carries_the_same_text(self):
         self.make()
@@ -566,6 +570,85 @@ class AutoTest(Home):
         rig.messages(raw, extra={"x-claude-code-agent-id": "agent-7"})
         self.assertEqual(rig.upstream.requests[-1]["body"], raw)
         self.assertEqual(self.count(), 0)
+
+
+class SkipTest(Rigged):
+    """When the model has made 2 tool calls and not taken an offered script, it is told once."""
+
+    def setUp(self):
+        super().setUp()
+        playbook.save(make(), script=SCRIPT)
+        playbook.approve("weekly-report")
+        self.rig_ = self.rig()
+
+    def turn(self, *names, more=()):
+        """The request after len(names) tool calls of one turn."""
+        loop = [m for i, name in enumerate(names) for m in (call(name, f"t{i}"), result(f"t{i}"))]
+        return self.send(self.rig_, body(human(ASK), *loop, *more, cwd=self.cwd))
+
+    def skip(self, sent):
+        return [(i, r) for i, m in enumerate(sent["messages"]) if i and rq.is_tool_result(m) for r in reminders(m)]
+
+    def test_the_third_request_gets_one_reminder_and_the_fourth_the_same_bytes(self):
+        self.assertEqual(self.skip(self.turn()), [])
+        self.assertEqual(self.skip(self.turn("Bash")), [])
+        third = self.turn("Bash", "Read")
+        (at, text), = self.skip(third)
+        self.assertEqual(at, 4)
+        self.assertEqual(rq.blocks(third["messages"][4])[-1]["text"], text)  # after the tool result
+        self.assertEqual(rq.blocks(third["messages"][4])[0]["type"], "tool_result")
+        self.assertTrue(text.startswith('<system-reminder>\nAlmanac playbook "weekly-report" has an approved script'))
+        self.assertIn('Call the tool `playbook_run` with name "weekly-report" and args [] now instead of continuing by hand', text)
+        self.assertTrue(text.endswith("</system-reminder>"))
+        playbook.remove("weekly-report")  # frozen: nothing about the playbook matters any more
+        fourth = self.turn("Bash", "Read", "Grep")
+        self.assertEqual(self.skip(fourth), [(4, text)])
+        self.assertEqual(fourth["messages"][:5], third["messages"])
+        self.assertEqual(self.skip(self.turn("Bash", "Read", "Grep", "Edit")), [(4, text)])
+
+    def test_nothing_when_the_script_was_called(self):
+        for names in (("Bash", "mcp__almanac__playbook_run"), ("playbook_run", "Bash"), ("Bash", "Bash", "mcp__almanac__playbook_run")):
+            self.assertEqual(self.skip(self.turn(*names)), [], names)
+        self.assertEqual(self.skip(self.turn("Bash", "Bash", "mcp__almanac__playbook_run", "Edit")), [])
+
+    def test_tool_search_does_not_count(self):
+        self.assertEqual(self.skip(self.turn("Bash", "ToolSearch", "ToolSearch")), [])
+        self.assertEqual(len(self.skip(self.turn("Bash", "ToolSearch", "ToolSearch", "Read"))), 1)
+
+    def test_only_a_runnable_script_that_is_not_automatic_is_called_back(self):
+        playbook.save(make("other-job", triggers=["weekly report", "team"]))  # no script: wins the match, nothing to run
+        self.assertEqual(self.skip(self.turn("Bash", "Read", "Grep")), [])
+        playbook.remove("other-job")
+        playbook.save(make(), script=SCRIPT + "#\n")  # a draft
+        rig = self.rig()
+        again = self.send(rig, body(human(ASK + " now"), call(), result(), call("Read", "t2"), result("t2"), cwd=self.cwd))
+        self.assertEqual(self.skip(again), [])
+        playbook.approve("weekly-report", auto=True)  # an automatic one has already run
+        done = self.send(rig, body(human(ASK + " again"), call(), result(), call("Read", "t2"), result("t2"), cwd=self.cwd))
+        self.assertIn("Almanac has already run", reminders(done["messages"][0])[0])
+        self.assertEqual(self.skip(done), [])
+
+    def test_it_is_dropped_when_the_history_no_longer_lines_up(self):
+        third = self.turn("Bash", "Read")
+        self.assertEqual(len(self.skip(third)), 1)
+        rewound = self.send(self.rig_, body(human(ASK), said(), said(), said(), said(), cwd=self.cwd))  # index 4 is no tool result
+        self.assertEqual(self.skip(rewound), [])
+        shorter = self.send(self.rig_, body(human(ASK), call(), result(), cwd=self.cwd))
+        self.assertEqual(self.skip(shorter), [])
+
+    def test_a_later_turn_keeps_the_reminder_of_an_earlier_one(self):
+        (at, text), = self.skip(self.turn("Bash", "Read"))
+        later = self.turn("Bash", "Read", more=(said(), human("and also tidy the notes folder up")))
+        self.assertEqual(self.skip(later), [(at, text)])
+
+    def test_off_when_the_layer_is_off_and_for_sub_agents(self):
+        rig = self.rig(overrides={"playbooks.inject": False})
+        raw = json.dumps(body(human(ASK), call(), result(), call("Read", "t2"), result("t2"), cwd=self.cwd)).encode()
+        rig.messages(raw)
+        self.assertEqual(rig.upstream.requests[-1]["body"], raw)
+        rig = self.rig()
+        rig.messages(raw, extra={"x-claude-code-agent-id": "agent-7"})
+        self.assertEqual(rig.upstream.requests[-1]["body"], raw)
 
 
 class ToolTest(Home):
