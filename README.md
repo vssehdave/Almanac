@@ -156,7 +156,10 @@ removed), and `memory_read` with `result` set to its tool call id returns it a
 page at a time: at most 400 lines or 40,000 characters, as a quoted record.
 `memory_search` also looks through the transcripts, tool output included, so an
 id, an error or a path that only showed up in a command's output can be found;
-the hit shows the matching line.
+the hit shows the matching line. A turn that is still running is stored as an
+open record after every 30,000 characters of new work (in the background, after
+the reply), so what it found early on can be searched before the turn ends; the
+finished exchange replaces that record.
 
 Each exchange is first stored with a title and text written by rule. In the
 background, a small model (`memory.summary_model`, Haiku by default) then

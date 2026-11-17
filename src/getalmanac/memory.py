@@ -56,6 +56,7 @@ RAW_LIMIT = 400000  # most characters of one tool result kept whole
 RAW_BYTES = 100 * 1024 * 1024  # prune drops the oldest saved results past this many (compressed) bytes
 SEARCH_LIMIT = 200000  # most characters of one exchange the transcript search covers
 SEARCH_RESULT = 20000  # ... and of one tool result in it
+PARTIAL_CHARS = 30000  # a turn still running is stored again after this many new characters
 READ_LINES = 400  # most lines, and most characters, one read of a saved tool result returns
 READ_CHARS = 40000
 # Said once, in these words, wherever stored text is handed back to the model.
@@ -375,6 +376,33 @@ class Memory:
         """The saved text of the newest tool result with this call id, or None."""
         rows = self.store.run("select data from raw where tool_use_id = ? order by ts desc limit 1", (tool_use_id,))
         return zlib.decompress(rows[0]["data"]).decode("utf-8", "replace") if rows else None
+
+    def index_partial(self, lane, project, messages, reply=None) -> bool:
+        """Store the exchange that is still running, as an open record, once PARTIAL_CHARS more of it have built up.
+        The finished exchange replaces it (see index). Returns whether one was written."""
+        turns = rq.human_turns(messages)
+        if not turns:
+            return False
+        seq = len(turns) - 1
+        group = messages[turns[-1]:] + ([{"role": "assistant", "content": reply["content"]}] if reply else [])
+        size = len(json.dumps(group, ensure_ascii=False))
+        with self.store.lock:
+            rows = self.store.run("select id, lane, project from convo where lane = ?", (lane,))
+            seen = self.store.get(f"partial:{lane}") or {}
+            if not rows or size - (seen.get("size", 0) if seen.get("seq") == seq else 0) < PARTIAL_CHARS:
+                return False
+            record = exchange(group)
+            record["text"] += "\n\nThis exchange was still running when it was stored: it is a partial record."
+            record["mark"] = "partial"
+            old = self.store.run("select id, parent from node where convo = ? and kind = 'leaf' and seq = ?", (rows[0]["id"], seq))
+            self._drop_nodes([r["id"] for r in old])
+            leaf, topic = self._store_leaf(rows[0], rows[0]["project"], seq, record, group)
+            # open, and never offered to the summary model (it would be replaced before the summary came back)
+            self.store.run("update node set status = 'open', tries = 99 where id = ?", (leaf,))
+            for node in {topic} | {r["parent"] for r in old}:
+                self._refresh_topic(node)
+            self.store.put(f"partial:{lane}", {"seq": seq, "size": size})
+            return True
 
     def index(self, lane, session, project, messages, reply=None, finished=False) -> int:
         """Store the finished exchanges of a conversation. Returns how many were written.
@@ -770,4 +798,6 @@ class MemoryLayer:
         if not ctx.cfg["memory"]["enabled"] or not self._main_thread(orig, ctx):
             return
         self.memory.index(ctx.lane, ctx.session, ctx.project, orig["messages"], reply)
+        if reply.get("stop_reason") == "tool_use":  # a long turn: keep what it has done so far searchable
+            self.memory.index_partial(ctx.lane, ctx.project, orig["messages"], reply)
         self.memory.embed_pending()

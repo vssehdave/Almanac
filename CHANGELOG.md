@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **A long turn is searchable while it runs.** A turn with hundreds of tool
+  calls used to be stored only when it ended. Now, after every 30,000
+  characters of new work in a turn, an open record of the turn so far is stored
+  and found by `memory_search` (marked as still running), and the finished
+  exchange replaces it. The write happens in the background worker after the
+  reply, never on the request, and no request body changes.
+
 - **Search covers tool output.** `memory_search` and the note for a new
   conversation now also match the transcript of each exchange, tool output
   included (up to 200,000 characters of an exchange, 20,000 of one result), so

@@ -167,5 +167,54 @@ class SearchTranscriptTest(StoreCase):
         self.assertEqual(len(self.memory.search("ERR_0xBEEF")), 1)
 
 
+class PartialTest(tc.LayerCase):
+    def setUp(self):
+        super().setUp()
+        self.rig.cfg["compaction"]["enabled"] = False
+        self.tool = lambda req: (200, {"content-type": "text/event-stream"}, sse(tool=("Bash", {"command": "next"})))
+        self.rig.upstream.respond = self.tool
+
+    def turn(self, n):
+        messages = tc.long_turn(n, size=2000, special={10: {"content": "r10 needle_zq7 " + "x" * 2000}})
+        self.rig.messages(tc.body(messages))
+        self.rig.records()
+        return messages
+
+    def leaves(self):
+        return [dict(r) for r in self.store.run("select seq, mark, status, text from node where kind = 'leaf' order by seq")]
+
+    def test_a_term_from_an_early_result_is_found_while_the_turn_runs(self):
+        self.turn(5)
+        self.assertEqual(self.memory.search("needle_zq7"), [])  # under 30,000 characters so far
+        self.turn(30)
+        hits = self.memory.search("needle_zq7")
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(self.store.run("select status from node where id = ?", (hits[0]["id"],))[0]["status"], "open")
+        self.assertIn("still running", self.memory.read(hits[0]["id"])["text"])
+
+    def test_when_the_turn_ends_the_partial_record_is_replaced(self):
+        messages = self.turn(30)
+        self.assertEqual([l["mark"] for l in self.leaves() if l["seq"] == 2], ["partial"])
+        self.rig.upstream.respond = lambda req: (200, {"content-type": "text/event-stream"}, sse(text="All done."))
+        self.rig.messages(tc.body(messages))
+        self.rig.records()
+        last = [l for l in self.leaves() if l["seq"] == 2]
+        self.assertEqual(len(last), 1)
+        self.assertNotEqual(last[0]["mark"], "partial")
+        self.assertNotIn("still running", last[0]["text"])
+        self.assertIn("All done.", last[0]["text"])
+
+    def test_the_request_bytes_do_not_change(self):
+        messages = tc.long_turn(30, size=2000)
+        raw = json.dumps(tc.body(messages)).encode()
+        self.rig.messages(raw)
+        self.assertEqual(self.rig.upstream.requests[-1]["body"], raw)
+        self.rig.records()
+
+    def test_a_partial_record_is_not_sent_to_the_summary_model(self):
+        self.turn(30)
+        self.assertEqual(self.store.run("select tries from node where kind = 'leaf' and mark = 'partial'")[0]["tries"] >= 3, True)
+
+
 if __name__ == "__main__":
     unittest.main()
