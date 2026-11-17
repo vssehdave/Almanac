@@ -49,6 +49,9 @@ DEFAULTS = {
         "always_load": False,  # list the memory tools in every session start instead of behind ToolSearch (adds their schemas, about 1,000 tokens)
         "semantic": True,  # search by meaning when the optional packages and model are installed (see semantic.py)
     },
+    "library": {
+        "min_tools": 5,  # an exchange with at least this many tool calls leaves an entry in the prompt library (no model call; deleted with its conversation)
+    },
     "compaction": {
         "enabled": True,
         "trigger_tokens": 150000,  # a conversation this large is compacted at its next message

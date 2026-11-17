@@ -162,8 +162,8 @@ def result_text(block) -> str:
     """The text of a tool_result block, cleaned the way everything stored is."""
     inner = block.get("content")
     if isinstance(inner, list):
-        inner = "\n".join(x.get("text") or "" for x in inner if isinstance(x, dict) and x.get("type") == "text")
-    return clean(str(inner or ""))
+        inner = "\n".join(x["text"] for x in inner if isinstance(x, dict) and x.get("type") == "text" and isinstance(x.get("text"), str))
+    return clean(inner if isinstance(inner, str) else "")  # any other content type is left out, not fatal
 
 
 def transcript(group, limit=DETAIL_LIMIT, result_chars=RESULT_CHARS, hint=False, cleaned=None) -> str:
@@ -261,6 +261,9 @@ class Memory:
                                 ("last_user", "text not null default ''"), ("last_reply", "text not null default ''")):
                 if column not in have:  # a database written before conversation summaries
                     store.run(f"alter table convo add column {column} {ddl}")
+        from . import library  # imports this module, so not at the top
+        with store.lock:
+            store.db.executescript(library.SCHEMA)
         self.projects = Projects(store)
         self.kept = 0  # open conversations the last forget() left alone
 
@@ -480,6 +483,8 @@ class Memory:
             touched = {r["parent"] for r in self.store.run(
                 f"select parent from node where id in ({','.join('?' * len(stale))})", stale)} if stale else set()
             self._drop_nodes(stale)  # the conversation was rewound: later exchanges are gone
+            from . import library
+            library.drop_from(self.store, convo["id"], len(turns))
             written, last_project = 0, project
             start_at = max(0, min(convo["turns"], len(turns)) - 1, len(turns) - BACKFILL)
             previous = self.store.run("select project from node where convo = ? and kind = 'leaf' and seq < ? "
@@ -769,7 +774,9 @@ class Memory:
 
     def _remove(self, row):
         """One conversation, and every copy of its text: nodes, and the per-conversation rows in `state` and `used`."""
+        from . import library
         self._drop_nodes([r["id"] for r in self.store.run("select id from node where convo = ?", (row["id"],))])
+        library.drop(self.store, [row["id"]])
         self.store.run("delete from convo where id = ?", (row["id"],))
         self._drop_lane(row["lane"])
 
@@ -871,6 +878,7 @@ class Memory:
             self.projects.merge(source, target)
             self.store.run("update node set project = ? where project = ?", (target, source))
             self.store.run("update convo set project = ? where project = ?", (target, source))
+            self.store.run("update library set project = ? where project = ?", (target, source))
             self.store.run("update used set project = ? where project = ?", (target, source))
 
 
@@ -920,4 +928,6 @@ class MemoryLayer:
         self.memory.index(ctx.lane, ctx.session, ctx.project, orig["messages"], reply)
         if reply.get("stop_reason") == "tool_use":  # a long turn: keep what it has done so far searchable
             self.memory.index_partial(ctx.lane, ctx.project, orig["messages"], reply)
+        from . import library
+        library.observe(self.memory, ctx, orig["messages"], reply)
         self.memory.embed_pending()

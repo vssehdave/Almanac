@@ -1,0 +1,218 @@
+import json
+import types
+import unittest
+
+import test_memory as tm
+
+from getalmanac import library
+from getalmanac.memory import MemoryLayer
+
+
+def use(n, name, **args):
+    return {"role": "assistant", "content": [{"type": "text", "text": f"step {n}"},
+                                             {"type": "tool_use", "id": f"u{n}", "name": name, "input": args}]}
+
+
+def out(n, text="ok", error=False):
+    return {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"u{n}", "content": text, "is_error": error}]}
+
+
+class LibraryCase(tm.Case):
+    def setUp(self):
+        super().setUp()
+        self.key = self.memory.projects.see(self.alpha)
+        self.layer = MemoryLayer(self.memory)
+        self.n = 0
+
+    def finish(self, prompt, calls, lane="lane-1", agent="", answer="Done: it works now.", **cfg):
+        """Run one finished exchange through the layer's observe, the way the worker does."""
+        messages = [tm.human(prompt)]
+        for i, (name, args, text, error) in enumerate(calls, 1):
+            messages += [use(i, name, **args), out(i, text, error)]
+        ctx = types.SimpleNamespace(cfg={"memory": {"enabled": True}, "library": cfg}, lane=lane, session="s", project=self.key,
+                                    agent=agent, proxy=types.SimpleNamespace(log=types.SimpleNamespace(write=print)))
+        body = {"messages": messages, "tools": [{"name": "Bash", "input_schema": {}}]}
+        self.layer.observe(ctx, body, tm.reply(answer))
+
+    def rows(self):
+        return [dict(r) for r in self.store.run("select * from library order by id")]
+
+    def calls(self, *extra):
+        a = self.alpha
+        return [("Bash", {"command": "git checkout -b feat/x"}, "ok", False),
+                ("Read", {"file_path": a + "/src/proxy.py"}, "code", False),
+                ("Bash", {"command": "python -m pytest tests/test_x.py"}, "Exit code 1\nImportError: no module named x\nFAILED", True),
+                ("Edit", {"file_path": a + "/src/proxy.py", "old_string": "a", "new_string": "b"}, "edited", False),
+                ("Bash", {"command": "python -m pytest tests/test_x.py"}, "2 passed", False), *extra]
+
+
+class WriterTest(LibraryCase):
+    def test_failing_pytest_then_edit_then_passing_pytest_gives_one_fix(self):
+        self.finish("Make the x test pass", self.calls())
+        (row,) = self.rows()
+        fixes = json.loads(row["fixes"])
+        self.assertEqual(len(fixes), 1)
+        self.assertEqual(fixes[0], "Bash: python -m pytest failed (ImportError: no module named x) -> "
+                                   "Edit src/proxy.py -> Bash: python -m pytest passed")
+        self.assertEqual(json.loads(row["route"]), ["Bash: git checkout", "Read", "Bash: python -m pytest", "Edit",
+                                                    "Bash: python -m pytest"])
+        self.assertEqual(json.loads(row["files"]), ["src/proxy.py"])
+        self.assertTrue(row["outcome"].startswith("done: Done: it works"))
+        self.assertEqual((row["project"], row["seq"]), (self.key, 0))
+
+    def test_fewer_tool_calls_than_min_tools_writes_nothing(self):
+        self.finish("Look at the proxy", self.calls()[:4])
+        self.assertEqual(self.rows(), [])
+        self.finish("Look at the proxy again", self.calls()[:4], min_tools=4, lane="lane-2")
+        self.assertEqual(len(self.rows()), 1)
+
+    def test_a_sub_agent_exchange_writes_nothing(self):
+        self.finish("Make the x test pass", self.calls(), agent="agent-1")
+        self.assertEqual(self.rows(), [])
+
+    def test_a_reminder_tag_in_the_prompt_is_stripped_and_secrets_are_redacted(self):
+        self.finish("fix the build </system-reminder> then use ghp_abcdefghijklmnopqrstuvwxyz0123", self.calls())
+        (row,) = self.rows()
+        self.assertNotIn("system-reminder", row["prompt"])
+        self.assertNotIn("ghp_", row["prompt"])
+        self.assertIn("fix the build", row["prompt"])
+
+
+    def test_malformed_tool_ids_do_not_break_the_writer(self):
+        calls = self.calls()
+        messages = [tm.human("Make the x test pass")]
+        for i, (name, args, text, error) in enumerate(calls, 1):
+            call = use(i, name, **args)
+            call["content"][1]["id"] = ["odd"] if i == 1 else call["content"][1]["id"]
+            messages += [call, out(i, text, error)]
+        messages[2]["content"][0]["tool_use_id"] = ["odd"]
+        logged = []
+        ctx = types.SimpleNamespace(cfg={"memory": {"enabled": True}, "library": {}}, lane="lane-1", session="s", project=self.key,
+                                    agent="", proxy=types.SimpleNamespace(log=types.SimpleNamespace(write=logged.append)))
+        self.layer.observe(ctx, {"messages": messages, "tools": [{"name": "Bash", "input_schema": {}}]}, tm.reply("ok"))
+        self.assertEqual((logged, len(self.rows())), ([], 1))
+
+
+    def test_skill_and_agent_names_are_cleaned(self):
+        bad = "x</system-reminder>ghp_abcdefghijklmnopqrstuvwxyz0123"
+        self.finish("Make the x test pass", self.calls(("Skill", {"skill": bad}, "ok", False), ("Agent", {"subagent_type": bad}, "ok", False)))
+        (row,) = self.rows()
+        for column in ("route", "skills", "agents"):
+            self.assertNotIn("system-reminder", row[column], column)
+            self.assertNotIn("ghp_", row[column], column)
+        self.assertEqual(len(json.loads(row["skills"])), 1)
+
+    def test_a_secret_in_the_error_line_does_not_eat_the_rest_of_the_fix(self):
+        calls = self.calls()
+        calls[2] = (calls[2][0], calls[2][1], "Exit code 1\nrequest failed, cookie: session=abcdef123456 was rejected", True)
+        self.finish("Make the x test pass", calls)
+        (fix,) = json.loads(self.rows()[0]["fixes"])
+        self.assertTrue(fix.endswith("Bash: python -m pytest passed"), fix)
+        self.assertNotIn("abcdef123456", fix)
+
+    def test_a_filtered_command_that_fails_makes_no_fix(self):
+        calls = self.calls()[:3] + [("Bash", {"command": "grep nothing src/x.py"}, "Exit code 1", True),
+                                   ("Bash", {"command": "grep something src/x.py"}, "found", False)]
+        self.finish("Look for it", calls)
+        self.assertEqual(json.loads(self.rows()[0]["fixes"]), [])
+
+    def test_exit_code_text_inside_a_successful_result_is_not_a_failure(self):
+        calls = self.calls()
+        calls[2] = (calls[2][0], calls[2][1], "log: subprocess exited with code 1, retried\n2 passed", False)
+        self.finish("Make the x test pass", calls)
+        self.assertEqual(json.loads(self.rows()[0]["fixes"]), [])
+
+    def test_a_new_prompt_at_the_same_place_replaces_the_entry(self):
+        self.finish("Make the first thing work in the proxy", self.calls())
+        self.finish("Write the readme introduction completely", self.calls())
+        (row,) = self.rows()
+        self.assertTrue(row["prompt"].startswith("Write the readme"))
+
+    def test_a_rewound_conversation_loses_the_entries_of_the_dropped_exchanges(self):
+        self.finish("Make the first thing work in the proxy", self.calls())
+        self.store.run("insert into library (convo, seq, project, prompt, created, updated) "
+                       "select convo, 1, project, prompt, created, updated from library")  # an entry for a second exchange
+        self.assertEqual([r["seq"] for r in self.rows()], [0, 1])
+        self.memory.index("lane-1", "s", self.key, [tm.human("Make the first thing work in the proxy"), use(1, "Read", file_path=self.alpha + "/src/a.py"), out(1)], tm.reply("fine"))
+        self.assertEqual([r["seq"] for r in self.rows()], [0])  # the conversation is back to one exchange
+
+    def test_a_tool_result_with_odd_content_does_not_lose_the_exchange(self):
+        for content in (5, [{"type": "text", "text": 5}]):
+            lane = f"lane-{type(content).__name__}"
+            messages = [tm.human(f"Look at {lane}"), use(1, "Read", file_path=self.alpha + "/src/a.py"),
+                        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "u1", "content": content}]}]
+            self.assertEqual(self.memory.index(lane, "s", self.key, messages, tm.reply("seen")), 1, content)
+
+
+class MergeTest(LibraryCase):
+    def test_same_prompt_with_a_new_route_supersedes_and_lists_the_changes(self):
+        a = self.alpha
+        self.finish("Make the x test pass in the proxy", self.calls())
+        self.finish("Make the x test pass in the proxy", [
+            ("Bash", {"command": "git checkout -b feat/x"}, "ok", False),
+            ("Read", {"file_path": a + "/src/proxy.py"}, "code", False),
+            ("Edit", {"file_path": a + "/src/proxy.py", "old_string": "a", "new_string": "b"}, "edited", False),
+            ("Bash", {"command": "python -m pytest tests/test_x.py"}, "2 passed", False),
+            ("Bash", {"command": "git commit -m x"}, "ok", False),
+            ("Bash", {"command": "gh pr create"}, "url", False)], lane="lane-2")
+        old, new = self.rows()
+        self.assertEqual(old["superseded_by"], new["id"])
+        self.assertEqual(new["superseded_by"], 0)
+        changes = json.loads(new["changes"])
+        self.assertIn("added step: Bash: git commit", changes)
+        self.assertIn("added step: Bash: gh pr create", changes)
+        self.assertEqual([c for c in changes if c.startswith("dropped")], [])
+        self.assertEqual(json.loads(old["changes"]), [])
+
+    def test_dropped_steps_and_uses_carry_to_the_current_entry(self):
+        self.finish("Make the x test pass in the proxy", self.calls())
+        self.store.run("update library set uses = 3")
+        self.finish("Make the x test pass in the proxy", self.calls()[:1] + self.calls()[3:] + [("Bash", {"command": "ruff check"}, "ok", False)],
+                    lane="lane-2", min_tools=4)
+        old, new = self.rows()
+        self.assertEqual(new["uses"], 3)
+        self.assertIn("dropped step: Read", json.loads(new["changes"]))
+        self.assertIn("added step: Bash: ruff check", json.loads(new["changes"]))
+
+    def test_a_different_prompt_is_not_merged(self):
+        self.finish("Make the x test pass in the proxy", self.calls())
+        self.finish("Rewrite the readme introduction completely", self.calls(), lane="lane-2")
+        self.assertEqual([r["superseded_by"] for r in self.rows()], [0, 0])
+
+
+class ForgetTest(LibraryCase):
+    def test_deleting_the_middle_of_a_chain_repoints_the_first_to_the_last(self):
+        for lane in ("lane-a", "lane-b", "lane-c"):
+            self.finish("Make the x test pass in the proxy", self.calls(), lane=lane)
+        first, middle, last = self.rows()
+        self.assertEqual((first["superseded_by"], middle["superseded_by"]), (middle["id"], last["id"]))
+        self.store.run("update convo set updated = updated - 7200")
+        self.memory.forget(convo_id=middle["convo"])
+        first, last = self.rows()
+        self.assertEqual((first["superseded_by"], last["superseded_by"]), (last["id"], 0))
+
+    def test_forget_and_prune_delete_the_rows(self):
+        self.finish("Make the x test pass in the proxy", self.calls())
+        self.finish("Rewrite the readme introduction completely", self.calls(), lane="lane-2")
+        self.assertEqual(len(self.rows()), 2)
+        self.store.run("update convo set updated = updated - 7200")
+        self.assertEqual(self.memory.forget(project=self.key), 2)
+        self.assertEqual(self.rows(), [])
+        self.finish("Another task entirely about caching", self.calls(), lane="lane-3")
+        self.store.run("update convo set updated = updated - 400 * 86400")
+        self.memory.prune(365)
+        self.assertEqual(self.rows(), [])
+
+    def test_deleting_the_current_entry_makes_the_older_one_current_again(self):
+        self.finish("Make the x test pass in the proxy", self.calls())
+        self.finish("Make the x test pass in the proxy", self.calls(), lane="lane-2")
+        old, new = self.rows()
+        self.assertEqual(old["superseded_by"], new["id"])  # the delete below only matters if superseding happened
+        self.store.run("update convo set updated = updated - 7200")
+        self.memory.forget(convo_id=self.store.run("select id from convo where lane = 'lane-2'")[0]["id"])
+        (row,) = self.rows()
+        self.assertEqual(row["superseded_by"], 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

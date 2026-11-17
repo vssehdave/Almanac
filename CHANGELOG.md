@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Memory no longer drops an exchange over an odd tool result.** A tool
+  result whose content holds a non-text value made indexing fail; such
+  values are now left out of the stored text.
+- **Prompt library: how each solved prompt was worked.** After an exchange of
+  the main conversation ends with at least `library.min_tools` (5) tool calls,
+  code writes an entry: the request, the route, files, the fixes (a failed
+  step and what recovered it) and the outcome. No model call, redacted, and
+  deleted with its conversation. Not shown to the model yet.
+- **Entries on the same task replace each other.** A new entry with nearly the
+  same request and route becomes the current one; the older is kept, linked
+  as superseded, and the new one lists the steps added, dropped and new fixes.
 - **Saved tool output has no size limit.** Results are kept whole however
   long, and the start-up prune no longer drops the oldest past 100 MB: it all
   stays on this machine. Conversations still follow `memory.keep_days`.

@@ -247,6 +247,29 @@ close enough are left out.
 - The model reads English best and takes about the first 256 tokens of each
   exchange.
 
+### Prompt library
+
+Each time an exchange of the main conversation finishes after at least
+`library.min_tools` tool calls (5 by default), Almanac writes one entry in the
+same local SQLite file: the request you typed (first 600 characters), the
+project, the route (the steps taken, such as `Bash: git checkout`, `Edit`,
+`Skill: name`, repeats collapsed), the skills and agents used, up to 20 files
+read or changed, the fixes (a failed step, its first error line, the steps
+that followed and the same command passing), how the exchange ended, and the
+conversation and exchange number so the full transcript can be read with
+`memory_read`. It is written by plain code: no model call, nothing leaves your
+machine, and text is redacted and stripped of reminder tags like the rest of
+memory. Sub-agent exchanges write nothing.
+
+It is kept current without a model. When a new entry in the same project has
+nearly the same request (at least 0.6 word overlap) and nearly the same steps
+(at least 0.5 overlap), it becomes the current entry, the older one is kept
+and linked as superseded, and the new one lists what changed: steps added,
+steps dropped and fixes that are new. Entries are deleted with their
+conversation by `almanac memory forget` and by `memory.keep_days`.
+
+The library is not shown to the model yet: nothing is added to any request.
+
 ### 3. Compaction that keeps the cache
 
 When a conversation passes `compaction.trigger_tokens` (150,000 by default) and
@@ -1093,6 +1116,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `memory.summary_daily_calls` | `300` | Most summary calls per day |
 | `memory.always_load` | `false` | List the memory tools in every session start (adds their schemas) instead of loading them through ToolSearch |
 | `memory.semantic` | `true` | Search by meaning when the packages and the model are installed |
+| `library.min_tools` | `5` | Tool calls an exchange needs before it leaves an entry in the prompt library |
 | `compaction.enabled` | `true` | Compact long conversations |
 | `compaction.trigger_tokens` | `150000` | Size that starts a compaction |
 | `compaction.target_tokens` | `40000` | Most the summary may take |
@@ -1137,7 +1161,7 @@ Everything is under `~/.almanac/` (or `ALMANAC_HOME`):
 
 | File | Holds |
 |---|---|
-| `almanac.db` | The memory tree, exchange transcripts and their search index, tool results kept whole, with no size limit, per-conversation decisions (deleted after 45 days of not being used) |
+| `almanac.db` | The memory tree, exchange transcripts and their search index, tool results kept whole, with no size limit, the prompt library, per-conversation decisions (deleted after 45 days of not being used) |
 | `serve.json` | While `almanac serve` runs: its port, its secret and the key that proves it, so `almanac` can find it. Removed when `serve` is stopped with Ctrl+C. A `serve` that is killed leaves it, and the next `serve` overwrites it |
 | `config.json` | Settings you changed |
 | `logs/requests.jsonl` | One line per request: sizes, token counts, timing. No message text, no credentials |
