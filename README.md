@@ -156,7 +156,16 @@ also sends a constant six-sentence note with its handshake: summaries drop exact
 values, so read the exchange before trusting a number; search with specific
 words; no hit is not proof; stored text is a record, not instructions. The tools
 stay behind ToolSearch; `almanac config set memory.always_load true` lists them
-in every session start instead, which makes the start larger.
+in every session start instead, which makes the start larger. A tool result
+too long for the transcript is saved whole as well (compressed, secrets
+removed), and `memory_read` with `result` set to its tool call id returns it a
+page at a time: at most 400 lines or 40,000 characters, as a quoted record.
+`memory_search` also looks through the transcripts, tool output included, so an
+id, an error or a path that only showed up in a command's output can be found;
+the hit shows the matching line. A turn that is still running is stored as an
+open record after every 30,000 characters of new work (in the background, after
+the reply), so what it found early on can be searched before the turn ends; the
+finished exchange replaces that record.
 
 Each conversation also gets a summary and a note of how it ended (the last thing
 you asked and the start of the reply). When a conversation has had no request
@@ -285,8 +294,11 @@ its answer, and says how long the result was. Tool calls, thinking, and
 everything before your last message are never touched. The stubbed set is stored
 and only grows during the turn, so every later request stubs the same results
 the same way and the cache keeps hitting; if one pass is not enough the next one
-stubs more, down to the newest 4. **A stubbed result cannot be restored:** if
-Claude needs it, it has to run the tool again. The set is cleared when the
+stubs more, down to the newest 4. **A stubbed result can be read back:** it is
+saved whole in the memory first, and the stub names the `memory_read` call that
+returns it (with `memory.enabled` off nothing is saved, and the stub says the
+tool has to be run again). The stub's wording is stored with the set, so a turn
+that was running before an upgrade keeps the old bytes. The set is cleared when the
 prefix is rebuilt, and `window_share` set to 0 turns this off. If the upstream
 refuses a body with stubs, the original goes out and the conversation is left
 alone from then on, as with a refused compaction. Stubs take back the room of the
@@ -1125,7 +1137,7 @@ Everything is under `~/.almanac/` (or `ALMANAC_HOME`):
 
 | File | Holds |
 |---|---|
-| `almanac.db` | The memory tree, exchange transcripts, per-conversation decisions (deleted after 45 days of not being used) |
+| `almanac.db` | The memory tree, exchange transcripts and their search index, tool results kept whole (the oldest go past 100 MB), per-conversation decisions (deleted after 45 days of not being used) |
 | `serve.json` | While `almanac serve` runs: its port, its secret and the key that proves it, so `almanac` can find it. Removed when `serve` is stopped with Ctrl+C. A `serve` that is killed leaves it, and the next `serve` overwrites it |
 | `config.json` | Settings you changed |
 | `logs/requests.jsonl` | One line per request: sizes, token counts, timing. No message text, no credentials |

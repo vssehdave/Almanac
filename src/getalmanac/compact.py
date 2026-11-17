@@ -24,8 +24,10 @@ The prefix is built only at a human turn. Inside one long turn (a tool loop with
 new message from the person) there is nothing to rebuild, so when the request nears
 the model's window the old tool results of that turn are replaced by a one-line stub
 that keeps their blocks and ids. The stubbed ids are stored and only ever grow within
-a turn, so every later request stubs the same results the same way. A stubbed result
-cannot be restored: the tool has to be run again.
+a turn, so every later request stubs the same results the same way. The stub's text is
+stored with them, so a turn already running when the wording changes keeps its bytes.
+Each result is saved whole in the memory first, and the stub says which memory_read call
+returns it; when the memory is off the stub says the tool has to be run again.
 """
 import hashlib
 import json
@@ -33,7 +35,7 @@ import time
 
 from . import request as rq
 from . import sse
-from .memory import QUOTED, _first_line, exchange, transcript
+from .memory import QUOTED, _first_line, exchange, result_text, transcript
 
 CHARS_PER_TOKEN = 3.0  # conservative: real text runs a little over 3 characters a token
 HEADER = ("Almanac compacted this conversation to keep it inside the context window. The messages before this "
@@ -47,6 +49,9 @@ HEADER = ("Almanac compacted this conversation to keep it inside the context win
 ACK = "Understood. I have the summary of the earlier conversation and will continue from it."
 STUB = ("[Almanac removed this tool result to keep the turn inside the context window ({n} characters). "
         "Run the tool again if you need it.]")
+STUB_RAW = ("[Almanac removed this tool result ({n} characters). "
+            "Read it back with the almanac memory_read tool: {{\"result\": \"{id}\"}}]")
+NO_TEXT = "(this result held no text, for example only an image, so nothing was kept)"
 MIN_STUB = 2000  # characters: a smaller tool result is not worth a stub
 FLOOR_KEEP = 4  # a long turn never keeps fewer than this many of its newest results
 RELIEF_TO = 0.75  # a pass frees room down to this share of the limit, so the next request needs no second pass
@@ -300,9 +305,12 @@ class CompactLayer:
         try:
             kept = ctx.store.get(key) or {}
             ids = dict(kept.get("ids") or {})
+            # The wording is chosen when a set is first written and stored with it: a set written by an earlier
+            # version has none and keeps the old wording, so a turn in progress sends the same bytes.
+            tpl = kept.get("tpl") or (STUB if ids else STUB_RAW if ctx.cfg["memory"]["enabled"] else STUB)
             same = [b for b in _results(out) if b["tool_use_id"] in ids]
             for block in same:  # the stubs of earlier requests, wherever those results now sit
-                block["content"] = STUB.format(n=ids[block["tool_use_id"]])
+                block["content"] = tpl.format(n=ids[block["tool_use_id"]], id=block["tool_use_id"])
             if at_human_turn:
                 return len(same)
             from . import routing  # routing imports this module
@@ -323,17 +331,24 @@ class CompactLayer:
                 old = current[:max(0, len(current) - keep)]
                 fresh = [(b, _size(b.get("content"))) for b in old if b["tool_use_id"] not in ids and not b.get("is_error")]
                 fresh = [(b, n) for b, n in fresh if n >= MIN_STUB]
-                freed = sum(n for _, n in fresh) / CHARS_PER_TOKEN
+                freed = sum(n - len(tpl.format(n=n, id=b["tool_use_id"])) for b, n in fresh) / CHARS_PER_TOKEN  # a stub is not free
                 if tokens - freed <= limit * RELIEF_TO or keep <= floor:
                     break
                 keep = max(floor, keep - 4)
         except Exception:  # fail open: the request goes out with the stubs it already had
             return len(same)
         for block, n in fresh:
+            if "{id}" in tpl and ctx.cfg["memory"]["enabled"]:  # save it whole before it is replaced; a result that cannot be saved stays as it is
+                try:
+                    if not self.memory.has_raw(ctx.lane, block["tool_use_id"]):  # a long turn's results are often saved already
+                        self.memory.save_raw(ctx.lane, block["tool_use_id"], result_text(block) or NO_TEXT, cleaned=True)
+                except Exception:
+                    continue
             ids[block["tool_use_id"]] = n
-            block["content"] = STUB.format(n=n)
+            block["content"] = tpl.format(n=n, id=block["tool_use_id"])
         if fresh or keep != kept.get("keep"):
-            ctx.store.put(key, {"ids": ids, "keep": keep, "est": {"messages": len(body["messages"]), "tokens": int(tokens - freed)}})
+            ctx.store.put(key, {"ids": ids, "keep": keep, "tpl": tpl,
+                                "est": {"messages": len(body["messages"]), "tokens": int(tokens - freed)}})
         return len(same) + len(fresh)
 
     def _compact(self, ctx, messages, covered, cfg) -> dict:
