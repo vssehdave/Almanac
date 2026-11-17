@@ -450,23 +450,34 @@ it can run it with Bash. A playbook with no script has nothing to approve.
 **Automatic playbooks.** The note only asks Claude to call `playbook_run`, and
 Claude may not. `almanac playbook approve NAME --auto` approves the script and
 also lets Almanac run it itself. From then on, when the playbook is the best
-match for a request you typed, Almanac runs `run.py` before the request goes to
-Claude: in the folder of that conversation, with the same Python and no shell
-as `playbook_run`, and stopped after 60 seconds. This happens on every request
-that matches, one run per typed message (the later requests of the same
-message reuse the stored result). The note then says the script has already
-run, gives its exit code, stdout and stderr (3,000 characters in all, with any
-`system-reminder` tags removed) and tells Claude to answer from that, or, if
-the exit code is not 0 or it timed out, to say so and carry on by hand with the
-steps. Only you can set this: `approve NAME` without `--auto` turns it off, a
-playbook Claude saves or updates never keeps it unless the script text is
-exactly the one you approved, and a changed script goes back to draft and stops
-running. `--auto` is refused for a playbook with `args`, because a script that
-needs inputs cannot be run from the words of a request. `almanac playbook list`
-and `show` say which playbooks are automatic. The log line of that request has
-`playbook.ran` and `playbook.exit` (or `playbook.timeout`). Nothing runs when
-`playbooks.auto_run` is `false`, when the conversation's folder is missing, or
-for sub-agents.
+match for a request you typed and some trigger of two or more words has every
+word in it (a one-word trigger never starts a script), Almanac runs `run.py`
+before the request goes to Claude: in the folder of that conversation, with the
+same Python and no shell as `playbook_run`, and the whole process tree stopped
+after 60 seconds. Its output goes to temporary files and only the first 3,000
+characters are kept. This happens on every request that matches, one run per
+typed message at its place in the conversation (the later requests of the same
+message reuse the stored result; typing the same words again after a rewind
+runs it again). The store is not locked while the script runs. The note says
+the script has already run, gives its exit code and its output as data, not
+instructions (3,000 characters in all, with any `system-reminder` tags
+removed), and tells Claude to answer from that, or, if the exit code is not 0
+or it timed out, to say so and carry on by hand with the steps.
+
+Only you can set this, and the approval is kept apart from the playbook:
+`--auto` writes the script's hash into `~/.almanac/auto.json` (outside the
+playbooks folder), and a playbook runs by itself only when its `playbook.json`
+says `auto` and `auto.json` holds the hash of the script as it is now. A
+playbook Claude saves or updates is never automatic (a save also removes its
+`auto.json` entry), `approve NAME` without `--auto` and `remove` delete the
+entry, and a changed script goes back to draft and stops running. `--auto` is
+refused for a playbook with `args` (a script that needs inputs cannot be run
+from the words of a request) and for one with no trigger of two or more words.
+`almanac playbook list` and `show` say `auto` only while it would really run
+now, and say the script changed when it was edited after approval. The log line
+of that request has `playbook.ran` and `playbook.exit` (or `playbook.timeout`).
+Nothing runs when `playbooks.auto_run` is `false`, when the conversation's
+folder is missing, or for sub-agents.
 
 **A reminder when the offer is skipped.** If a playbook with an approved script
 matched but is not automatic, and Claude has made two tool calls in that

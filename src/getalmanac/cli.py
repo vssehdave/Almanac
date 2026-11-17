@@ -566,14 +566,14 @@ def _playbook(rest):
         return 0
     if args.cmd == "list":
         for pb in playbook.listing():
-            print(f"{pb['name']:<28} {pb['status'] + (', auto' if pb['auto'] else ''):<14} {pb['uses']:>4}  {pb['title']}")
+            print(f"{pb['name']:<28} {playbook.shown_status(pb):<22} {pb['uses']:>4}  {pb['title']}")
         return 0
     pb = playbook.load(args.name) if playbook.valid_name(args.name) else None
     if pb is None:
         print(f"almanac: no usable playbook called {args.name!r}; see `almanac playbook list`", file=sys.stderr)
         return 2
     if args.cmd == "show":
-        print(f"{pb['name']}  ({pb['status']}{', automatic' if pb['auto'] else ''}, used {pb['uses']} times, from {pb['source']}, {pb['created']})\n{pb['title']}\n"
+        print(f"{pb['name']}  ({playbook.shown_status(pb).replace(', auto', ', automatic')}, used {pb['uses']} times, from {pb['source']}, {pb['created']})\n{pb['title']}\n"
               f"When: {pb['when']}\nTriggers: {', '.join(pb['triggers'])}\nProject: {pb['project'] or 'any'}")
         print("Steps:\n" + "\n".join(f"  {i}. {s}" for i, s in enumerate(pb["steps"], 1)))
         print(f"Skills: {', '.join(pb['skills'])}\nAgents: {', '.join(pb['agents'])}")
@@ -587,11 +587,11 @@ def _playbook(rest):
     if not pb["script"]:
         print(f"{args.name} has no script, so there is nothing to approve.")
         return 0
-    if args.auto and pb["args"]:
-        print(f"almanac: {args.name} takes arguments, so --auto is refused: a script that needs inputs cannot be run "
-              "from the words of a request.", file=sys.stderr)
+    try:
+        digest, text = playbook.approve(args.name, args.auto)
+    except ValueError as why:
+        print(f"almanac: {why}", file=sys.stderr)
         return 2
-    digest, text = playbook.approve(args.name, args.auto)
     lines = text.splitlines()
     _print("\n".join(lines[:40]) + (f"\n... ({len(lines) - 40} more lines)" if len(lines) > 40 else ""))
     print(f"\nApproved {args.name}. sha256 {digest}\nIf the script changes, it goes back to draft until you approve it again.")
