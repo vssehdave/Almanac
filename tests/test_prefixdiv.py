@@ -6,7 +6,7 @@ from pathlib import Path
 
 from helpers import SESSION, Rig
 
-from getalmanac import report
+from getalmanac import prefixdiv, report
 from getalmanac.prefixdiv import PrefixLayer
 from getalmanac.store import Store
 
@@ -133,6 +133,15 @@ class LineTest(unittest.TestCase):
         self.assertIn("2 cold", line)
         self.assertIn("1 identical", line)
         self.assertEqual(report.prefix_line([], now=100000.0), "")
+
+
+class BillingLineTest(unittest.TestCase):
+    def test_the_billing_line_is_not_a_divergence(self):
+        def body(version):
+            return {"system": [{"type": "text", "text": f"x-anthropic-billing-header: cc_version=2.1.326.{version}; cc_entrypoint=cli;"},
+                               {"type": "text", "text": "You are Claude Code"}],
+                    "messages": [{"role": "user", "content": "hi"}]}
+        self.assertEqual(prefixdiv.compare(prefixdiv.blocks(body("aaa")), prefixdiv.blocks(body("bbb")))[0], "none")
 
 
 if __name__ == "__main__":
