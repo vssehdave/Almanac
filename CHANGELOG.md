@@ -12,6 +12,9 @@
   or two spent logins return the original reply unchanged.
   Almanac never refreshes or writes a login. `almanac status` shows the
   folders and the log records which one was used.
+- **The Opus rules cover working against a deadline.** Write the handover
+  first and keep it current, stop starting things near the end, know which
+  login the work is charged to, and audit anything that runs on its own.
 - **A playbook script can run before Claude sees the request.** The note
   only asked Claude to call `playbook_run`, and Claude could ignore it.
   `almanac playbook approve NAME --auto` now also lets the proxy run the
