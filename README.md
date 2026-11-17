@@ -241,7 +241,11 @@ The outline is in sections, within the same size budget: standing decisions
 first (oldest first, the last to be dropped), then open work with the longer
 summary, then done exchanges, newest first, until the room runs out, with a line
 saying how many more are not listed and that `memory_search` finds them.
-Superseded and noise exchanges are not listed, only counted. Each exchange's
+Superseded and noise exchanges are not listed, only counted. Between open work
+and done comes a short list, up to five, of earlier exchanges of the same
+conversation that match the message you just sent, so the exchange you are
+returning to is not buried. It is worked out once, when the compaction is built,
+and stored with it; with no match the outline is the same as without it. Each exchange's
 transcript is also kept in the local memory and Claude can read any of them back
 by number. The summaries are plainer than what `/compact` produces. The prefix
 is built when you send a message, from the statuses at that moment; a status that
