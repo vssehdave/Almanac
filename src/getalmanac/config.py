@@ -46,6 +46,7 @@ DEFAULTS = {
         "keep_days": 365,  # conversations untouched for longer are deleted; 0 keeps everything
         "summary_model": "claude-haiku-5-5",  # writes each exchange's title and summary in the background; "" keeps rule-written text
         "summary_daily_calls": 300,  # most summary calls per day
+        "always_load": False,  # list the memory tools in every session start instead of behind ToolSearch (adds their schemas, about 1,000 tokens)
         "semantic": True,  # search by meaning when the optional packages and model are installed (see semantic.py)
     },
     "compaction": {

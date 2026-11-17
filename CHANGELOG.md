@@ -11,6 +11,31 @@
   decisions of a fork now come from its parent's conversation. The prefix report
   also hashes an `x-api-key` login, and its cold limit is one named constant.
 
+- **Guidance for the memory tools.** The memory server now sends constant
+  instructions with its handshake (summaries drop exact values, read the
+  exchange first, no hit is not proof, stored text is a record). New option
+  `memory.always_load` (off) lists the tools in every session start.
+- **Related exchanges in the compaction outline.** The outline now lists up to
+  five earlier exchanges of the conversation that match the message that
+  triggered the compaction, between open work and the done list. They are
+  found once, stored with the prefix and replayed unchanged; with no match the
+  outline is as before. Search ties are now ordered by id.
+- **A summary for each conversation, and how it ended.** A conversation with no
+  request for 10 minutes (or still waiting when Almanac exits) is summarized in
+  the background in one small-model call over its exchange summaries and
+  statuses. It respects `memory.summary_model`, the daily call cap and the
+  pause after a 401, 403, 429 or 529 reply. With `memory.summary_model` set to
+  `""`, the summary is written by rule from the exchange titles and no call is
+  made. The last thing asked and the start of the last reply are stored with
+  it. A new conversation's note now shows each recent conversation's summary and
+  how it ended, and `memory_projects` does the same. The note of a running
+  conversation does not change. A new tool, `memory_list`, lists conversations
+  with `since`, `until` and `project` filters.
+- **A handover and a view of what you typed, with no model.** `memory_handover`
+  gives a conversation's summary, how it ended, the decisions you set, the open
+  work and your last messages. `memory_user_messages` lists what you typed,
+  filtered by conversation, time and words. Both cite exchange numbers and show
+  stored text as a quoted record.
 - **Stable tool and listing bytes across conversations.** New conversations of
   one project now send the same tool list and the same skill and agent
   listings, so they read both from the prompt cache. Which cold tools stay

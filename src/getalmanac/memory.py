@@ -28,7 +28,9 @@ from .status import OPEN_KEEP, STATUSES, combine, rule
 SCHEMA = """
 create table if not exists convo (
     id integer primary key, lane text unique not null, session text not null, project text not null,
-    title text not null default '', started real not null, updated real not null, turns integer not null default 0
+    title text not null default '', started real not null, updated real not null, turns integer not null default 0,
+    summary text not null default '', sumturns integer not null default 0,
+    last_user text not null default '', last_reply text not null default ''
 );
 create table if not exists node (
     id integer primary key, convo integer not null, project text not null, parent integer,
@@ -169,6 +171,21 @@ def transcript(group, limit=DETAIL_LIMIT, result_chars=1500) -> str:
     return text
 
 
+def asked(text: str) -> str:
+    """What the person typed, from a stored exchange's text (which may start with a model-written summary line)."""
+    if text.startswith("Summary: "):
+        text = text.split("\n\n", 1)[-1]
+    return text[len("Asked: "):].split("\n\nAnswer: ", 1)[0] if text.startswith("Asked: ") else text
+
+
+def ended(convo, summary=220) -> str:
+    """A conversation's summary and how it ended, as the end of one line."""
+    out = (": " + convo["summary"][:summary]) if convo.get("summary") else ""
+    if convo.get("last_user"):
+        out += f" Ended on: asked \"{convo['last_user'][:90]}\"" + (f", reply began \"{convo['last_reply'][:90]}\"" if convo.get("last_reply") else "")
+    return out
+
+
 def snippet(text: str, terms: set, limit=230) -> str:
     """The stretch of `text` that holds the most query words."""
     pieces = [" ".join(p.split()) for p in re.split(r"(?<=[.!?])\s+|\n+", text) if p.strip()]
@@ -192,6 +209,11 @@ class Memory:
                                 ("status", "text not null default 'done'"), ("mstatus", "text not null default ''")):
                 if column not in have:  # a database written before model summaries or semantic search
                     store.run(f"alter table node add column {column} {ddl}")
+            have = {r["name"] for r in store.run("pragma table_info(convo)")}
+            for column, ddl in (("summary", "text not null default ''"), ("sumturns", "integer not null default 0"),
+                                ("last_user", "text not null default ''"), ("last_reply", "text not null default ''")):
+                if column not in have:  # a database written before conversation summaries
+                    store.run(f"alter table convo add column {column} {ddl}")
         self.projects = Projects(store)
         self.kept = 0  # open conversations the last forget() left alone
 
@@ -366,14 +388,22 @@ class Memory:
             self._retag(convo["id"], turns, group, max(0, start_at - 1), done)
             main = self.store.run("select project, count(*) n from node where convo = ? and kind = 'leaf' "
                                   "group by project order by n desc limit 1", (convo["id"],))
-            self.store.run("update convo set turns = ?, updated = ?, project = ? where id = ?",
+            last = ("", "")
+            if done:
+                last = (" ".join(clean(rq.human_text(group(done - 1)[0])).split())[:160],
+                         " ".join(exchange(group(done - 1))["answer"].split())[:160])
+            titles = [r["title"] for r in self.store.run(  # a model-written summary (sumturns) is only replaced by the idle job
+                "select title from node where convo = ? and kind = 'leaf' and status != 'noise' "
+                "order by status = 'decision' desc, seq limit 4", (convo["id"],))]
+            self.store.run("update convo set turns = ?, updated = ?, project = ?, last_user = ?, last_reply = ?, "
+                           "summary = case when sumturns = 0 then ? else summary end where id = ?",
                            (len(turns) if finished else len(turns) - 1, time.time(),
-                            main[0]["project"] if main else project, convo["id"]))
+                            main[0]["project"] if main else project, last[0], last[1], "; ".join(titles)[:300], convo["id"]))
             return written
 
     # ---- reading -------------------------------------------------------------
 
-    def _near(self, query, project, exclude_lane) -> list:
+    def _near(self, query, project, exclude_lane, lane=None) -> list:
         """[(id, cosine)] of the exchanges nearest to `query` by meaning, nearest first; [] when that search is off."""
         model = semantic.active()
         if not model:
@@ -384,6 +414,8 @@ class Memory:
             sql, args = sql + " and n.project = ?", args + [project]
         if exclude_lane:
             sql, args = sql + " and c.lane != ?", args + [exclude_lane]
+        if lane:
+            sql, args = sql + " and c.lane = ?", args + [lane]
         # shortcut: reads every vector of the project for each search, fine to about 20,000 exchanges; past that, use a vector index
         rows = self.store.run(sql, args)
         if not rows:
@@ -395,7 +427,7 @@ class Memory:
         near = [(r["id"], round(score, 4)) for r, score in zip(rows, scores) if score >= DENSE_MIN]
         return sorted(near, key=lambda p: (-p[1], p[0]))[:DENSE_TOP]
 
-    def search(self, query, project=None, exclude_lane=None, limit=8, kind="leaf") -> list:
+    def search(self, query, project=None, exclude_lane=None, limit=8, kind="leaf", lane=None) -> list:
         """Stored exchanges that match `query`, best first. Needs two of its words (one if it has one).
 
         With a model installed, exchanges near the query by meaning are added, and the two rankings are
@@ -403,7 +435,7 @@ class Memory:
         """
         words = sorted({w for w in re.findall(r"[a-z0-9_]{2,}", query.lower()) if w not in STOP})[:24]
         terms = set(tokens(query))
-        near = self._near(query, project, exclude_lane) if kind == "leaf" else []
+        near = self._near(query, project, exclude_lane, lane) if kind == "leaf" else []
         if (not words or not terms) and not near:
             return []
         sql = ("select n.id, n.kind, n.title, n.text, n.ts, n.vec, n.project, n.convo, c.title ctitle, "
@@ -414,6 +446,8 @@ class Memory:
             sql, args = sql + " and n.project = ?", args + [project]
         if exclude_lane:
             sql, args = sql + " and c.lane != ?", args + [exclude_lane]
+        if lane:
+            sql, args = sql + " and c.lane = ?", args + [lane]
         vector, need, hits = embed.embed(query), min(2, len(terms)), []
         for row in self.store.run(sql + " order by rank limit 60", args) if words and terms else []:
             overlap = len(terms & set(tokens(row["title"] + " " + row["text"])))
@@ -421,7 +455,7 @@ class Memory:
                 continue
             score = -row["rank"] + 4.0 * embed.cosine(vector, embed.unpack(row["vec"])) + 0.5 * overlap
             hits.append(dict(row, score=round(score, 3), snippet=snippet(row["text"], terms)))
-        hits.sort(key=lambda h: (-h["score"], -h["ts"]))
+        hits.sort(key=lambda h: (-h["score"], -h["ts"], h["id"]))
         for hit in hits:
             hit.pop("vec", None)
         if not near:
@@ -440,13 +474,65 @@ class Memory:
         hits.sort(key=lambda h: (-h["score"], -h["ts"], h["id"]))
         return hits[:limit]
 
-    def recent(self, project=None, exclude_lane=None, limit=3) -> list:
+    def related(self, lane, text, limit=12) -> list:
+        """Exchanges of one conversation that match `text`, best first, ties by id. [] on any error."""
+        try:
+            return self.search(text[:2000], lane=lane, limit=limit)
+        except Exception:
+            return []
+
+    def recent(self, project=None, exclude_lane=None, limit=3, since=None, until=None) -> list:
         sql, args = "select * from convo where turns > 0", []
+        if since:
+            sql, args = sql + " and updated >= ?", args + [since]
+        if until:
+            sql, args = sql + " and updated < ?", args + [until]
         if project:
             sql, args = sql + " and project = ?", args + [project]
         if exclude_lane:
             sql, args = sql + " and lane != ?", args + [exclude_lane]
         return [dict(r) for r in self.store.run(sql + " order by updated desc limit ?", args + [limit])]
+
+    def set_convo_summary(self, convo_id, summary, turns):
+        """Give a conversation a model-written summary, covering its first `turns` exchanges."""
+        self.store.run("update convo set summary = ?, sumturns = ? where id = ? and sumturns <= ?", (summary, turns, convo_id, turns))
+
+    def digest(self, lane: str) -> str:
+        """One line per stored exchange of a conversation, for the model that summarizes it: number, status, title, summary."""
+        return "\n".join(
+            f"{r['seq'] + 1}. [{r['status']}] {r['title']}" + (f": {r['summary']}" if r["summary"] else "")
+            for r in self.store.run("select n.seq, n.status, n.title, n.summary from node n join convo c on c.id = n.convo "
+                                    "where c.lane = ? and n.kind = 'leaf' order by n.seq", (lane,)))
+
+    def exchanges(self, convo_id: int) -> list:
+        """A conversation's stored exchanges in order: id, number (from 1), time, status, what the person asked, summary."""
+        out = []
+        for r in self.store.run("select n.id, n.seq, n.ts, n.status, n.text, n.summary, c.lane from node n join convo c "
+                                "on c.id = n.convo where n.convo = ? and n.kind = 'leaf' order by n.seq", (convo_id,)):
+            shown = self.statuses(r["lane"]).get(r["seq"], r["status"])
+            out.append({"id": r["id"], "number": r["seq"] + 1, "ts": r["ts"], "status": shown, "summary": r["summary"],
+                        "asked": asked(r["text"])})
+        return out
+
+    def user_messages(self, project=None, convo_id=None, since=None, until=None, query="", limit=30) -> list:
+        """What the person typed, oldest first: the newest `limit` that fit the filters. Words in `query` must all appear."""
+        sql, args = ("select n.id, n.seq, n.ts, n.text, n.convo, c.title ctitle from node n join convo c on c.id = n.convo "
+                     "where n.kind = 'leaf' and n.status != 'noise'"), []
+        for clause, value in ((" and n.convo = ?", convo_id), (" and n.project = ?", project),
+                              (" and n.ts >= ?", since), (" and n.ts < ?", until)):
+            if value:
+                sql, args = sql + clause, args + [value]
+        words = re.findall(r"[a-z0-9_]{2,}", query.lower())
+        found = []
+        # shortcut: reads every matching exchange of the range and filters in Python; narrow it with `since` on a big store
+        for r in self.store.run(sql + " order by n.ts desc, n.id desc", args):
+            typed = asked(r["text"])
+            if all(w in typed.lower() for w in words):
+                found.append({"id": r["id"], "convo": r["convo"], "ctitle": r["ctitle"], "number": r["seq"] + 1,
+                              "ts": r["ts"], "text": typed})
+                if len(found) >= limit:
+                    break
+        return found[::-1]
 
     def detail(self, node_id: int) -> str:
         """The full transcript kept for an exchange, or ""."""
@@ -518,7 +604,7 @@ class Memory:
                  "this machine. It can be out of date: check it against the code before relying on it. " + QUOTED]
         if recent:
             lines.append("Most recent conversations:")
-            lines += [f"- {day(c['updated'])} {c['title']} ({c['turns']} exchange{'s' if c['turns'] != 1 else ''})" for c in recent]
+            lines += [f"- {day(c['updated'])} {c['title']} ({c['turns']} exchange{'s' if c['turns'] != 1 else ''})" + ended(c) for c in recent]
         if hits:
             lines.append("Earlier exchanges related to this message:")
             lines += [f"- [{h['id']}] {day(h['ts'])} {h['title']}: {h['snippet']}" for h in hits]

@@ -60,7 +60,7 @@ def with_memory_tools(args, cfg):
 
     path = config.home() / "mcp.json"
     try:
-        path.write_text(json.dumps(mcp.client_config(), indent=2), encoding="utf-8")
+        path.write_text(json.dumps(mcp.client_config(cfg), indent=2), encoding="utf-8")
     except OSError:
         return args
     return ["--mcp-config", str(path), *args]
