@@ -447,6 +447,36 @@ the hash. If `run.py` changes in any way afterwards, the playbook goes back to
 draft. A draft script is never run by Almanac; the note tells Claude the path so
 it can run it with Bash. A playbook with no script has nothing to approve.
 
+**Automatic playbooks.** The note only asks Claude to call `playbook_run`, and
+Claude may not. `almanac playbook approve NAME --auto` approves the script and
+also lets Almanac run it itself. From then on, when the playbook is the best
+match for a request you typed, Almanac runs `run.py` before the request goes to
+Claude: in the folder of that conversation, with the same Python and no shell
+as `playbook_run`, and stopped after 60 seconds. This happens on every request
+that matches, one run per typed message (the later requests of the same
+message reuse the stored result). The note then says the script has already
+run, gives its exit code, stdout and stderr (3,000 characters in all, with any
+`system-reminder` tags removed) and tells Claude to answer from that, or, if
+the exit code is not 0 or it timed out, to say so and carry on by hand with the
+steps. Only you can set this: `approve NAME` without `--auto` turns it off, a
+playbook Claude saves or updates never keeps it unless the script text is
+exactly the one you approved, and a changed script goes back to draft and stops
+running. `--auto` is refused for a playbook with `args`, because a script that
+needs inputs cannot be run from the words of a request. `almanac playbook list`
+and `show` say which playbooks are automatic. The log line of that request has
+`playbook.ran` and `playbook.exit` (or `playbook.timeout`). Nothing runs when
+`playbooks.auto_run` is `false`, when the conversation's folder is missing, or
+for sub-agents.
+
+**A reminder when the offer is skipped.** If a playbook with an approved script
+matched but is not automatic, and Claude has made two tool calls in that
+message without calling `playbook_run` (a `ToolSearch` call does not count),
+Almanac adds one more short note after the tool results of the newest message,
+telling Claude to call `playbook_run` for it now unless the request really
+differs. It is added once per message, stored, and put back in the same place
+on every later request, so the prompt cache keeps hitting. If the history was
+compacted or rewound so that the place is gone, it is left out.
+
 **The three tools** (served by `almanac mcp`, with the memory tools):
 
 - `playbook_find {query}`: the top 5 playbooks for some words.
@@ -457,8 +487,8 @@ it can run it with Bash. A playbook with no script has nothing to approve.
   folder, for at most 120 seconds. It returns the exit code, stdout and stderr
   (20,000 characters each at most).
 
-**Commands.** `almanac playbook list`, `show NAME`, `approve NAME`, `remove
-NAME`, `path`.
+**Commands.** `almanac playbook list`, `show NAME`, `approve NAME [--auto]`,
+`remove NAME`, `path`.
 
 **Settings.** `playbooks.enabled` (default `true`) turns the whole feature off;
 `playbooks.inject` (default `true`) set to `false` stops the notes but leaves
@@ -900,7 +930,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac skill audit` | Scan installed skills and plugins not scanned yet, then a table (`--again` for all) |
 | `almanac pack list` | The pinned third-party skills and plugins in `pack.json` |
 | `almanac pack install [NAME]` | Install the pack's skills through the scan; plugins and programs are only shown |
-| `almanac playbook list` | Playbooks: name, status, uses, title. Also `show NAME`, `approve NAME`, `remove NAME`, `path`, `mine [--days N] [--min N]`, `compile [--top N] [--dry-run]` |
+| `almanac playbook list` | Playbooks: name, status, uses, title. Also `show NAME`, `approve NAME [--auto]`, `remove NAME`, `path`, `mine [--days N] [--min N]`, `compile [--top N] [--dry-run]` |
 | `almanac projects` | Projects seen. `projects merge FROM INTO`, `projects rename NAME NEW` |
 | `almanac config [set KEY VALUE \| path]` | Show or change settings |
 | `almanac serve [--port N]` | Run only the proxy, for clients you start yourself |
@@ -945,6 +975,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `routing.windows` | 1,000,000 each | Context window per model id (unknown ids count as 200,000) |
 | `playbooks.enabled` | `true` | Match requests against playbooks and give Claude the playbook tools |
 | `playbooks.inject` | `true` | Add the note about the matching playbook to a request |
+| `playbooks.auto_run` | `true` | Run the approved script of a playbook approved with `--auto` before a matching request goes to Claude (`false` never runs one) |
 | `playbooks.transcript_dirs` | `[]` | More Claude Code config folders to mine for repeated tasks (`~/.claude` and `$CLAUDE_CONFIG_DIR` are always read), for example `["~/.claude-work"]` |
 | `playbooks.background` | `true` | Mine and compile in the background at each start |
 | `playbooks.compile_per_day` | `1` | Most Sonnet sessions a day that write a playbook from a repeated task (`0` is off) |

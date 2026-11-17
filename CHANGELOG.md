@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **A playbook script can run before Claude sees the request.** The note
+  only asked Claude to call `playbook_run`, and Claude could ignore it.
+  `almanac playbook approve NAME --auto` now also lets the proxy run the
+  approved script itself when the playbook is the best match for a typed
+  request: in the conversation's folder, for up to 60 seconds, once per typed
+  message. The note then says the script already ran and carries its result
+  (3,000 characters of output at most, reminder tags removed), with the steps
+  to fall back on if it failed. Only the owner can set this: a playbook Claude
+  saves keeps `auto` only while the same script stays approved, a changed script
+  goes back to draft, and a playbook with `args` cannot be automatic. `list` and
+  `show` mark automatic playbooks. New setting `playbooks.auto_run` (default
+  `true`) turns it off; the request log has `playbook.ran` and `playbook.exit`.
+- **A skipped script is called back once.** When a playbook with an approved
+  script matched but is not automatic, and Claude has made two tool calls in
+  that message without calling `playbook_run`, one reminder is added after the
+  newest tool results. It is stored with the message it went into and put back
+  byte for byte on every later request, so the prompt cache keeps hitting.
 - **Playbook mining finds ways of working, not only wording.** The miner
   grouped past requests only by similar words, so a job you asked for in
   different words each time was never found. It now also groups requests by
