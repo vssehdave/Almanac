@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Search covers tool output.** `memory_search` and the note for a new
+  conversation now also match the transcript of each exchange, tool output
+  included (up to 200,000 characters of an exchange, 20,000 of one result), so
+  an id, an error or a path that only appeared in a command's output can be
+  found, and the hit's snippet is the matching line. An exchange the title and
+  text search already finds ranks as before; exchanges only the transcript
+  matches are added after it by rank fusion. A store from an earlier version is
+  filled in the first time it is opened.
+
 - **Tool output kept whole, and stubs you can undo.** Before a long turn's old
   tool results are replaced by a stub, and when an exchange is stored, the full
   result is saved in the local memory (compressed, secrets removed). The stub

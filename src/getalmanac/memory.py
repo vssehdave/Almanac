@@ -42,6 +42,7 @@ create index if not exists node_convo on node (convo, kind, seq);
 create index if not exists node_project on node (project, kind, ts);
 create virtual table if not exists node_fts using fts5(title, text, tokenize='porter unicode61');
 create table if not exists detail (node integer primary key, text text not null);
+create virtual table if not exists detail_fts using fts5(text, tokenize='porter unicode61');
 create table if not exists raw (
     lane text not null, tool_use_id text not null, size integer not null, ts real not null, data blob not null,
     primary key (lane, tool_use_id)
@@ -53,6 +54,8 @@ DETAIL_LIMIT = 30000  # most characters of one exchange's full transcript kept f
 RESULT_CHARS = 1500  # a tool result longer than this is cut in the transcript, and kept whole in `raw`
 RAW_LIMIT = 400000  # most characters of one tool result kept whole
 RAW_BYTES = 100 * 1024 * 1024  # prune drops the oldest saved results past this many (compressed) bytes
+SEARCH_LIMIT = 200000  # most characters of one exchange the transcript search covers
+SEARCH_RESULT = 20000  # ... and of one tool result in it
 READ_LINES = 400  # most lines, and most characters, one read of a saved tool result returns
 READ_CHARS = 40000
 # Said once, in these words, wherever stored text is handed back to the model.
@@ -198,7 +201,13 @@ def snippet(text: str, terms: set, limit=230) -> str:
     out = pieces[best]
     if len(out) < limit // 2 and best + 1 < len(pieces):
         out += " " + pieces[best + 1]
-    return out[:limit].rstrip() + ("…" if len(out) > limit else "")
+    lead = ""
+    if len(out) > limit:  # a long line (tool output): show the stretch around the longest query word it holds
+        low = out.lower()
+        at = next((low.find(t) for t in sorted(terms, key=lambda t: (-len(t), t)) if t in low), 0)
+        if at > limit // 3:
+            out, lead = out[at - limit // 3:], "…"
+    return lead + out[:limit].rstrip() + ("…" if len(out) > limit else "")
 
 
 class Memory:
@@ -212,6 +221,11 @@ class Memory:
                                 ("status", "text not null default 'done'"), ("mstatus", "text not null default ''")):
                 if column not in have:  # a database written before model summaries or semantic search
                     store.run(f"alter table node add column {column} {ddl}")
+            try:  # a store written before the transcript search: fill it from the transcripts already kept
+                if not store.run("select 1 from detail_fts limit 1") and store.run("select 1 from detail limit 1"):
+                    store.run("insert into detail_fts (rowid, text) select node, text from detail")
+            except Exception:
+                pass
         self.projects = Projects(store)
         self.kept = 0  # open conversations the last forget() left alone
 
@@ -227,6 +241,7 @@ class Memory:
         for node_id in ids:
             self.store.run("delete from node_fts where rowid = ?", (node_id,))
             self.store.run("delete from detail where node = ?", (node_id,))
+            self.store.run("delete from detail_fts where rowid = ?", (node_id,))
             self.store.run("delete from node where id = ?", (node_id,))
 
     def _add_node(self, convo, project, parent, kind, seq, title, text, mark, vec) -> int:
@@ -335,6 +350,8 @@ class Memory:
         topic = self._topic_for(convo["id"], project, seq, record["title"], vec)
         leaf = self._add_node(convo["id"], project, topic, "leaf", seq, record["title"], record["text"], record["mark"], vec)
         self.store.run("insert or replace into detail (node, text) values (?, ?)", (leaf, transcript(group, hint=True)))
+        self.store.run("insert into detail_fts (rowid, text) values (?, ?)",
+                       (leaf, transcript(group, limit=SEARCH_LIMIT, result_chars=SEARCH_RESULT)))
         for msg in group:
             for block in rq.blocks(msg) if msg.get("role") == "user" else ():
                 try:  # keeping a result whole is a bonus: a failure here must not lose the exchange
@@ -443,6 +460,26 @@ class Memory:
         near = [(r["id"], round(score, 4)) for r, score in zip(rows, scores) if score >= DENSE_MIN]
         return sorted(near, key=lambda p: (-p[1], p[0]))[:DENSE_TOP]
 
+    def _deep(self, words, terms, need, project, exclude_lane, known) -> list:
+        """Exchanges the title-and-text search missed whose transcript (tool output included) holds the query, best first,
+        each with the matching line as its snippet."""
+        sql = ("select n.id, n.kind, n.title, n.text, n.ts, n.project, n.convo, c.title ctitle, detail_fts.text dtext "
+               "from detail_fts join node n on n.id = detail_fts.rowid join convo c on c.id = n.convo "
+               "where detail_fts match ? and n.kind = 'leaf'")
+        args = [" OR ".join(f'"{w}"' for w in words)]
+        if project:
+            sql, args = sql + " and n.project = ?", args + [project]
+        if exclude_lane:
+            sql, args = sql + " and c.lane != ?", args + [exclude_lane]
+        found = []
+        for row in self.store.run(sql + " order by bm25(detail_fts) limit 20", args):
+            if row["id"] in known or len(terms & set(tokens(row["dtext"]))) < need:
+                continue
+            hit = {k: row[k] for k in row.keys() if k != "dtext"}
+            hit["snippet"] = snippet(row["dtext"], terms)
+            found.append(hit)
+        return found
+
     def search(self, query, project=None, exclude_lane=None, limit=8, kind="leaf") -> list:
         """Stored exchanges that match `query`, best first. Needs two of its words (one if it has one).
 
@@ -472,11 +509,15 @@ class Memory:
         hits.sort(key=lambda h: (-h["score"], -h["ts"]))
         for hit in hits:
             hit.pop("vec", None)
-        if not near:
+        deep = self._deep(words, terms, need, project, exclude_lane, {hit["id"] for hit in hits}) if kind == "leaf" and words and terms else []
+        if not near and not deep:
             return hits[:limit]
         fused = {hit["id"]: 1 / (RRF_K + rank) for rank, hit in enumerate(hits, 1)}
         for rank, (node_id, _) in enumerate(near, 1):
             fused[node_id] = fused.get(node_id, 0) + 1 / (RRF_K + rank)
+        for rank, hit in enumerate(deep, 1):  # exchanges only their transcript matches (an id or error inside tool output)
+            fused[hit["id"]] = fused.get(hit["id"], 0) + 1 / (RRF_K + rank)
+        hits += deep
         known = {hit["id"] for hit in hits}
         extra = [n for n, _ in near if n not in known]
         for row in self.store.run("select n.id, n.kind, n.title, n.text, n.ts, n.project, n.convo, c.title ctitle "
@@ -609,6 +650,7 @@ class Memory:
         """Deleted text can outlive its rows in the search index's old segments and in the WAL file."""
         try:
             self.store.run("insert into node_fts(node_fts) values ('optimize')")
+            self.store.run("insert into detail_fts(detail_fts) values ('optimize')")
             self.store.run("pragma wal_checkpoint(TRUNCATE)")
         except Exception:  # a locked or busy file is cleaned by the next merge; the rows themselves are gone
             pass

@@ -154,6 +154,9 @@ further: `memory_search`, `memory_read` and `memory_projects`. A tool result
 too long for the transcript is saved whole as well (compressed, secrets
 removed), and `memory_read` with `result` set to its tool call id returns it a
 page at a time: at most 400 lines or 40,000 characters, as a quoted record.
+`memory_search` also looks through the transcripts, tool output included, so an
+id, an error or a path that only showed up in a command's output can be found;
+the hit shows the matching line.
 
 Each exchange is first stored with a title and text written by rule. In the
 background, a small model (`memory.summary_model`, Haiku by default) then
@@ -1101,7 +1104,7 @@ Everything is under `~/.almanac/` (or `ALMANAC_HOME`):
 
 | File | Holds |
 |---|---|
-| `almanac.db` | The memory tree, exchange transcripts, tool results kept whole (the oldest go past 100 MB), per-conversation decisions (deleted after 45 days of not being used) |
+| `almanac.db` | The memory tree, exchange transcripts and their search index, tool results kept whole (the oldest go past 100 MB), per-conversation decisions (deleted after 45 days of not being used) |
 | `serve.json` | While `almanac serve` runs: its port, its secret and the key that proves it, so `almanac` can find it. Removed when `serve` is stopped with Ctrl+C. A `serve` that is killed leaves it, and the next `serve` overwrites it |
 | `config.json` | Settings you changed |
 | `logs/requests.jsonl` | One line per request: sizes, token counts, timing. No message text, no credentials |

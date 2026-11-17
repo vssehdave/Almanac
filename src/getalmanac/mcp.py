@@ -13,7 +13,8 @@ from .store import Store
 
 TOOLS = [
     {"name": "memory_search",
-     "description": "Search earlier conversations stored by Almanac on this machine. Returns matching exchanges "
+     "description": "Search earlier conversations stored by Almanac on this machine, including the text of tool output "
+                    "(ids, errors, paths). Returns matching exchanges "
                     "(what was asked and how it ended) with an id for memory_read. Searches the current project "
                     "unless `project` names another one, or is \"all\".",
      "inputSchema": {"type": "object", "required": ["query"], "properties": {

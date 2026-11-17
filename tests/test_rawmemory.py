@@ -135,16 +135,36 @@ class PagingTest(StoreCase):
         self.assertNotIn("toolu_0", left)
 
 
+class SearchTranscriptTest(StoreCase):
+    def big(self):
+        return "noise " * 500 + " ERR_0xBEEF in row 7"
 
+    def test_an_id_inside_tool_output_can_be_found(self):
+        self.memory.index("lane-1", "s1", "", with_result(self.big()), FINAL)
+        hits = self.memory.search("ERR_0xBEEF")
+        self.assertEqual(len(hits), 1)
+        self.assertIn("ERR_0xBEEF", hits[0]["snippet"])
 
-if __name__ == "__main__":
-    unittest.main()
-
-
-class ReadBackTest(StoreCase):
     def test_the_whole_result_can_be_read_back_by_its_call_id(self):
-        self.memory.index("lane-1", "s1", "", with_result("noise " * 500 + " ERR_0xBEEF in row 7"), FINAL)
+        self.memory.index("lane-1", "s1", "", with_result(self.big()), FINAL)
         self.assertIn("ERR_0xBEEF in row 7", reading(self.memory, result="toolu_big"))
+
+    def test_a_search_that_matches_the_answer_is_unchanged(self):
+        self.memory.index("lane-1", "s1", "", with_result("short"), FINAL)
+        self.assertEqual(len(self.memory.search("importer bad row")), 1)
+
+    def test_forget_removes_it_from_search_and_storage(self):
+        self.memory.index("lane-1", "s1", "", with_result(self.big()), FINAL)
+        self.memory.forget(force=True)
+        self.assertEqual(self.memory.search("ERR_0xBEEF"), [])
+        self.assertFalse(self.store.run("select 1 from detail_fts"))
+        self.assertFalse(self.store.run("select 1 from raw"))
+
+    def test_an_older_store_is_filled_in_when_opened(self):
+        self.memory.index("lane-1", "s1", "", with_result("ERR_0xBEEF " * 3), FINAL)
+        self.store.run("delete from detail_fts")
+        Memory(self.store)
+        self.assertEqual(len(self.memory.search("ERR_0xBEEF")), 1)
 
 
 if __name__ == "__main__":
