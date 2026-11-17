@@ -602,7 +602,8 @@ def _playbook(rest):
     print(f"\nApproved {args.name}. sha256 {digest}\nIf the script changes, it goes back to draft until you approve it again.")
     if args.auto:
         print("Automatic: Almanac runs this script before Claude sees a matching request, in the conversation's folder, "
-              f"for up to {playbook.AUTO_TIMEOUT} seconds. Approve again without --auto to stop that.")
+              f"for up to {playbook.AUTO_TIMEOUT} seconds, with no model and no prompt. A script that runs the project's own tests or build runs "
+              "that repository's code. Approve again without --auto to stop that.")
     return 0
 
 

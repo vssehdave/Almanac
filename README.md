@@ -453,7 +453,13 @@ do anything, so a script is a draft until you approve it. `almanac playbook
 approve NAME` prints the first 40 lines of `run.py` and its hash, then records
 the hash. If `run.py` changes in any way afterwards, the playbook goes back to
 draft. A draft script is never run by Almanac; the note tells Claude the path so
-it can run it with Bash. A playbook with no script has nothing to approve.
+it can run it with Bash. What Claude or the miner writes is a draft, with or without a script: a draft
+is not offered in matches, in the system prompt's list or by `playbook_find`
+until you run `almanac playbook approve NAME` (a playbook with no script is
+approved with no script text to read; `list` shows it as `draft`, and the
+launch line names new drafts). A playbook's text cannot contain a
+`system-reminder` tag: it is refused on save and a file that has one does not
+load.
 
 **Automatic playbooks.** The note only asks Claude to call `playbook_run`, and
 Claude may not. `almanac playbook approve NAME --auto` approves the script and
@@ -471,6 +477,10 @@ the script has already run, gives its exit code and its output as data, not
 instructions (3,000 characters in all, with any `system-reminder` tags
 removed), and tells Claude to answer from that, or, if the exit code is not 0
 or it timed out, to say so and carry on by hand with the steps.
+
+An automatic script runs in the conversation's folder with no model and no
+prompt in between, so a script that runs that project's own tests or build runs
+that repository's code. Read the script before you approve it with `--auto`.
 
 Only you can set this, and the approval is kept apart from the playbook:
 `--auto` writes the script's hash into `~/.almanac/auto.json` (outside the
@@ -758,7 +768,9 @@ servers); Almanac does not know.
   fits the 32,767-character limit.
 - Common secret patterns are taken out of it, the same ones as from stored
   text. That is best effort, not complete, and the packet also holds file
-  paths and the remote's address. Read it with `almanac cloud packet` first.
+  paths and the remote's address. Tool output is not sent at all: each result
+  is one line naming the tool and its size, while Claude's own text and the
+  tool calls stay. Read it with `almanac cloud packet` first.
 - On Windows, `send` will not run Claude Code through a `claude.cmd` or `.bat`
   launcher (an npm install), because `cmd.exe` would cut the packet at its
   first line. Point `ALMANAC_CLAUDE` at `claude.exe`.
@@ -1163,6 +1175,9 @@ that time from the reply: the `anthropic-ratelimit-unified-reset` header, else
 `retry-after`, else a phrase like "resets 2:30am" in the message (read as local
 time, or in the zone given in brackets), else `accounts.cooldown_minutes` (30)
 from now. The time is kept between 1 minute and 7 days away.
+This happens only when the upstream is the Anthropic API itself
+(`https://api.anthropic.com`); with any other upstream the limit is passed
+through and no other login's token is read.
 A plain rate limit (slow down) is passed through as it is. If the other login
 cannot take the request either, Claude Code gets the original limit message.
 The first switch prints one line on the proxy's stderr with the reset time,
