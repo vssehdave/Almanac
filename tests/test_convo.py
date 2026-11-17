@@ -1,4 +1,7 @@
+import http.client
 import json
+import socket
+import threading
 import time
 import unittest
 from unittest import mock
@@ -7,7 +10,8 @@ import test_compact as tc
 import test_summarize as ts
 from test_memory import Case as MemoryCase, human, reply, said
 
-from getalmanac import mcp, summarize
+from getalmanac import accounts, mcp, proxy as proxy_mod, summarize
+from getalmanac.memory import Memory
 
 CONVO = "CONVOSUMMARY the importer was rewritten and tabs were chosen."
 
@@ -144,6 +148,93 @@ class ConvoToolsTest(MemoryCase):
         week = self.ask("memory_user_messages", {"since": "7d", "conversation": self.new_id})
         self.assertNotIn("parser", week)
         self.assertIn("Nothing", self.ask("memory_user_messages", {"query": "zzzzqq"}))
+
+
+class Mute:
+    """An upstream that accepts connections and never answers."""
+
+    def __init__(self):
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(16)
+        self.port, self.accepted, self.held = self.sock.getsockname()[1], 0, []
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            self.accepted += 1
+            self.held.append(conn)
+
+    def close(self):
+        self.sock.close()
+        for conn in self.held:
+            conn.close()
+
+
+class FakeProxy:
+    base = ""
+
+    def __init__(self, port, cfg, store):
+        self.port, self.cfg, self.store = port, cfg, store
+        self.log = type("L", (), {"write": staticmethod(lambda r: None)})
+
+    def connect(self):
+        return http.client.HTTPConnection("127.0.0.1", self.port)
+
+
+class IdleJobTest(MemoryCase):
+    def setUp(self):
+        super().setUp()
+        self.key = self.memory.projects.see(self.alpha)
+        self.mute = Mute()
+        self.addCleanup(self.mute.close)
+        self.addCleanup(accounts.reset)
+        self.layer = summarize.SummaryLayer(self.memory)
+
+    def job(self, lane, auth="Bearer tok-" + "x" * 12):
+        conversation(self.memory, lane, self.key, [f"First ask in {lane}", f"Second ask in {lane}"])
+        from getalmanac import config
+        cfg = config.load()
+        ctx = proxy_mod.Ctx(FakeProxy(self.mute.port, cfg, self.store), {}, "messages", {"authorization": auth, "user-agent": "claude-cli"})
+        ctx.lane, ctx.orig = lane, {"system": ts.IDENTITY, "messages": [{"role": "user", "content": "BODYTEXT"}]}
+        return ctx
+
+    def test_close_has_one_budget_for_every_waiting_conversation(self):
+        with mock.patch.object(summarize, "EXIT_TIMEOUT", 1.0):
+            for lane in ("a", "b", "c"):
+                ctx = self.job(lane)
+                self.layer._arm(ctx, ctx.orig)
+            self.assertEqual(len(self.layer.pending), 3)
+            start = time.time()
+            self.layer.close()
+            self.assertLess(time.time() - start, 2.0)  # three waits of one second each would take three
+        self.assertGreaterEqual(self.mute.accepted, 1)
+
+    def test_a_cooling_login_makes_no_call(self):
+        ctx = self.job("cool", "Bearer cooling-token-123")
+        accounts.mark(ctx.cfg, "cooling-token-123")
+        self.layer._idle(summarize.Idle(ctx, ctx.orig))
+        time.sleep(0.2)
+        self.assertEqual(self.mute.accepted, 0)
+        self.layer._idle(summarize.Idle(self.job("warm", "Bearer warm-token-123456"), ctx.orig), 0.3)
+        time.sleep(0.2)
+        self.assertEqual(self.mute.accepted, 1)  # the same job with another login does call
+
+    def test_a_waiting_conversation_keeps_no_request_body(self):
+        ctx = self.job("keep")
+        self.layer._arm(ctx, ctx.orig)
+        self.addCleanup(lambda: self.layer.pending["keep"][0].cancel())
+        entry = self.layer.pending["keep"]
+        job = entry[1]
+        self.assertFalse(any(isinstance(part, proxy_mod.Ctx) for part in entry))
+        self.assertFalse(hasattr(job, "orig") or hasattr(job, "after") or hasattr(job, "messages"))
+        self.assertNotIn("BODYTEXT", repr(vars(job)))
+        self.assertNotIn("user-agent", job.headers)
+        self.assertEqual(job.headers["authorization"], "Bearer tok-" + "x" * 12)
 
 
 if __name__ == "__main__":

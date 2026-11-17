@@ -13,6 +13,7 @@ import re
 import threading
 import time
 
+from . import accounts
 from .memory import MemoryLayer, clean
 from .status import STATUSES
 
@@ -132,12 +133,22 @@ def call(ctx, body, used, timeout=TIMEOUT, seen=None):
         conn.close()
 
 
+class Idle:
+    """What a waiting conversation's summary call needs, and no more: the login's headers, the lane, the store and
+    proxy. The request body is not kept."""
+
+    def __init__(self, ctx, orig):
+        self.cfg, self.store, self.proxy, self.lane = ctx.cfg, ctx.store, ctx.proxy, ctx.lane
+        self.headers = _headers(ctx.headers)
+        self.system = _identity(orig)
+
+
 class SummaryLayer:
     """Runs only in the background; it never touches a request."""
 
     def __init__(self, memory):
         self.memory = memory
-        self.pending = {}  # lane -> (timer, ctx, system): conversations waiting to go idle
+        self.pending = {}  # lane -> (timer, Idle): conversations waiting to go idle
         self.lock = threading.Lock()
 
     def transform(self, body, ctx):
@@ -151,7 +162,7 @@ class SummaryLayer:
                     self.pending.pop(ctx.lane)[0].cancel()
                 timer = threading.Timer(IDLE_SECONDS, self._wake, (ctx.lane,))
                 timer.daemon = True
-                self.pending[ctx.lane] = (timer, ctx, {"system": _identity(orig)})  # a call needs only the first system block
+                self.pending[ctx.lane] = (timer, Idle(ctx, orig))
                 timer.start()
         except Exception:  # no timer means no conversation summary, nothing else
             pass
@@ -160,23 +171,29 @@ class SummaryLayer:
         with self.lock:
             job = self.pending.pop(lane, None)
         if job:  # the worker thread runs it, after whatever else it has queued
-            job[1].proxy._jobs.put((self, job[1], job[2], {"idle": True}))
+            job[1].proxy._jobs.put((self, job[1], None, {"idle": True}))
 
     def close(self):
-        """At exit: summarize the conversations that had not yet gone idle, with a short wait for each."""
+        """At exit: summarize the conversations that had not yet gone idle, all within one EXIT_TIMEOUT."""
         with self.lock:
             jobs, self.pending = list(self.pending.values()), {}
-        for timer, ctx, orig in jobs:
+        deadline = time.time() + EXIT_TIMEOUT
+        for timer, job in jobs:
             timer.cancel()
+            left = deadline - time.time()
+            if left <= 0:
+                continue
             try:
-                self._idle(ctx, orig, EXIT_TIMEOUT)
+                self._idle(job, left)
             except Exception:
                 pass
 
-    def _idle(self, ctx, orig, timeout=TIMEOUT):
-        """One call that summarizes a conversation, if it has grown since it was last summarized."""
+    def _idle(self, ctx, timeout=TIMEOUT):
+        """One call that summarizes a conversation, if it has grown since it was last summarized. `ctx` is an Idle."""
         cfg, store = ctx.cfg["memory"], ctx.store
         if not (cfg["enabled"] and cfg["summary_model"]):
+            return
+        if accounts.cooling_until(ctx.headers.get("authorization", "")[7:].strip()):  # this login is out of usage: do not make it worse
             return
         rows = store.run("select id, turns, sumturns from convo where lane = ?", (ctx.lane,))
         if not rows or rows[0]["turns"] < 2 or rows[0]["sumturns"] >= rows[0]["turns"]:  # one exchange has its own summary already
@@ -190,7 +207,7 @@ class SummaryLayer:
         if len(text) > INPUT_CHARS:
             text = text[: INPUT_CHARS // 3] + "\n... (middle not shown) ...\n" + text[-(2 * INPUT_CHARS // 3):]
         body = {"model": cfg["summary_model"], "max_tokens": 1000,
-                "system": _identity(orig) + [{"type": "text", "text": CONVO_INSTRUCTION}],
+                "system": ctx.system + [{"type": "text", "text": CONVO_INSTRUCTION}],
                 "messages": [{"role": "user", "content": text}]}
         seen = {}
         message = call(ctx, body, used, timeout=timeout, seen=seen)
@@ -203,7 +220,7 @@ class SummaryLayer:
 
     def observe(self, ctx, orig, reply):
         if reply.get("idle"):
-            return self._idle(ctx, orig)
+            return self._idle(ctx)
         cfg = ctx.cfg["memory"]
         if not (cfg["enabled"] and cfg["summary_model"] and MemoryLayer._main_thread(orig, ctx)):
             return
