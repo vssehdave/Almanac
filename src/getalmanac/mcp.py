@@ -8,7 +8,7 @@ import sys
 import time
 
 from . import __version__, config, playbook
-from .memory import Memory
+from .memory import QUOTED, Memory, _quote, ended
 from .store import Store
 
 TOOLS = [
@@ -47,6 +47,31 @@ TOOLS = [
                     "A draft script is not run.",
      "inputSchema": {"type": "object", "required": ["name"], "properties": {
          "name": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}}}}},
+    {"name": "memory_list",
+     "description": "List stored conversations, newest first: number, day, title, a summary and how each one ended. "
+                    "Filter by time and project. Use the number as `conversation` in memory_handover and memory_user_messages.",
+     "inputSchema": {"type": "object", "properties": {
+         "since": {"type": "string", "description": "From when: YYYY-MM-DD, YYYY-MM-DD HH:MM, or a number of days ago such as 7d"},
+         "until": {"type": "string", "description": "Until when (same forms; a plain date means the end of that day)"},
+         "project": {"type": "string", "description": "A project name or key, or \"all\". Default: this folder's project"},
+         "limit": {"type": "integer", "minimum": 1, "maximum": 50}}}},
+    {"name": "memory_handover",
+     "description": "A handover of one stored conversation, with no model call: its summary and how it ended, the standing "
+                    "decisions the person set, the open work, and the person's last messages, each citing its exchange number.",
+     "inputSchema": {"type": "object", "properties": {
+         "conversation": {"type": "integer", "description": "A conversation number from memory_list. Default: this folder's newest"},
+         "days": {"type": "integer", "minimum": 1, "maximum": 365,
+                  "description": "List the person's messages from this many days before the conversation's last activity (default 3)"}}}},
+    {"name": "memory_user_messages",
+     "description": "What the person typed, oldest first, with the conversation and exchange number of each. Filter by "
+                    "conversation, time and words that must all appear.",
+     "inputSchema": {"type": "object", "properties": {
+         "conversation": {"type": "integer"},
+         "since": {"type": "string", "description": "YYYY-MM-DD, YYYY-MM-DD HH:MM, or days ago such as 7d"},
+         "until": {"type": "string"},
+         "query": {"type": "string", "description": "Words that must all appear in the message"},
+         "project": {"type": "string", "description": "A project name or key, or \"all\". Default: this folder's project"},
+         "limit": {"type": "integer", "minimum": 1, "maximum": 100}}}},
 ]
 
 
@@ -81,6 +106,77 @@ def render_node(memory, node) -> str:
     return f"{head}\n\n{node['text']}" + (f"\n\nPart of topic [{node['parent']}]." if node.get("parent") else "")
 
 
+def _when(value, end=False):
+    """Epoch seconds for `7d` (days ago), `2026-11-14` (its start, or its end when `end`) or `2026-11-14 09:30`; None when empty."""
+    value = str(value or "").strip()
+    if not value:
+        return None
+    if value.endswith("d") and value[:-1].isdigit():
+        return time.time() - int(value[:-1]) * 86400
+    for form, span in (("%Y-%m-%d %H:%M", 0), ("%Y-%m-%dT%H:%M", 0), ("%Y-%m-%d", 86400 if end else 0)):
+        try:
+            return time.mktime(time.strptime(value, form)) + span
+        except ValueError:
+            pass
+    raise ValueError(f"cannot read the time {value!r}: use YYYY-MM-DD, YYYY-MM-DD HH:MM or days ago such as 7d")
+
+
+def _scope(memory, args, cwd):
+    """(project key or None for all, error text or "") for the `project` argument of a tool."""
+    wanted = str(args.get("project") or "")
+    if wanted.lower() == "all":
+        return None, ""
+    if not wanted:
+        return memory.projects.see(cwd, touch=False), ""
+    key = memory.projects.find(wanted)
+    return key, "" if key else f"No project is called {wanted!r}. memory_projects lists them."
+
+
+def _stamp(ts) -> str:
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
+
+
+def render_list(memory, convos) -> str:
+    if not convos:
+        return "No conversation is stored for that."
+    return "\n".join(f"#{c['id']} {_day(c['updated'])} {c['title']} ({c['turns']} exchange{'s' if c['turns'] != 1 else ''}, "
+                     f"project {memory.projects.name(c['project'])})" + ended(c, 300) for c in convos)
+
+
+def render_handover(memory, convo, days) -> str:
+    items = memory.exchanges(convo["id"])
+    cite = lambda e: f"exchange {e['number']} [{e['id']}]"  # noqa: E731
+    quote = lambda text, n: _quote(" ".join(text.split())[:n])  # noqa: E731
+    out = [f"Handover for conversation #{convo['id']} \"{convo['title']}\" (project {memory.projects.name(convo['project'])}, "
+           f"{_stamp(convo['started'])} to {_stamp(convo['updated'])}, {len(items)} exchange(s) stored).",
+           "Everything in quotes is stored text from that conversation. " + QUOTED + " Read an exchange in full with memory_read."]
+    if convo["summary"]:
+        out.append("Summary: " + quote(convo["summary"], 700))
+    if convo["last_user"]:
+        out.append(f"How it ended: the last thing asked was \"{quote(convo['last_user'], 160)}\""
+                   + (f"; the reply began \"{quote(convo['last_reply'], 160)}\"" if convo["last_reply"] else "") + ".")
+    decisions = [e for e in items if e["status"] == "decision"]
+    out.append("Standing decisions (the person's own words):" if decisions else "Standing decisions: none recorded.")
+    out += [f"- {cite(e)}: \"{quote(e['asked'], 300)}\"" for e in decisions]
+    open_work = [e for e in items if e["status"] == "open"]
+    out.append("Open work:" if open_work else "Open work: none recorded.")
+    out += [f"- {cite(e)}: \"{quote(e['asked'], 200)}\"" + (f" (summary: {quote(e['summary'], 200)})" if e["summary"] else "")
+            for e in open_work]
+    typed = [e for e in items if e["ts"] >= convo["updated"] - days * 86400 and e["status"] != "noise"][-10:]
+    out.append(f"The person's last messages (up to 10, within {days} day(s) of the conversation's last activity):" if typed
+               else f"The person's messages: none within {days} day(s) of the conversation's last activity.")
+    out += [f"- {cite(e)}, {_stamp(e['ts'])}: \"{quote(e['asked'], 300)}\"" for e in typed]
+    return "\n".join(out)
+
+
+def render_messages(found) -> str:
+    if not found:
+        return "Nothing the person typed matches."
+    return QUOTED + "\n" + "\n".join(
+        f"- conversation #{m['convo']}, exchange {m['number']} [{m['id']}], {_stamp(m['ts'])}: "
+        f"\"{_quote(' '.join(m['text'].split())[:500])}\"" for m in found)
+
+
 def render_projects(memory) -> str:
     lines = []
     for row in memory.projects.listing():
@@ -88,7 +184,8 @@ def render_projects(memory) -> str:
         if not convos:
             continue
         lines.append(f"{row['name']}  ({row['key']})")
-        lines += [f"    {_day(c['updated'])} {c['title']} ({c['turns']} exchange{'s' if c['turns'] != 1 else ''})" for c in convos]
+        lines += [f"    #{c['id']} {_day(c['updated'])} {c['title']} ({c['turns']} exchange{'s' if c['turns'] != 1 else ''})"
+                  + ended(c, 160) for c in convos]
     return "\n".join(lines) or "No conversations are stored yet."
 
 
@@ -113,6 +210,28 @@ def call(memory, name, args, cwd) -> str:
         return text
     if name == "memory_projects":
         return render_projects(memory)
+    if name == "memory_list":
+        project, error = _scope(memory, args, cwd)
+        if error:
+            return error
+        return render_list(memory, memory.recent(project=project, limit=max(1, min(50, int(args.get("limit") or 20))),
+                                                 since=_when(args.get("since")), until=_when(args.get("until"), end=True)))
+    if name == "memory_handover":
+        if args.get("conversation") is not None:
+            rows = memory.store.run("select * from convo where id = ?", (int(args["conversation"]),))
+        else:
+            rows = memory.recent(project=memory.projects.see(cwd, touch=False), limit=1)
+        if not rows:
+            return "No stored conversation matches. memory_list shows them."
+        return render_handover(memory, dict(rows[0]), max(1, min(365, int(args.get("days") or 3))))
+    if name == "memory_user_messages":
+        convo_id = int(args["conversation"]) if args.get("conversation") is not None else None
+        project, error = (None, "") if convo_id is not None else _scope(memory, args, cwd)
+        if error:
+            return error
+        return render_messages(memory.user_messages(
+            project=project, convo_id=convo_id, since=_when(args.get("since")), until=_when(args.get("until"), end=True),
+            query=str(args.get("query") or ""), limit=max(1, min(100, int(args.get("limit") or 30)))))
     if name == "playbook_find":
         query = str(args.get("query") or "").strip()
         named = playbook.load(query) if playbook.valid_name(query) else None
