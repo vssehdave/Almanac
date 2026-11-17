@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **Playbook mining finds ways of working, not only wording.** The miner
+  grouped past requests only by similar words, so a job you asked for in
+  different words each time was never found. It now also groups requests by
+  the phases of work they went through (branch, edit, test, commit, push, pr
+  and so on) and lists a group as `way of working: branch > edit > commit >
+  push > pr`. Chained shell commands count one step each. The compile prompt
+  gets the phases and steps. `almanac playbook mine` shows the new rows.
+- **Claude is told which playbooks exist.** The cheatsheet now ends with a
+  list of the playbooks on hand that apply everywhere (12 at most, by name),
+  because a way of working cannot be matched from the words of a request. It
+  goes to the main thread and forks, not to other sub-agents or Haiku.
+  `playbook_find` with a playbook's exact name returns the whole playbook,
+  every step uncut. It follows `playbooks.inject`.
+- **The playbook check repeats while a session is open.** It ran only when
+  `almanac` started Claude Code. A long session now checks again every 6
+  hours, with no output.
 - **`ALMANAC_DISABLE=all` now turns everything off.** It left the cheatsheet
   and playbooks on, so a run meant to be plain Claude Code still had text
   added to it.
