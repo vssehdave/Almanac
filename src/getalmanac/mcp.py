@@ -116,9 +116,11 @@ def call(memory, name, args, cwd) -> str:
             raise ValueError("playbook must be an object")
         pb = playbook.save(dict(given, source="claude"), args.get("script"))
         text = f"Saved playbook {pb['name']} at {playbook.folder(pb['name'])} (status: {pb['status']})."
-        if pb["status"] == "draft":
+        if pb["status"] == "draft" and pb["script"]:
             text += (f" Its script is a draft and will not run through playbook_run. Tell the owner to read "
                      f"{playbook.script_path(pb['name'])} and approve it with `almanac playbook approve {pb['name']}`.")
+        elif pb["status"] == "draft":
+            text += f" It is a draft and is not offered until the owner approves it with `almanac playbook approve {pb['name']}`."
         return text
     if name == "playbook_run":
         return playbook.run(str(args.get("name") or ""), args.get("args") or [], cwd)

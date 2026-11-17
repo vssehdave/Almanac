@@ -602,7 +602,7 @@ class BackgroundTest(Fake):
         self.compile()
         mine.launch_check(self.cfg, out=lines.append, start=lambda: started.append(1))
         self.assertEqual(lines, ['almanac: 1 new playbook draft(s): weekly-sales-report. See one with "almanac playbook show <name>", '
-                                 'approve its script with "almanac playbook approve <name>".'])
+                                 'approve one with "almanac playbook approve <name>".'])
         playbook.approve("weekly-sales-report")
         lines.clear()
         mine.launch_check(self.cfg, out=lines.append, start=lambda: None)

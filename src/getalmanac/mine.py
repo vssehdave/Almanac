@@ -641,7 +641,7 @@ def keep_checking(every=RECHECK, wait=time.sleep):
 
 
 def drafts() -> list:
-    return [pb["name"] for pb in playbook.listing() if pb["source"] == "miner" and pb["status"] == "draft"]
+    return [pb["name"] for pb in playbook.listing() if pb["source"] in ("miner", "claude") and pb["status"] == "draft"]
 
 
 def launch_check(cfg, out=None, start=spawn, now=None):
@@ -653,6 +653,6 @@ def launch_check(cfg, out=None, start=spawn, now=None):
     if waiting:
         shown = ", ".join(waiting[:5]) + (" ..." if len(waiting) > 5 else "")
         out(f'almanac: {len(waiting)} new playbook draft(s): {shown}. See one with "almanac playbook show <name>", '
-            'approve its script with "almanac playbook approve <name>".')
+            'approve one with "almanac playbook approve <name>".')
     if due(cfg, now):
         start()
