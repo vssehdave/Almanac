@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **Security fixes.**
+  - A playbook field that contains a `system-reminder` tag is refused, on save
+    and on load, so a playbook cannot close the frame it is shown in.
+  - A playbook Claude or the miner saves is a draft, with or without a script,
+    and is not offered until you run `almanac playbook approve NAME`.
+  - The headless playbook compile session no longer has Python. Almanac runs
+    the script's `--self-test` itself, and the session gets its own
+    `ALMANAC_HOME` inside its temporary folder.
+  - The summary model can no longer mark an exchange as a standing decision.
+  - The cloud packet leaves tool output out: one line per result, with the tool
+    and its size.
+  - The second login's token is sent only when the upstream is
+    `api.anthropic.com`.
+  - `almanac playbook approve --auto` and the README say an automatic script
+    runs in the conversation's folder with no model and no prompt, so it can
+    run that repository's own code.
+
 - **A stable system prefix** (`startup.system_prefix`, off by default). The MCP
   instructions, advisor notes, deferred tool names, agent types and skill list
   move from the session message, which follows the typed text, to one block at

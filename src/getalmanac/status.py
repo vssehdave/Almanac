@@ -53,7 +53,8 @@ def rule(group, following=None, newest=False) -> str:
 
 
 def combine(by_rule: str, by_model: str = "") -> str:
-    """The status kept: the model's refinement, unless the rules made a decision or a superseded mark."""
-    if by_rule in ("decision", "superseded") or by_model not in STATUSES:
+    """The status kept: the model's refinement, unless the rules made a decision or a superseded mark.
+    The model never makes a decision: those come only from the owner's typed words, through the rules."""
+    if by_rule in ("decision", "superseded") or by_model not in STATUSES or by_model == "decision":
         return by_rule
     return by_model

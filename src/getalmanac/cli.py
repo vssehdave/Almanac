@@ -591,20 +591,21 @@ def _playbook(rest):
         playbook.remove(args.name)
         print(f"removed {args.name}")
         return 0
-    if not pb["script"]:
-        print(f"{args.name} has no script, so there is nothing to approve.")
-        return 0
     try:
         digest, text = playbook.approve(args.name, args.auto)
     except ValueError as why:
         print(f"almanac: {why}", file=sys.stderr)
         return 2
+    if not pb["script"]:
+        print(f"Approved {args.name}. It has no script; Claude is shown its steps when a request matches.")
+        return 0
     lines = text.splitlines()
     _print("\n".join(lines[:40]) + (f"\n... ({len(lines) - 40} more lines)" if len(lines) > 40 else ""))
     print(f"\nApproved {args.name}. sha256 {digest}\nIf the script changes, it goes back to draft until you approve it again.")
     if args.auto:
         print("Automatic: Almanac runs this script before Claude sees a matching request, in the conversation's folder, "
-              f"for up to {playbook.AUTO_TIMEOUT} seconds. Approve again without --auto to stop that.")
+              f"for up to {playbook.AUTO_TIMEOUT} seconds, with no model and no prompt. A script that runs the project's own tests or build runs "
+              "that repository's code. Approve again without --auto to stop that.")
     return 0
 
 

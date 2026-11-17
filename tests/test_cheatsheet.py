@@ -214,7 +214,7 @@ class IndexTest(Fresh):
         cheatsheet.index.cache_clear()
 
     def save(self, name="weekly-report", **over):
-        playbook.save({"name": name, "title": "Weekly report", "when": "w", "triggers": ["weekly report"], "steps": ["Run it"], **over})
+        playbook.save({"name": name, "title": "Weekly report", "when": "w", "triggers": ["weekly report"], "steps": ["Run it"], "source": "owner", **over})
 
     def sent(self, inject=True, model=MEDIUM, **kw):
         work = body(convo([{"text": "hello"}]), model, system=claude_system())

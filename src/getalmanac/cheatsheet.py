@@ -61,7 +61,7 @@ def index() -> str:
     try:
         from . import playbook
 
-        books = sorted((pb for pb in playbook.listing() if not pb["project"]), key=lambda pb: pb["name"])[:INDEX]
+        books = sorted((pb for pb in playbook.listing() if not pb["project"] and pb["status"] == "approved"), key=lambda pb: pb["name"])[:INDEX]
         lines = [f"- {pb['name']}: {' '.join(pb['title'].split())[:80]}" + (" (script)" if playbook.runnable(pb) else "")
                  for pb in books]
     except Exception:  # a bad playbook folder must never block a request

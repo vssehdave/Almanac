@@ -104,6 +104,29 @@ class ResetTest(unittest.TestCase):
         self.assertEqual(at({"anthropic-ratelimit-unified-reset": str(NOW + 99 * 86400)}), NOW + 7 * 86400)
 
 
+class OtherUpstreamTest(unittest.TestCase):
+    def test_a_usage_limit_is_passed_through_and_no_other_token_is_read(self):
+        accounts.reset()
+        self.addCleanup(accounts.reset)
+        other = folder(B)
+        rig = Rig(lambda req: (429, {"content-type": "application/json", "retry-after": "60"}, LIMIT),
+                  overrides={"accounts.fallback": [other]})  # the fake upstream is a local gateway, not api.anthropic.com
+        self.addCleanup(rig.close)
+        with mock.patch.object(accounts, "token", wraps=accounts.token) as read:
+            status, headers, data = rig.messages(BODY, extra={"authorization": f"Bearer {A}"})
+        read.assert_not_called()  # no other login's token was read
+        self.assertEqual((status, data, headers["retry-after"]), (429, LIMIT, "60"))
+        self.assertEqual([bearer(r) for r in rig.upstream.requests], [A])
+
+
+    def test_only_the_anthropic_api_over_https_is_allowed(self):
+        from types import SimpleNamespace as P
+        self.assertTrue(accounts.allowed(P(secure=True, host="api.anthropic.com", port=443)))
+        for bad in (P(secure=False, host="api.anthropic.com", port=443), P(secure=True, host="api.anthropic.com.evil.test", port=443),
+                    P(secure=True, host="gateway.example.com", port=443), P(secure=True, host="api.anthropic.com", port=8443)):
+            self.assertFalse(accounts.allowed(bad))
+
+
 class FallbackTest(unittest.TestCase):
     def setUp(self):
         accounts.reset()
@@ -113,6 +136,9 @@ class FallbackTest(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
         self.personal, self.work = folder(A), folder(B)
+        self.allowed = mock.patch.object(accounts, "allowed", return_value=True)  # the fake upstream stands in for api.anthropic.com
+        self.allowed.start()
+        self.addCleanup(self.allowed.stop)
         self.limited = {A}  # which tokens the fake upstream answers with a usage limit
         self.reply = LIMIT
 

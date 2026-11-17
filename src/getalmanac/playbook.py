@@ -56,10 +56,19 @@ def folder(name) -> Path:
     return root() / name
 
 
+FRAME = re.compile(r"<\s*/?\s*system-reminder", re.I)
+
+
+def _framed(value, key):
+    if FRAME.search(value):
+        raise ValueError(f"{key} must not contain a system-reminder tag")
+
+
 def _text(data, key, low, high, required=True) -> str:
     value = data.get(key, "" if not required else None)
     if not isinstance(value, str):
         raise ValueError(f"{key} must be text")
+    _framed(value, key)
     value = value.strip()
     if len(value) > high or (required and len(value) < low):
         raise ValueError(f"{key} must be {low} to {high} characters")
@@ -74,6 +83,7 @@ def _list(data, key, count, size, required=False) -> list:
     for item in value:
         if not isinstance(item, str) or not item.strip() or len(item.strip()) > size:
             raise ValueError(f"every item of {key} must be text of at most {size} characters")
+        _framed(item, key)
         out.append(item.strip())
     return out
 
@@ -207,8 +217,8 @@ def _write(pb):
 def save(data, script=None):
     """Validate and store a playbook. Returns the stored dict.
 
-    status, hash, auto, uses and created are not taken from the caller: no script means nothing to
-    approve, a script is approved only while its text is the one the owner approved, and a saved
+    status, hash, auto, uses and created are not taken from the caller: what the model or the miner
+    saves is a draft until the owner approves it, a script is approved only while its text is the one the owner approved, and a saved
     playbook is never automatic: only `almanac playbook approve --auto` makes it so, so a save also
     drops the owner's automatic entry.
     """
@@ -228,7 +238,7 @@ def save(data, script=None):
     elif not pb["script"] and script_path(name).exists():
         script_path(name).unlink()
     if not pb["script"]:
-        pb["status"] = "approved"
+        pb["status"] = "approved" if pb["source"] == "owner" else "draft"  # what a model or the miner wrote waits for the owner
     elif old and old["status"] == "approved" and old["hash"] and old["hash"] == script_hash(name):
         pb["status"], pb["hash"] = "approved", old["hash"]
     _write(pb)
@@ -239,8 +249,14 @@ def save(data, script=None):
 def approve(name, auto=False):
     """Record the hash of run.py as it is now; `auto` also lets the proxy run it. Returns (hash, text of run.py)."""
     pb = load(name)
-    if pb is None or not pb["script"]:
-        raise ValueError(f"no playbook called {name!r} with a script")
+    if pb is None:
+        raise ValueError(f"no usable playbook called {name!r}")
+    if not pb["script"]:
+        if auto:
+            raise ValueError(f"--auto is refused: {name} has no script")
+        pb["status"] = "approved"
+        _write(pb)
+        return "", ""
     if auto and pb["args"]:
         raise ValueError(f"--auto is refused: {name} takes arguments, and a script that needs inputs cannot run from the words of a request")
     if auto and not any(len(WORD.findall(t)) >= 2 for t in pb["triggers"]):
@@ -359,7 +375,7 @@ def strong(pb, request: str) -> bool:
 
 def find(request: str, project="", limit=5) -> list:
     """Usable playbooks for this request, best first: most trigger words, then most used, then name."""
-    scored = [(score(pb, request), pb) for pb in listing() if pb["project"] in ("", project)]
+    scored = [(score(pb, request), pb) for pb in listing() if pb["project"] in ("", project) and pb["status"] == "approved"]
     scored = [(s, pb) for s, pb in scored if s]
     scored.sort(key=lambda sp: (-sp[0], -sp[1]["uses"], sp[1]["name"]))
     return [pb for _, pb in scored[:limit]]
