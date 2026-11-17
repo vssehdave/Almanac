@@ -482,7 +482,7 @@ class Memory:
 
     # ---- reading -------------------------------------------------------------
 
-    def _near(self, query, project, exclude_lane) -> list:
+    def _near(self, query, project, exclude_lane, lane=None) -> list:
         """[(id, cosine)] of the exchanges nearest to `query` by meaning, nearest first; [] when that search is off."""
         model = semantic.active()
         if not model:
@@ -493,6 +493,8 @@ class Memory:
             sql, args = sql + " and n.project = ?", args + [project]
         if exclude_lane:
             sql, args = sql + " and c.lane != ?", args + [exclude_lane]
+        if lane:
+            sql, args = sql + " and c.lane = ?", args + [lane]
         # shortcut: reads every vector of the project for each search, fine to about 20,000 exchanges; past that, use a vector index
         rows = self.store.run(sql, args)
         if not rows:
@@ -504,7 +506,7 @@ class Memory:
         near = [(r["id"], round(score, 4)) for r, score in zip(rows, scores) if score >= DENSE_MIN]
         return sorted(near, key=lambda p: (-p[1], p[0]))[:DENSE_TOP]
 
-    def _deep(self, words, terms, need, project, exclude_lane, known) -> list:
+    def _deep(self, words, terms, need, project, exclude_lane, known, lane=None) -> list:
         """Exchanges the title-and-text search missed whose transcript (tool output included) holds the query, best first,
         each with the matching line as its snippet."""
         sql = ("select n.id, n.kind, n.title, n.text, n.ts, n.project, n.convo, c.title ctitle, detail_fts.text dtext "
@@ -515,6 +517,8 @@ class Memory:
             sql, args = sql + " and n.project = ?", args + [project]
         if exclude_lane:
             sql, args = sql + " and c.lane != ?", args + [exclude_lane]
+        if lane:
+            sql, args = sql + " and c.lane = ?", args + [lane]
         found = []
         for row in self.store.run(sql + " order by bm25(detail_fts) limit 20", args):
             if row["id"] in known or len(terms & set(tokens(row["dtext"]))) < need:
@@ -524,7 +528,7 @@ class Memory:
             found.append(hit)
         return found
 
-    def search(self, query, project=None, exclude_lane=None, limit=8, kind="leaf") -> list:
+    def search(self, query, project=None, exclude_lane=None, limit=8, kind="leaf", lane=None) -> list:
         """Stored exchanges that match `query`, best first. Needs two of its words (one if it has one).
 
         With a model installed, exchanges near the query by meaning are added, and the two rankings are
@@ -532,7 +536,7 @@ class Memory:
         """
         words = sorted({w for w in re.findall(r"[a-z0-9_]{2,}", query.lower()) if w not in STOP})[:24]
         terms = set(tokens(query))
-        near = self._near(query, project, exclude_lane) if kind == "leaf" else []
+        near = self._near(query, project, exclude_lane, lane) if kind == "leaf" else []
         if (not words or not terms) and not near:
             return []
         sql = ("select n.id, n.kind, n.title, n.text, n.ts, n.vec, n.project, n.convo, c.title ctitle, "
@@ -543,6 +547,8 @@ class Memory:
             sql, args = sql + " and n.project = ?", args + [project]
         if exclude_lane:
             sql, args = sql + " and c.lane != ?", args + [exclude_lane]
+        if lane:
+            sql, args = sql + " and c.lane = ?", args + [lane]
         vector, need, hits = embed.embed(query), min(2, len(terms)), []
         for row in self.store.run(sql + " order by rank limit 60", args) if words and terms else []:
             overlap = len(terms & set(tokens(row["title"] + " " + row["text"])))
@@ -550,10 +556,10 @@ class Memory:
                 continue
             score = -row["rank"] + 4.0 * embed.cosine(vector, embed.unpack(row["vec"])) + 0.5 * overlap
             hits.append(dict(row, score=round(score, 3), snippet=snippet(row["text"], terms)))
-        hits.sort(key=lambda h: (-h["score"], -h["ts"]))
+        hits.sort(key=lambda h: (-h["score"], -h["ts"], h["id"]))
         for hit in hits:
             hit.pop("vec", None)
-        deep = self._deep(words, terms, need, project, exclude_lane, {hit["id"] for hit in hits}) if kind == "leaf" and words and terms else []
+        deep = self._deep(words, terms, need, project, exclude_lane, {hit["id"] for hit in hits}, lane) if kind == "leaf" and words and terms else []
         if not near and not deep:
             return hits[:limit]
         fused = {hit["id"]: 1 / (RRF_K + rank) for rank, hit in enumerate(hits, 1)}
@@ -572,6 +578,13 @@ class Memory:
             hit["score"] = round(fused[hit["id"]], 5)
         hits.sort(key=lambda h: (-h["score"], -h["ts"], h["id"]))
         return hits[:limit]
+
+    def related(self, lane, text, limit=12) -> list:
+        """Exchanges of one conversation that match `text`, best first, ties by id. [] on any error."""
+        try:
+            return self.search(text[:2000], lane=lane, limit=limit)
+        except Exception:
+            return []
 
     def recent(self, project=None, exclude_lane=None, limit=3) -> list:
         sql, args = "select * from convo where turns > 0", []

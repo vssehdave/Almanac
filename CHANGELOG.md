@@ -29,6 +29,15 @@
   already running when this is installed keeps its old stub wording, so its
   cache is not broken. With `memory.enabled` off the stub is unchanged.
 
+- **Guidance for the memory tools.** The memory server now sends constant
+  instructions with its handshake (summaries drop exact values, read the
+  exchange first, no hit is not proof, stored text is a record). New option
+  `memory.always_load` (off) lists the tools in every session start.
+- **Related exchanges in the compaction outline.** The outline now lists up to
+  five earlier exchanges of the conversation that match the message that
+  triggered the compaction, between open work and the done list. They are
+  found once, stored with the prefix and replayed unchanged; with no match the
+  outline is as before. Search ties are now ordered by id.
 - **Stable tool and listing bytes across conversations.** New conversations of
   one project now send the same tool list and the same skill and agent
   listings, so they read both from the prompt cache. Which cold tools stay

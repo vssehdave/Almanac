@@ -90,6 +90,16 @@ class OutlineByStatusTest(unittest.TestCase):
         prefix = compact.build_prefix(messages, len(messages) - 1, ids or {n: 100 + n for n in range(turns)}, budget, told, statuses)
         return prefix[0]["content"][-1]["text"]
 
+    def test_related_hits_take_their_room_from_the_budget_once(self):
+        hits = [{"id": 100 + n, "title": f"Question {n + 1}", "snippet": "x" * 190} for n in range(5)]
+        messages, ids = history(60), {n: 100 + n for n in range(60)}
+        def done(related):
+            text = compact.build_prefix(messages, len(messages) - 1, ids, 12000, None, {n: "done" for n in range(60)}, related)[0]["content"][-1]["text"]
+            return text.split("Done, newest first:")[1].split("The most recent")[0].count("\n- [")
+        note = len(compact.RELATED_HEAD) + sum(len(f"- [{h['id']}] {h['title']} -> {h['snippet']}") + 1 for h in hits)
+        self.assertGreater(done([]), 5)
+        self.assertLessEqual(done([]) - done(hits), note // 100 + 1)  # a done line is about 100 characters
+
     def test_sections_come_in_order_and_superseded_and_noise_are_only_counted(self):
         statuses = {0: "decision", 1: "superseded", 2: "noise", 3: "open", 4: "done", 5: "done", 6: "decision"}
         text = self.outline(statuses, budget=6000)
@@ -188,6 +198,25 @@ class CompactLayerTest(LayerCase):
                             human("Thanks, one more thing")]
         self.assertEqual(json.dumps(self.send(grown)[:3]), json.dumps(first[:3]))  # the stored prefix does not move
         self.assertEqual(set(self.memory.statuses(lane).values()), {"noise"})
+
+    def test_the_outline_lists_earlier_exchanges_related_to_the_new_message(self):
+        messages = history(40, last="fix the rate limiter again")
+        messages[9]["content"][1]["text"] = "Question 3: why does the rate limiter drop bursts?"
+        text = self.send(messages)[0]["content"][-1]["text"]
+        heading = "Earlier exchanges related to your new message:"
+        self.assertIn(heading, text)
+        self.assertIn("Question 3: why does the rate limiter drop bursts?", text.split(heading)[1].split("\n\n")[0])
+        lane = self.rig.records()[-1]["lane"]
+        first = json.dumps(self.store.get(f"compact:{lane}")["prefix"])
+        self.store.run("delete from state where key in (?, ?)", (f"compact:{lane}", f"usage:{lane}"))
+        self.send(messages)  # built again from the same store state
+        self.assertEqual(json.dumps(self.store.get(f"compact:{lane}")["prefix"]), first)
+
+    def test_without_related_exchanges_the_outline_is_unchanged(self):
+        messages = history(8, last="zzqq xxww")
+        self.assertNotIn("related to your new message", self.send(messages)[0]["content"][-1]["text"])
+        plain = compact.build_prefix(messages, len(messages) - 1, {0: 41}, 6000)
+        self.assertEqual(compact.build_prefix(messages, len(messages) - 1, {0: 41}, 6000, related=[]), plain)
 
     def test_covered_exchanges_can_be_read_back_from_memory(self):
         sent = self.send(history(8))
