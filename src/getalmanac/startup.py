@@ -100,9 +100,13 @@ class _ListingLayer:
         """(stub characters, most entries shown in full per message), or None when the layer is off."""
         raise NotImplementedError
 
-    def pinned(self, ctx, catalog) -> set:
-        """Names this layer always shows in full."""
+    def always_full(self, ctx) -> set:
+        """Names the settings always show in full."""
         return set()
+
+    def pinned(self, ctx) -> list:
+        """Names the project keeps using: shown in full, snapshotted once a day."""
+        return []
 
     def shorten(self, description: str, chars: int) -> str:
         return stub(description, chars)
@@ -141,12 +145,14 @@ class _ListingLayer:
         first = rq.human_text(messages[turns[0]]) if turns else ""
 
         def decide():
-            keep = self.pinned(ctx, catalog)
-            keep.update(name for name, _ in index.search(first, limit=max_full))
+            keep = self.always_full(ctx) | set(_daily(ctx, self.KEY, lambda: self.pinned(ctx)))
             return sorted(keep & set(catalog))
 
         full = set(_frozen(ctx, self.KEY, decide))
-        first_full = len(full)  # fixed by the first typed text; the count below also grows with later turns
+        first_full = len(full)  # shown in full inside the listing; the count below also grows with later turns
+        # What the first typed text matches goes next to it, so the listing is the same in every conversation.
+        first_hits = _frozen(ctx, self.KEY + "-first",
+                             lambda: [n for n, _ in index.search(first, limit=max_full) if n not in full])
         lines = [f"- {name}: {desc if name in full else self.shorten(desc, chars)}" for name, desc in entries]
         text = block["text"]
         listing = self.MARK + "\n" + self.NOTE + self.GAP + "\n".join(lines)
@@ -155,10 +161,13 @@ class _ListingLayer:
         block["text"] = text[:start] + listing + text[end:]
         saved = (end - start) - len(listing)
 
-        # Later human turns: show the full description of collapsed entries they match.
+        # Every human turn: show the full description of collapsed entries it matches.
         shown, budget = set(full), EXPAND_LIMIT
-        for at in turns[1:]:
-            hits = [n for n, _ in index.search(rq.human_text(messages[at]), limit=max_full) if n not in shown]
+        for at in turns:
+            if at == turns[0]:
+                hits = [n for n in first_hits if n in catalog and n not in shown]
+            else:
+                hits = [n for n, _ in index.search(rq.human_text(messages[at]), limit=max_full) if n not in shown]
             hits = hits[:budget]
             if not hits:
                 continue
@@ -179,12 +188,12 @@ class SkillsLayer(_ListingLayer):
         cfg = ctx.cfg["skills"]
         return (cfg["stub_chars"], cfg["max_full"]) if cfg["enabled"] else None
 
-    def pinned(self, ctx, catalog) -> set:
-        keep = set(ctx.cfg["skills"]["always_full"])
-        if ctx.store is not None:
-            used = ctx.store.recently_used("skill", _project(ctx))
-            keep.update(name for name, count in used.items() if count >= 2)
-        return keep
+    def always_full(self, ctx) -> set:
+        return set(ctx.cfg["skills"]["always_full"])
+
+    def pinned(self, ctx) -> list:
+        used = ctx.store.recently_used("skill", _project(ctx)) if ctx.store is not None else {}
+        return sorted(name for name, count in used.items() if count >= 2)
 
 
 class AgentsLayer(_ListingLayer):
