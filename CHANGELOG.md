@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Bundled `cli-anything`, edited.** Five skills (`cli-anything`, `list`,
+  `refine`, `test`, `validate`) plus its methodology and guides, to build a
+  command-line tool for a program with no API. Local paths only, no clone,
+  no installs without asking, no generator scripts or MCP guide. Edits are
+  listed in `bundle/SOURCES.md`.
 - **A long turn is searchable while it runs.** A turn with hundreds of tool
   calls used to be stored only when it ended. Now, after every 30,000
   characters of new work in a turn, an open record of the turn so far is stored
