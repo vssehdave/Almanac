@@ -130,10 +130,29 @@ def _exchanges(memory, convo_id) -> list:
     return out
 
 
+def _no_results(text) -> str:
+    """The transcript with each tool result body replaced by one line naming the tool and the size: the regex
+    redaction cannot know every secret a tool printed, and the packet leaves the machine."""
+    out, tool, lines, i = [], "a tool", text.split("\n"), 0
+    while i < len(lines):
+        named = re.match(r"\[tool ([^\]]*)\]", lines[i])
+        tool = named.group(1) if named else tool
+        if lines[i] != "[result]":
+            out.append(lines[i])
+            i += 1
+            continue
+        size, i = 0, i + 1
+        while i < len(lines) and lines[i].startswith("  |"):
+            size += max(0, len(lines[i]) - 4)
+            i += 1
+        out.append(f"[result of {tool}: {size} characters not sent]")
+    return "\n".join(out)
+
+
 def _typed(memory, leaf) -> tuple:
     """(what the person typed in one exchange, its transcript without that). The transcript holds the typed
     message whole; the exchange text only its start."""
-    detail = redact(memory.detail(leaf["id"]))
+    detail = redact(_no_results(memory.detail(leaf["id"])))
     # shortcut: a typed message with a line that itself starts "Assistant: " or "[tool " ends there; store the typed text on its own if that bites
     whole = re.split(r"\n(?:Assistant: |\[tool |\[result\])", detail[6:], maxsplit=1)[0] if detail.startswith("User: ") else ""
     if len(whole) < len(leaf["asked"]):
@@ -154,7 +173,7 @@ def packet(memory, convo_id, cwd, limit_chars=LIMIT, live=None, on_branch=False)
     turns = rq.human_turns(live or [])
     typed = clean(rq.human_text(live[turns[-1]])) if turns else ""
     if typed and (not done or done[-1]["asked"] != typed[:2000]):  # the turn in progress
-        recent = transcript(live[turns[-1]:])
+        recent = redact(_no_results(transcript(live[turns[-1]:])))
         task, done = typed, done + [{"title": _first_line(typed), "asked": typed, "said": "(in progress)"}]
         if recent.startswith("User: " + typed):
             recent = "User: (the task above)" + recent[6 + len(typed):]
@@ -173,7 +192,7 @@ def packet(memory, convo_id, cwd, limit_chars=LIMIT, live=None, on_branch=False)
     repo_text = "## Repository\n\n" + _repo_text(cwd, on_branch)
     room = limit_chars - len(HEADER) - len(task) - len(repo_text) - 300  # 300: the two headings below and their notes
 
-    before = redact(memory.detail(done[-2]["id"])) if len(done) > 1 and "id" in done[-2] else ""
+    before = redact(_no_results(memory.detail(done[-2]["id"]))) if len(done) > 1 and "id" in done[-2] else ""
     if before and len(before) + len(recent) + 2 <= RECENT_CHARS:
         recent = before + "\n\n" + recent
     keep = max(0, min(RECENT_CHARS, room // 2))  # the transcript takes at most half of what is left

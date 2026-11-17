@@ -103,6 +103,20 @@ class PacketTest(CloudCase):
         self.assertNotIn(word, text)
         self.assertIn("[key removed]", text)
 
+    def test_tool_output_is_not_in_the_packet_stored_or_live(self):
+        odd = "XYZ-unknown-secret-123"
+        out = {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "line one " + odd + " line two"}]}
+        messages = [human("Add retry with backoff to the client"), said("Added retry."), human("Now write the docs for it"),
+                    said("Reading it.", tool=("Read", {"file_path": "a.py"})), out, said("Docs are in README.")]
+        self.memory.index("lane-1", "s1", self.key, messages + [human(TASK)], reply("Halfway."))
+        convo = self.memory.recent(project=self.key)[0]["id"]
+        self.assertIn(odd, self.memory.detail(self.memory.leaves("lane-1")[1]))  # it is stored, only the packet leaves it out
+        text = cloud.packet(self.memory, convo, self.alpha)
+        self.assertNotIn(odd, text)
+        self.assertIn("[result of Read:", text)
+        live = cloud.packet(self.memory, convo, self.alpha, live=messages[:2] + [human("Do the next thing"), said("On it.", tool=("Read", {})), out])
+        self.assertNotIn(odd, live)
+
     def test_the_cap_drops_old_outline_lines_and_keeps_the_task(self):
         convo = self.talk(extra=60)
         text = cloud.packet(self.memory, convo, self.alpha, limit_chars=9000)
