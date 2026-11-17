@@ -254,6 +254,25 @@ def render_routing(records) -> str:
     return "\n".join(lines)
 
 
+def prefix_line(records, now=None) -> str:
+    """One line on where new conversations' cache prefixes broke from the project's previous one, last 24 hours."""
+    now = now or time.time()
+    seen = [v for r in records if r.get("ts", 0) > now - 86400
+            for v in [r.get("diverge") or r.get("prefix")] if isinstance(v, dict) and "diverge_at" in v]
+    if not seen:
+        return ""
+    cold = [v for v in seen if (v.get("since_project") or 0) > 3600 or not v.get("same_account")]
+    warm = [v for v in seen if v not in cold]
+    places = {}
+    for v in warm:
+        if v["diverge_at"] != "none":
+            places[v["diverge_at"]] = places.get(v["diverge_at"], 0) + 1
+    top = ", ".join(f"{k} x{n}" for k, n in sorted(places.items(), key=lambda kv: -kv[1])[:3])
+    return (f"Last 24 hours: {len(seen)} new conversation(s) with an earlier one in the project: "
+            f"{sum(places.values())} diverged" + (f" ({top})" if top else "") +
+            f", {len(cold)} cold (over an hour apart or another account), {len(warm) - sum(places.values())} identical.")
+
+
 def render(records) -> str:
     record = startup(records)
     if not record:
@@ -278,5 +297,7 @@ def render(records) -> str:
               f"about {totals['saved_tokens']:,} input tokens kept out."]
     if totals["held"]:
         lines.append(f"{totals['held']} request(s) waited out a network outage, {totals['held_s']:,} seconds in all.")
+    if prefix_line(records):
+        lines.append(prefix_line(records))
     lines.append("Per-part figures are the exact total split by size, so treat them as estimates.")
     return "\n".join(lines) + render_routing(records)

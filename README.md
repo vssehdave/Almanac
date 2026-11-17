@@ -376,6 +376,15 @@ longer than the shortest cache life it asked for) with the cache writes they
 cost, and the cache lives Claude Code asked for. `almanac report --json`
 carries the same under `meter`. The log records `cache` and `idle` per request.
 
+`almanac report` also says, for the last 24 hours, how many new conversations
+started in a project that had an earlier one, where their prompts first differed
+from the previous one's (the tool, system block or message block, top three), and
+how many were simply cold (over an hour apart, or another login). The log records
+this as `prefix` on each conversation's first request: `diverge_at`, `index`,
+`tokens_before`, `tokens_after`, `since_project` and `same_account`. Only hashes
+of the blocks and a 12-character hash of the login are kept, and nothing is changed
+in the request.
+
 `almanac report` and `almanac status` add requests per tier, moves made and
 declined, raises after failures, and tokens per model, read from the replies'
 own `usage`. The request log also records the model that really answered.

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Where the cache prefix breaks.** On the first request of each new main-thread conversation,
+  Almanac now compares the prompt's blocks (tools, system blocks, the first two
+  messages) with the project's previous first request, by hash, and logs the first
+  block that differs as `prefix` (`diverge_at`, `index`, `tokens_before`,
+  `tokens_after`, `since_project`, `same_account`). `almanac report` sums it up for
+  the last 24 hours. Observation only: the request is not changed, and only
+  hashes and a short hash of the login are stored.
+
 - **Security fixes.**
   - A playbook field that contains a `system-reminder` tag is refused, on save
     and on load, so a playbook cannot close the frame it is shown in.
