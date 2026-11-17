@@ -688,6 +688,7 @@ def build(cfg=None) -> Proxy:
     from . import semantic
     from .store import Store
     from .summarize import SummaryLayer
+    from .sysprefix import SysPrefixLayer
 
     cfg = cfg or config.load()
     store = Store(config.home() / "almanac.db")
@@ -697,8 +698,9 @@ def build(cfg=None) -> Proxy:
     # Order matters: the project first, then the history is settled, then the parts inside it.
     # Routing comes after them: it prices the prefix as it will really be sent.
     # The cheatsheet comes after routing: it is chosen by the model the request goes out on.
+    # The system prefix comes last of the rewriters: it moves what they leave, and must see their final text.
     layers = [ProjectLayer(memory), CompactLayer(memory), MemoryLayer(memory), PlaybookLayer(), SkillsLayer(), AgentsLayer(), ToolsLayer(), RoutingLayer(),
-              CheatsheetLayer(), SummaryLayer(memory)]
+              CheatsheetLayer(), SysPrefixLayer(), SummaryLayer(memory)]
     if cfg["cloud"]["auto"] is True:  # off adds nothing: no layer, no thread, no git; a hand-typed "false" is off too
         from .cloud import HandoffLayer
         layers.append(HandoffLayer(memory, cfg))

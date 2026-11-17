@@ -29,6 +29,7 @@ DEFAULTS = {
     },
     "startup": {
         "agent_chars": 60,  # characters of description kept for a listed agent type; 0 leaves the agent listing alone
+        "system_prefix": False,  # move the stable startup sections to the end of the system prompt so a new conversation can read them from cache (sysprefix.py)
     },
     "tools": {
         "enabled": True,
@@ -155,6 +156,7 @@ def load() -> dict:
             for layer in ("skills", "tools", "memory", "compaction"):
                 cfg[layer]["enabled"] = False
             cfg["startup"]["agent_chars"] = 0
+            cfg["startup"]["system_prefix"] = False
             cfg["cheatsheet"]["mode"] = "off"  # "all" means no change to the request at all
             cfg["playbooks"]["enabled"] = False
             cfg["accounts"]["fallback"] = []

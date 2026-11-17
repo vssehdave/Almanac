@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **A stable system prefix** (`startup.system_prefix`, off by default). The MCP
+  instructions, advisor notes, deferred tool names, agent types and skill list
+  move from the session message, which follows the typed text, to one block at
+  the end of the system prompt, with the cache breakpoint. A new conversation
+  can then read them from cache. The cut depends only on the request's bytes.
 - **A usage and cache meter.** Each request in the log now records `cache`
   (how many `cache_control` breakpoints the client sent and the `ttl` of each,
   "5m" when none is given) and `idle` (seconds since the previous request of
