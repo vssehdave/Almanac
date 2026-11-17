@@ -19,6 +19,14 @@ _until = {}  # sha256(token) -> when it may be tried again
 _told = [False]
 
 
+FALLBACK_TO = ("api.anthropic.com", 443)  # the only upstream another login's token may be sent to
+
+
+def allowed(proxy) -> bool:
+    """True when the proxy's upstream is exactly the Anthropic API over HTTPS."""
+    return bool(proxy.secure and (proxy.host, proxy.port) == FALLBACK_TO)
+
+
 def _key(tok: str) -> str:
     return hashlib.sha256(tok.encode()).hexdigest()
 

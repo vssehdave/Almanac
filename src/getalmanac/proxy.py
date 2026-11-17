@@ -400,7 +400,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _account(self, ctx):
         """(Authorization value or None, the token this request goes out with, the folder it came from)."""
         try:
-            if not ctx or not self.server.proxy.cfg["accounts"]["fallback"]:
+            if not ctx or not self.server.proxy.cfg["accounts"]["fallback"] or not accounts.allowed(self.server.proxy):
                 return None, "", None
             mine = (self.headers.get("authorization") or "")[7:].strip()  # after "Bearer "
             if mine and accounts.cooling_until(mine):
@@ -420,7 +420,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = resp.read()  # a 429 is small JSON: read it whole and serve it again if nothing changes
         original = Replay(resp, body)
         try:
-            if not cfg["accounts"]["fallback"] or not accounts.is_limit(429, body, original.getheader):
+            if not cfg["accounts"]["fallback"] or not accounts.allowed(self.server.proxy)                     or not accounts.is_limit(429, body, original.getheader):
                 return original, folder
             accounts.mark(cfg, used, accounts.reset_at(cfg, original.getheader, body))
             alt = accounts.alternative(cfg, used)
