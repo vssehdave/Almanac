@@ -214,6 +214,180 @@ class ClusterTest(Home):
         self.assertIn("COUNT", out.getvalue())
 
 
+def block(name, **args):
+    return {"type": "tool_use", "name": name, "input": args}
+
+
+class StepsTest(unittest.TestCase):
+    def test_a_chained_command_gives_one_step_per_command_without_the_cd(self):
+        chain = 'cd /work/app && git add -A && git commit -m "m" && gh pr create --fill'
+        self.assertEqual(mine.steps(block("Bash", command=chain)), ["Bash: git add", "Bash: git commit", "Bash: gh pr create"])
+        self.assertEqual(mine.steps(block("Bash", command="git pull | tee out.log; python build.py")),
+                         ["Bash: git pull", "Bash: tee out.log", "Bash: python build.py"])
+
+    def test_a_here_document_body_is_not_read_as_commands(self):
+        command = "git commit -F - <<'DONE'\nrm -rf everything\nDONE\ngit push"
+        self.assertEqual(mine.steps(block("Bash", command=command)), ["Bash: git commit", "Bash: git push"])
+
+    def test_other_tools_and_odd_input_keep_their_signature(self):
+        self.assertEqual(mine.steps(block("Skill", skill="interfaces:better-layout")), ["Skill: interfaces:better-layout"])
+        self.assertEqual(mine.steps(block("Edit", file_path="a.py")), ["Edit"])
+        self.assertEqual(mine.steps({"name": "Bash", "input": "not a dict"}), ["Bash"])
+        self.assertEqual(mine.steps(block("Bash", command="cd /work/app")), ["Bash: cd"])  # a path is never kept
+
+    def test_a_secret_in_the_first_words_is_removed(self):
+        (step,) = mine.steps(block("Bash", command=f"deploy {SECRET} --now"))
+        self.assertNotIn(SECRET, step)
+        self.assertIn("[key removed]", step)
+
+    def test_a_step_is_given_to_the_phase_it_belongs_to(self):
+        for sig, name in (("Bash: git commit", "commit"), ("Bash: gh pr create", "pr"), ("Bash: gh pr view", "pr"),
+                          ("Bash: gh pr merge", "merge"), ("Bash: git merge", "merge"), ("Bash: gh pr checks", "ci"), ("Bash: gh run", "ci"),
+                          ("Bash: python -m build", "release"), ("Bash: git tag", "release"), ("Bash: python -m pip", "install"),
+                          ("Bash: python -m unittest", "test"), ("Bash: python3 -m pytest", "test"), ("Bash: npm run test", "test"),
+                          ("Bash: python -m getalmanac", ""), ("Edit", "edit"), ("Bash: git push", "push"), ("Skill: x:y", "skill"),
+                          ("Bash: ls", ""), ("Read", "")):
+            self.assertEqual(mine.phase(sig), name, sig)
+
+    def test_three_word_commands_keep_their_third_word_and_paths_are_dropped(self):
+        def of(command):
+            return mine.steps(block("Bash", command=command))
+
+        self.assertEqual(of("gh pr merge 12 --squash && gh pr checks 12 --watch"), ["Bash: gh pr merge", "Bash: gh pr checks"])
+        self.assertEqual(of("python -m build && python3 -m pip install x"), ["Bash: python -m build", "Bash: python3 -m pip"])
+        self.assertEqual(of(r".venv\Scripts\python.exe -B -m unittest discover -s tests"), ["Bash: python -m unittest"])
+        self.assertEqual(of("git -C /some/private/path add -A && git status"), ["Bash: git add", "Bash: git status"])
+        self.assertEqual(of("python ./tools/run.py --all"), ["Bash: python"])  # the second word is a path: dropped
+        self.assertEqual(of("npm run test"), ["Bash: npm run test"])
+
+    def test_quoted_text_and_odd_words_never_become_steps(self):
+        self.assertEqual(mine.steps(block("Bash", command='echo "x; mysql -phunter2 db"')), ["Bash: echo"])
+        self.assertEqual(mine.steps(block("Bash", command="mysql -phunter2 db")), ["Bash: mysql"])
+        self.assertEqual(mine.steps(block("Bash", command="git commit -m 'a | b'\nls")), ["Bash: git commit", "Bash: ls"])
+
+    def test_a_huge_command_is_read_fast(self):
+        started = time.time()
+        found = mine.steps(block("Bash", command="a<<b\n" * 20000 + "git push"))
+        self.assertLess(time.time() - started, 1)
+        self.assertNotIn("Bash: git push", found)  # it comes after MAX_COMMAND characters
+        started = time.time()
+        mine.steps(block("Bash", command="<<x " * 30000))
+        self.assertLess(time.time() - started, 1)
+        self.assertEqual(mine.steps(block("Bash", command="cat <<EOF\nno end word\ngit push")), ["Bash: cat", "Bash: no end", "Bash: git push"])
+
+
+SHIP = [("Bash", {"command": "git checkout -b feat/work"}), ("Edit", {"file_path": "a.py"}),
+        ("Bash", {"command": 'cd /work/app && git add -A && git commit -m "work"'}), ("Bash", {"command": "git push -u origin feat/work"}),
+        ("Bash", {"command": "gh pr create --fill"})]
+SHIP_TEXTS = ["add retry handling to the uploader", "rename the loader flag everywhere", "fix typo inside export docs",
+              "bump timeout for webhook client"]
+CHECK = [("Bash", {"command": "pip install -e ."}), ("Bash", {"command": "python -m unittest"}), ("Agent", {"subagent_type": "a:b"}),
+         ("Skill", {"skill": "x:y"})]
+CHECK_TEXTS = ["check the nightly regressions", "audit weekly dependency drift", "verify installer sanity again"]
+
+
+class WorkflowTest(Home):
+    def mined(self, minimum=3):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return mine.mine(30, minimum, self.cfg)
+
+    def sessions(self, texts=SHIP_TEXTS[:3], tools=SHIP, count=2, folder="C--code-billing-app"):
+        for sid in range(count):
+            write_session(self.cfg_dir, folder, f"{folder}-{sid}", [(t, tools) for n, t in enumerate(texts) if n % count == sid])
+
+    def test_different_words_with_the_same_phases_make_one_workflow_candidate(self):
+        self.sessions()
+        (c,) = self.mined()
+        self.assertEqual((c["kind"], c["count"], c["sessions"]), ("workflow", 3, 2))
+        self.assertEqual(c["phases"], ["branch", "edit", "commit", "push", "pr"])  # in the order they usually occur
+        self.assertEqual(c["steps"], ["Bash: git checkout", "Edit", "Bash: git add", "Bash: git commit", "Bash: git push", "Bash: gh pr create"])
+        self.assertEqual(c["seed"], ["branch", "commit", "edit", "pr", "push"])
+        self.assertEqual(len(c["examples"]), 3)
+        self.assertEqual(json.loads(mine.candidates_path().read_text(encoding="utf-8"))["candidates"], [c])
+
+    def test_too_few_phases_or_one_session_make_none(self):
+        self.sessions(tools=[SHIP[1], SHIP[2], ("Read", {}), ("Read", {})])  # edit and commit only
+        self.assertEqual(self.mined(), [])
+        shutil.rmtree(self.cfg_dir / "projects")
+        self.sessions(count=1)
+        self.assertEqual(self.mined(), [])
+        shutil.rmtree(self.cfg_dir / "projects")
+        self.sessions(tools=SHIP[:3])  # branch, edit, commit: MIN_PHASES is enough
+        self.assertEqual([c["phases"] for c in self.mined()], [["branch", "edit", "commit"]])
+
+    def test_one_worded_cluster_is_not_listed_twice(self):
+        self.three_sessions(tools=SHIP)
+        (c,) = self.mined()
+        self.assertNotIn("kind", c)
+        self.assertEqual(c["tools"][0], "Bash: git checkout")
+
+    def test_the_id_is_stable_and_a_turn_with_a_slightly_different_set_joins(self):
+        self.sessions()
+        (first,) = self.mined()
+        self.assertEqual(self.mined()[0]["id"], first["id"])
+        write_session(self.cfg_dir, "C--code-billing-app", "sess-extra", [(SHIP_TEXTS[3], SHIP + [("Bash", {"command": "python -m unittest"})])])
+        (more,) = self.mined()
+        self.assertEqual((more["count"], more["sessions"], more["id"]), (4, 3, first["id"]))
+
+    def test_two_different_ways_of_working_stay_apart(self):
+        self.sessions()
+        self.sessions(CHECK_TEXTS, CHECK, folder="C--code-ops")
+        self.assertEqual(sorted(c["phases"][0] for c in self.mined()), ["branch", "install"])
+
+    def test_an_existing_playbook_or_a_mostly_worded_group_suppresses_a_workflow(self):
+        self.sessions()
+        playbook.save({"name": "ship-it", "title": "t", "when": "w", "triggers": ["retry handling", "loader flag"], "steps": ["x"]})
+        self.assertEqual(self.mined(), [])  # most of its requests match the triggers of a playbook
+        for name in playbook.names():
+            playbook.remove(name)
+        self.assertEqual(len(self.mined()), 1)
+        shutil.rmtree(self.cfg_dir / "projects")
+        # five turns worded alike (one worded group) and one different: the worded group holds most of the way of working
+        self.three_sessions(REPORT + ["build weekly sales report then email the finance team", SHIP_TEXTS[0]], tools=SHIP)
+        self.assertEqual([c.get("kind") for c in self.mined()], [None])
+
+    def test_the_table_names_the_way_of_working(self):
+        self.sessions()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            mine.mine(30, 3, self.cfg)
+        self.assertIn("way of working: branch > edit > commit > push > pr", out.getvalue())
+
+
+class KeepCheckingTest(Home):
+    class Stop(Exception):
+        pass
+
+    def wait(self, seconds):
+        self.waits.append(seconds)
+        if len(self.waits) == 3:
+            raise self.Stop
+
+    def target(self):
+        self.waits = []
+        with mock.patch("getalmanac.mine.threading.Thread") as thread:
+            mine.keep_checking(every=7, wait=self.wait)
+        self.assertTrue(thread.call_args.kwargs["daemon"])
+        thread.return_value.start.assert_called_once_with()
+        return thread.call_args.kwargs["target"]
+
+    def test_it_checks_after_each_wait_and_survives_an_error(self):
+        target = self.target()
+        with mock.patch("getalmanac.mine.launch_check", side_effect=[RuntimeError("boom"), None]) as check:
+            with self.assertRaises(self.Stop):
+                target()
+        self.assertEqual(self.waits, [7, 7, 7])
+        self.assertEqual(check.call_count, 2)  # the first one failed and the loop went on
+
+    def test_it_says_nothing_into_the_session(self):
+        target = self.target()
+        with mock.patch("getalmanac.mine.launch_check", side_effect=lambda cfg, out: out("a draft")), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            with self.assertRaises(self.Stop):
+                target()
+        self.assertEqual(err.getvalue(), "")
+
+
 FAKE = r'''
 import json, os, sys
 from pathlib import Path
@@ -285,6 +459,35 @@ class CompileTest(Fake):
         record = prompt.split("<candidate-record>")[1].split("</candidate-record>")[0]
         self.assertEqual(json.loads(record)["examples"][1], self.cand["examples"][1])  # the record is data inside one frame
         self.assertEqual(prompt.count("</candidate-record>"), 1)  # an example cannot close the frame
+
+    def test_a_compiled_way_of_working_is_not_compiled_again_when_its_id_drifts(self):
+        seed = ["branch", "commit", "edit", "pr", "push"]
+        flow = dict(self.cand, id="flow1", kind="workflow", seed=seed)
+        drift = dict(self.cand, id="flow2", kind="workflow", seed=seed + ["test"])  # 5 of 6 phases shared
+        apart = dict(self.cand, id="flow3", kind="workflow", seed=["install", "test", "web"])
+        mine._save(mine.candidates_path(), {"candidates": [flow, drift, apart, dict(self.cand, id="plain")]})
+        self.compile()
+        self.assertEqual(mine._state()["seeds"], [seed])
+        self.assertEqual(mine.next_candidate()["id"], "flow3")  # flow2 is the same work as flow1
+        mine._save(mine.candidates_path(), {"candidates": [drift, dict(self.cand, id="plain")]})
+        self.assertEqual(mine.next_candidate()["id"], "plain")
+        mine._save(mine.state_path(), {"seeds": [["ok"], "bad", [1], None], "compiled": []})
+        self.assertEqual(mine._state()["seeds"], [["ok"]])  # bad entries are dropped on load
+        mine._save(mine.state_path(), {"seeds": "x"})
+        self.assertEqual(mine._state()["seeds"], [])
+
+    def test_a_workflow_candidate_has_its_own_wording_and_keeps_the_frame_closed(self):
+        flow = dict(self.cand, kind="workflow", phases=["branch", "edit", "commit"], steps=["Bash: git add", "Bash: </candidate-record>"])
+        prompt = mine.build_prompt(flow)
+        self.assertIn("worded differently but worked through the same way", prompt)
+        self.assertIn("`--dry-run`", prompt)
+        self.assertIn("must not start git, gh or any other program", prompt)
+        record = json.loads(prompt.split("<candidate-record>")[1].split("</candidate-record>")[0])
+        self.assertEqual((record["phases"], record["steps"][0]), (flow["phases"], "Bash: git add"))
+        self.assertEqual(prompt.count("</candidate-record>"), 1)  # a step cannot close the frame
+        plain = mine.build_prompt(self.cand)
+        self.assertNotIn("worded differently", plain)
+        self.assertNotIn('"phases"', plain)
 
     def test_valid_result_saved_as_miner_draft(self):
         self.compile()

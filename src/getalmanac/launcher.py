@@ -190,6 +190,7 @@ def run(args, cfg) -> int:
         from . import mine
 
         mine.launch_check(cfg)
+        mine.keep_checking()
     except Exception:  # the playbook miner is an extra: it must never stop Claude Code from starting
         pass
     # A base URL the user already set (a company gateway) becomes the upstream.
