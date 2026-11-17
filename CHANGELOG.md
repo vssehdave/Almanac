@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **A tighter playbook miner.** The steps of a way of working no longer list
+  read-only shell filters (`head`, `tail`, `cut`, `cat`, `wc`, `sort`,
+  `uniq`, `grep`, `ls`, `tr`, `tee`, `xargs`, `sed -n`); the tools still do.
+  Turns join a group only at 75% phase overlap (was 60%) and share at least
+  3 phases with its seed, so one catch-all group no longer swallows the rest.
+  A playbook now records the `phases` it was mined from (an optional list in
+  `playbook.json`; older files load as before), and a way of working that a
+  stored playbook of any source already covers is not mined or compiled
+  again, so the same work no longer gets several drafts.
 - **Short working rules for sub-agents.** A sub-agent thread used to get the
   model's whole cheatsheet, most of it the lead's method (handovers, briefing
   agents, merging, deadlines). It now gets a new `agent.md` (do the one job in

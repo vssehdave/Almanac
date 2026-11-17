@@ -545,14 +545,16 @@ your past sessions and write it up, with no effort from you.
   `&&`, `;` or `|` counts as one step per command. Text in quotes and the
   body of a here-document are ignored, and a step keeps only the program and
   one or two plain words after it (`gh pr merge`, `python -m build`), never a
-  path or an argument. Requests whose sets of phases overlap by 60% or
-  more, with at least 3 phases each, from at least 2 sessions, that no
+  path or an argument. Read-only filters (`head`, `tail`, `cut`, `cat`, `wc`,
+  `sort`, `uniq`, `grep`, `ls`, `tr`, `tee`, `xargs`, `sed -n`) are left out of
+  the steps. Requests whose sets of phases overlap by 75% or
+  more, with at least 3 phases in common, from at least 2 sessions, that no
   playbook's triggers already match, make a candidate marked `way of working`, shown in the table as the phases in the
   order they usually occur (for example `branch > edit > commit > push > pr`).
   Reading, searching and one-off commands have no phase and do not count. A
   group that is mostly one worded group again is not listed twice, and one
-  whose phases mostly match a way of working already compiled is not compiled
-  again. A candidate
+  whose phases mostly match a way of working already compiled, or the `phases`
+  a stored playbook of the miner records, is not compiled again. A candidate
   of this kind is compiled like any other, but the playbook is written for the
   way of working, not for one request.
 - `almanac playbook compile [--top 1] [--dry-run]` takes the best candidate not
