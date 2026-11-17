@@ -74,8 +74,8 @@ def _calls(group) -> list:
                 call = {"name": block.get("name"), "steps": mine.steps(block), "input": args if isinstance(args, dict) else {},
                         "bad": False, "err": ""}
                 calls.append(call)
-                by_id[block.get("id")] = call
-            elif kind == "tool_result" and block.get("tool_use_id") in by_id:
+                by_id[str(block.get("id"))] = call
+            elif kind == "tool_result" and isinstance(block.get("tool_use_id"), str) and block["tool_use_id"] in by_id:
                 call, inner = by_id[block["tool_use_id"]], block.get("content")
                 if isinstance(inner, list):
                     inner = "\n".join(x.get("text") or "" for x in inner if isinstance(x, dict) and x.get("type") == "text")

@@ -78,6 +78,21 @@ class WriterTest(LibraryCase):
         self.assertIn("fix the build", row["prompt"])
 
 
+    def test_malformed_tool_ids_do_not_break_the_writer(self):
+        calls = self.calls()
+        messages = [tm.human("Make the x test pass")]
+        for i, (name, args, text, error) in enumerate(calls, 1):
+            call = use(i, name, **args)
+            call["content"][1]["id"] = ["odd"] if i == 1 else call["content"][1]["id"]
+            messages += [call, out(i, text, error)]
+        messages[2]["content"][0]["tool_use_id"] = ["odd"]
+        logged = []
+        ctx = types.SimpleNamespace(cfg={"memory": {"enabled": True}, "library": {}}, lane="lane-1", session="s", project=self.key,
+                                    agent="", proxy=types.SimpleNamespace(log=types.SimpleNamespace(write=logged.append)))
+        self.layer.observe(ctx, {"messages": messages, "tools": [{"name": "Bash", "input_schema": {}}]}, tm.reply("ok"))
+        self.assertEqual((logged, len(self.rows())), ([], 1))
+
+
 class MergeTest(LibraryCase):
     def test_same_prompt_with_a_new_route_supersedes_and_lists_the_changes(self):
         a = self.alpha
