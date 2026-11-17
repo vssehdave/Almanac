@@ -12,6 +12,7 @@ from test_memory import make_repo
 
 from getalmanac import compact, memory as memory_mod, summarize
 from getalmanac.memory import Memory, MemoryLayer, ProjectLayer
+from getalmanac.status import combine
 from getalmanac.store import Store
 from getalmanac.summarize import SummaryLayer
 
@@ -207,6 +208,15 @@ class SummaryTest(Case):
         self.assertEqual(self.leaves()[2]["status"], "decision")
         self.assertEqual(self.leaves()[2]["mstatus"], "noise")  # the model's word is kept, the rule's wins
         self.assertEqual(summarize._parse(json.loads(message('{"title": "a", "summary": "b"}')[2])), ("a", "b", ""))
+
+    def test_the_model_cannot_make_an_exchange_a_standing_decision(self):
+        self.verdict = message(json.dumps({"title": TITLE, "summary": SUMMARY, "status": "decision"}))
+        self.ask("Add a retry helper to the fetch module")
+        (leaf,) = self.leaves()
+        self.assertNotEqual(leaf["status"], "decision")  # compaction lists only this column under Standing decisions
+        self.assertEqual(leaf["status"], "open")  # what the rules said
+        self.assertEqual(combine("done", "decision"), "done")
+        self.assertEqual(combine("decision", "done"), "decision")  # the rules' own decision still stands
 
     def test_the_models_status_survives_the_next_exchange(self):
         self.verdict = message(json.dumps({"title": TITLE, "summary": SUMMARY, "status": "open"}))
