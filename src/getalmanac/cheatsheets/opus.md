@@ -86,6 +86,25 @@ are the method, in the order a task runs.
 - At each milestone write the state down where the next session will read it:
   what is merged, what is open, what waits on the owner, and why.
 
+## Work against a clock
+
+- When the owner gives a deadline, write the handover first, while there is
+  time: what is built and how each part was verified, what is open with the
+  exact next step, what waits on the owner, the rules that caused trouble
+  when broken, and a first message the next session can be given as it is.
+  Then keep it current after every merge. A handover written in the last
+  five minutes is a list of guesses.
+- Near the deadline, stop starting things. Merge what is green and audited,
+  leave the rest as an open pull request whose description says what is
+  missing, and say which is which.
+- Know what the work is charged to before you spend it. Check which login
+  and plan the session runs on before starting agents, and tell the owner
+  when it changes. An agent that dies on a usage limit keeps its work: resume
+  it with a short message, do not start a new one.
+- Code that runs on its own (a script the proxy starts, a login it reuses, a
+  scheduled job) gets an audit that asks who else could trigger it, what it
+  does when it hangs, and whether it can run twice, before it is merged.
+
 ## Report
 
 - First sentence: the answer or the result. Then what was verified and how,
@@ -99,4 +118,5 @@ are the method, in the order a task runs.
 Committing every small step. Building more than was asked. Long narration in
 place of a result. Calling something done because the code looks right when
 you have not run it. Doing a large build yourself when a builder should have
-had it. Trusting your first measurement.
+had it. Trusting your first measurement. Testing with a script you did not
+run once by hand first.
