@@ -400,8 +400,8 @@ class LongTurnTest(LayerCase):
         self.assertEqual(stubbed(sent), [f"u{i}" for i in range(18) if i not in (3, 4)])  # not the newest 12, the error or the small one
         self.assertEqual(len(sent), len(messages))
         self.assertEqual(json.dumps(results(sent)[18:]), json.dumps(results(messages)[18:]))  # the newest are as sent
-        self.assertEqual(results(sent)[0]["content"], "[Almanac removed this tool result to keep the turn inside the "
-                                                       "context window (3003 characters). Run the tool again if you need it.]")
+        self.assertEqual(results(sent)[0]["content"], compact.STUB_RAW.format(n=3003, id="u0"))
+        self.assertIn('memory_read tool: {"result": "u0"}', results(sent)[0]["content"])
         self.assertEqual(results(sent)[3], results(messages)[3])  # the error stays, with its flag
         self.assertEqual(results(sent)[4], results(messages)[4])
         for before, after in zip(messages, sent):  # roles, ids and tool calls are exactly as sent
