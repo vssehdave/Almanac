@@ -299,7 +299,8 @@ class CompactLayer:
 
             turns = rq.human_turns(out)
             current = _results(out[(turns[-1] + 1 if turns else 0):])
-            limit = share * routing.window(ctx.cfg["routing"], str(body.get("model") or ""))
+            window = routing.window(ctx.cfg["routing"], str(body.get("model") or ""))
+            limit = share * min(window, int(ctx.store.get(f"window:{ctx.lane}") or window))  # a size refusal taught the real one
             # The last reply's count may not be stored yet (it is written in the background): the count made when
             # the stubs were last changed stands in for it, so a second pass is not made for a body already shrunk.
             counts = [c for c in (ctx.store.get(f"usage:{ctx.lane}"), kept.get("est")) if c and 0 < c["messages"] <= len(body["messages"])]

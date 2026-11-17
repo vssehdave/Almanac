@@ -34,6 +34,7 @@ RESPONSE_SKIP = {"connection", "keep-alive", "transfer-encoding"}
 LOOPBACK = {"127.0.0.1", "localhost", "[::1]"}
 ROUTES = {"/v1/messages": "messages", "/v1/messages/count_tokens": "count_tokens"}
 SIZE_ERROR = re.compile(r"prompt is too long|exceed context limit", re.I)  # a size refusal, not a bad rewrite
+SIZE_LIMIT = re.compile(r"prompt is too long: \d+ tokens > (\d+) maximum")  # the window the upstream really gives
 TEE_LIMIT = 16 * 1024 * 1024
 UPSTREAM_TIMEOUT = 900
 CONNECT_TIMEOUT = 20
@@ -497,6 +498,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 detail = resp.read()[:400].decode("utf-8", "replace")
                 routed = ctx.stats.get("route")  # kept: the loop below removes it from the stats
                 ctx.stats["fallback"] = detail
+                limit = SIZE_LIMIT.search(detail)
+                if limit and proxy.store is not None:
+                    # The window table can be wrong for this conversation (the same model id has a 200k and a 1M form).
+                    # Keep the upstream's own number, and let the retry below relieve the turn against it.
+                    try:
+                        proxy.store.put(f"window:{ctx.lane}", int(limit.group(1)))
+                        ctx.stats.setdefault("compaction", {})
+                    except Exception:  # without it the request falls back to the original, as before
+                        pass
                 retry, resent = raw, False
                 # The changes most likely to be refused go first, one at a time, so the other savings stay.
                 for mark in ("route", "compaction"):

@@ -512,6 +512,29 @@ class LongTurnTest(LayerCase):
         self.assertGreaterEqual(len(results(sent)) - len(last), 4)
         self.assertLess(passes, 40)  # a pass frees a good share of the room, so the cache is not broken at every request
 
+    def test_a_size_refusal_teaches_the_real_window_and_the_turn_goes_on(self):
+        self.go(long_turn(30))  # stubs are stored, so the next request is a rewritten one
+        self.rig.cfg["routing"]["windows"]["m"] = 1000000  # the table now overstates this conversation's window
+        real, seen = 15000, []
+
+        def respond(req):
+            tokens = len(req["body"]) // 3
+            seen.append(tokens)
+            if tokens > real:
+                refusal = {"type": "error", "error": {"type": "invalid_request_error",
+                                                      "message": f"prompt is too long: {tokens} tokens > {real} maximum"}}
+                return 400, {"content-type": "application/json"}, json.dumps(refusal).encode()
+            return 200, {"content-type": "text/event-stream"}, sse(usage={"input_tokens": tokens})
+
+        self.rig.upstream.respond = respond
+        sent = self.go(long_turn(34))
+        self.assertEqual([tokens > real for tokens in seen], [True, False])  # refused once, then inside the window
+        self.assertEqual(self.store.get(f"window:{self.lane()}"), real)
+        self.assertGreater(len(stubbed(sent)), 18)
+        self.go(long_turn(36))  # later requests are relieved before the upstream has to refuse
+        self.assertEqual(len(seen), 3)
+        self.assertLessEqual(seen[-1], real)
+
     def test_a_long_sub_agent_gets_the_same_relief(self):
         # Claude Code's own compaction is off for sub-agents as well, and they have no stored prefix to fall back on.
         messages = long_turn(30)
