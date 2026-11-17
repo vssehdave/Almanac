@@ -103,7 +103,7 @@ DEFAULTS = {
         "compile_per_day": 1,  # most Sonnet sessions a day that do the compiling; 0 turns it off
     },
     "cloud": {
-        "auto": False,  # true keeps a running task's snapshot on origin's almanac/handoff branch (see cloud.py)
+        "auto": False,  # true keeps a running task's snapshot on origin's cloud/handoff branch (see cloud.py)
         "heartbeat_minutes": 10,
         "stall_after": 5,  # push at once, marked "stalled", after this many failed upstream attempts in a row; 0 is off
         "repos": [],  # project keys of the repositories that take part; `almanac cloud on` / `off` in one changes it
