@@ -409,7 +409,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = resp.read()  # a 429 is small JSON: read it whole and serve it again if nothing changes
         original = Replay(resp, body)
         try:
-            if not cfg["accounts"]["fallback"] or not accounts.is_limit(429, body):
+            if not cfg["accounts"]["fallback"] or not accounts.is_limit(429, body, original.getheader):
                 return original, folder
             accounts.mark(cfg, used, accounts.reset_at(cfg, original.getheader, body))
             alt = accounts.alternative(cfg, used)
@@ -421,7 +421,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return new, alt[0]
             if new.status == 429:
                 data = new.read()
-                if accounts.is_limit(429, data):
+                if accounts.is_limit(429, data, new.getheader):
                     accounts.mark(cfg, alt[1], accounts.reset_at(cfg, new.getheader, data))
             else:
                 new.read()
@@ -615,7 +615,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 resp, folder = self._switch(ctx, resp, sent, used, folder)
             if ctx and folder:
                 ctx.stats["account"] = {"switched": accounts.name(folder), "reason": "usage limit",
-                                        "until": accounts.back_at(proxy.cfg)}
+                                        "until": accounts.cooling_until((self.headers.get("authorization") or "")[7:].strip())}
         except (OSError, http.client.HTTPException) as exc:
             self._drop()
             if self.hold and self.hold.begun:  # the 200 is out, so no 502 can follow: cut the stream and let the client re-issue

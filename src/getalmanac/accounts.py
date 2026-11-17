@@ -7,6 +7,7 @@ table is keyed by a hash of the token and lives in memory.
 import datetime
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -36,12 +37,19 @@ def token(folder):
     return None
 
 
-def is_limit(status, body: bytes) -> bool:
-    """A 429 that says the plan's usage is spent, not a plain rate limit."""
+def is_limit(status, body: bytes, header=None) -> bool:
+    """A 429 that says the plan's usage is spent, not a plain rate limit.
+
+    `header(name)` reads a reply header: a unified status of `rejected` counts on its own."""
     if status != 429:
         return False
+    try:
+        if str(header("anthropic-ratelimit-unified-status") or "").strip().lower() == "rejected":
+            return True
+    except Exception:
+        pass
     text = bytes(body or b"")[:2000].decode("utf-8", "replace").lower()
-    return "usage_limit" in text or ("hit your" in text and "limit" in text)
+    return "usage_limit" in text or "usage limit" in text or ("hit your" in text and "limit" in text)
 
 
 RESETS = re.compile(r"resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\b(?:[^()]{0,20}\(([^)]{1,40})\))?", re.I)
@@ -80,6 +88,9 @@ def reset_at(cfg, header, body: bytes, now=None) -> float:
     for name_, convert in (("anthropic-ratelimit-unified-reset", float), ("retry-after", lambda v: now + float(v))):
         try:
             at = convert(str(header(name_)).strip())
+            if not math.isfinite(at):
+                at = None
+                continue
             break
         except Exception:
             pass
@@ -112,12 +123,6 @@ def alternative(cfg, current):
         if tok and tok != current and not cooling_until(tok):
             return folder, tok
     return None
-
-
-def back_at(cfg):
-    """When the earliest cooling login of the fallback list is tried again, or None."""
-    times = [cooling_until(t) for t in map(token, cfg["accounts"]["fallback"]) if t]
-    return min((t for t in times if t), default=None)
 
 
 def name(folder) -> str:
@@ -161,7 +166,7 @@ def status_line(cfg, records=()) -> str:
         if isinstance(acc, dict) and acc.get("switched"):
             back = acc.get("until") or rec.get("ts", 0) + float(cfg["accounts"]["cooldown_minutes"]) * 60
             if back > time.time():
-                at = time.strftime("%H:%M", time.localtime(rec["ts"]))
+                at = time.strftime("%H:%M", time.localtime(rec.get("ts", 0)))
                 line += (f"; in use: {acc['switched']} since {at}, the other login is cooling down "
                          f"until {time.strftime('%H:%M', time.localtime(back))}")
             break

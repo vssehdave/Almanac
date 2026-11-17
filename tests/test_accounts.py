@@ -46,6 +46,13 @@ class TokenTest(unittest.TestCase):
         self.assertFalse(accounts.is_limit(429, PLAIN))
         self.assertFalse(accounts.is_limit(500, LIMIT))
 
+    def test_is_limit_real_shapes(self):
+        rejected = {"anthropic-ratelimit-unified-status": "rejected"}.get
+        self.assertTrue(accounts.is_limit(429, b"{}", rejected))  # the header alone is enough
+        self.assertFalse(accounts.is_limit(429, PLAIN, {"anthropic-ratelimit-unified-status": "allowed"}.get))
+        self.assertTrue(accounts.is_limit(429, b'{"error": {"message": "Claude AI usage limit reached"}}'))
+        self.assertTrue(accounts.is_limit(429, b'{"error": {"type": "Usage_Limit_Reached"}}'))
+
 
 CFG = {"accounts": {"fallback": [], "cooldown_minutes": 30}}
 NOW = time.mktime((2026, 3, 10, 12, 0, 0, 0, 0, -1))  # noon local, so "2:30am" is the next morning
@@ -86,6 +93,10 @@ class ResetTest(unittest.TestCase):
 
     def test_cooldown_fallback(self):
         self.assertEqual(at(body=b"You hit your usage limit"), NOW + 1800)
+
+    def test_nan_header_counts_as_missing(self):
+        self.assertEqual(at({"anthropic-ratelimit-unified-reset": "nan", "retry-after": "900"}), NOW + 900)
+        self.assertEqual(at({"anthropic-ratelimit-unified-reset": "inf"}), NOW + 1800)
 
     def test_clamp(self):
         self.assertEqual(at({"retry-after": "5"}), NOW + 60)
@@ -211,6 +222,24 @@ class FallbackTest(unittest.TestCase):
         for tok in (A, B):
             self.assertNotIn(tok, raw)
             self.assertNotIn(tok, json.dumps(records))
+
+    def test_until_is_the_spent_logins_reset(self):
+        rig = self.rig(fallback=[self.work])  # the spent login is not in the list
+        self.send(rig)
+        until = rig.records()[0]["account"]["until"]
+        self.assertAlmostEqual(until, time.time() + 60, delta=10)  # retry-after: 60
+
+    def test_header_only_limit_switches(self):
+        self.reply = b"{}"
+        rig = self.rig()
+        orig = rig.upstream.respond
+        rig.upstream.respond = lambda req: (429, {"anthropic-ratelimit-unified-status": "rejected"}, b"{}")             if bearer(req) == A else orig(req)
+        self.assertEqual(self.send(rig)[0], 200)
+        self.assertEqual([bearer(r) for r in rig.upstream.requests], [A, B])
+
+    def test_status_line_record_without_ts(self):
+        cfg = {"accounts": {"fallback": [self.work], "cooldown_minutes": 30}}
+        accounts.status_line(cfg, [{"account": {"switched": "w", "reason": "x"}}])  # must not raise
 
     def test_status_line(self):
         cfg = {"accounts": {"fallback": [self.work, folder(B, expires_in=5)], "cooldown_minutes": 30}}
