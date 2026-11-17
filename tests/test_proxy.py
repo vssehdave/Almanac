@@ -224,10 +224,10 @@ class LauncherTest(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(folder, "hooks")))
         for root, _dirs, files in os.walk(folder):
             for name in files:
-                self.assertNotIn(os.path.splitext(name)[1], (".py", ".sh", ".js"), name)
+                self.assertNotIn(os.path.splitext(name)[1], (".py", ".sh", ".js", ".ps1", ".bat", ".cmd"), name)
                 with open(os.path.join(root, name), encoding="utf-8") as handle:
                     text = handle.read()
-                for banned in ("npx skills add", "/root/cli-anything", "@apireno/domshell", "git clone"):
+                for banned in ("npx ", "npx skills add", "/root/cli-anything", "@apireno/domshell", "git clone"):
                     self.assertNotIn(banned, text, os.path.join(root, name))
 
     def test_every_crew_agent_has_a_name_a_short_description_and_a_known_model(self):

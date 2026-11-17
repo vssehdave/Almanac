@@ -3,7 +3,7 @@ name: list
 description: "Use to list the installed and generated CLI-Anything command-line tools found in a folder."
 ---
 
-Edited for Almanac from CLI-Anything at 34f5195: relative links point to the shared docs folder.
+Edited for Almanac from CLI-Anything at 34f5195: frontmatter added only.
 
 # cli-anything:list Command
 
