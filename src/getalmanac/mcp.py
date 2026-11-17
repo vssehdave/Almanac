@@ -8,7 +8,7 @@ import sys
 import time
 
 from . import __version__, config, playbook
-from .memory import Memory
+from .memory import _BREAK, QUOTED, READ_CHARS, READ_LINES, Memory, _quote
 from .store import Store
 
 TOOLS = [
@@ -22,10 +22,14 @@ TOOLS = [
          "limit": {"type": "integer", "minimum": 1, "maximum": 20}}}},
     {"name": "memory_read",
      "description": "Read one stored item in full by id: an exchange (the question, the final answer, tools and "
-                    "files), or a topic with the exchanges under it.",
-     "inputSchema": {"type": "object", "required": ["id"], "properties": {
+                    "files), or a topic with the exchanges under it. Or, with `result`, read a tool result whole by "
+                    "its tool call id (a removed or cut result names it), at most 400 lines or 40,000 characters at a time.",
+     "inputSchema": {"type": "object", "properties": {
          "id": {"type": "integer"},
-         "full": {"type": "boolean", "description": "Also return the exchange's transcript: every reply, tool call and result that was kept"}}}},
+         "full": {"type": "boolean", "description": "Also return the exchange's transcript: every reply, tool call and result that was kept"},
+         "result": {"type": "string", "description": "A tool call id: returns that tool result instead of an item"},
+         "start": {"type": "integer", "minimum": 1, "description": "With result: the first line to return (default 1)"},
+         "end": {"type": "integer", "minimum": 1, "description": "With result: the last line to return"}}}},
     {"name": "memory_projects",
      "description": "List the projects Almanac has memory for, and each one's most recent conversations.",
      "inputSchema": {"type": "object", "properties": {}}},
@@ -81,6 +85,28 @@ def render_projects(memory) -> str:
     return "\n".join(lines) or "No conversations are stored yet."
 
 
+def render_result(memory, call_id, start=1, end=None) -> str:
+    """A saved tool result, a page of lines at a time, as a quoted record."""
+    text = memory.raw(call_id)
+    if text is None:
+        return "No stored tool result has that id. Only results Almanac stored are kept, and old ones are dropped."
+    lines = _BREAK.split(text)
+    start = max(1, start)
+    if start > len(lines):
+        return f"That tool result has only {len(lines)} lines."
+    last = min(len(lines), end if end and end >= start else start + READ_LINES - 1, start + READ_LINES - 1)
+    shown, size = [], 0
+    for line in lines[start - 1:last]:
+        if shown and size + len(line) + 1 > READ_CHARS:
+            break
+        shown.append(line[:READ_CHARS])
+        size += len(line) + 1
+    last = start + len(shown) - 1
+    more = f" Lines {last + 1} to {len(lines)} remain: ask again with start={last + 1}." if last < len(lines) else ""
+    return (f"Tool result {call_id}: {len(lines)} lines, {len(text)} characters. Lines {start} to {last}.{more} {QUOTED}\n"
+            "[result]" + _quote("\n" + "\n".join(shown)))
+
+
 def call(memory, name, args, cwd) -> str:
     if name == "memory_search":
         wanted = str(args.get("project") or "")
@@ -95,6 +121,8 @@ def call(memory, name, args, cwd) -> str:
         return render_hits(memory.search(str(args.get("query") or ""), project=project,
                                          limit=max(1, min(20, int(args.get("limit") or 8)))))
     if name == "memory_read":
+        if args.get("result"):
+            return render_result(memory, str(args["result"]), int(args.get("start") or 1), int(args["end"]) if args.get("end") else None)
         node_id = int(args.get("id") or 0)
         text = render_node(memory, memory.read(node_id))
         if args.get("full") and memory.detail(node_id):

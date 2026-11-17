@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Tool output kept whole, and stubs you can undo.** Before a long turn's old
+  tool results are replaced by a stub, and when an exchange is stored, the full
+  result is saved in the local memory (compressed, secrets removed). The stub
+  now says that `memory_read {"result": "<tool call id>"}` returns it, and a
+  result cut short in a transcript says the same. `memory_read` takes `result`
+  with `start` and `end` and returns at most 400 lines or 40,000 characters at a
+  time, as a quoted record. `almanac memory forget` deletes the saved results,
+  and the start-up prune drops the oldest once they pass 100 MB. A turn that is
+  already running when this is installed keeps its old stub wording, so its
+  cache is not broken. With `memory.enabled` off the stub is unchanged.
+
 - **Stable tool and listing bytes across conversations.** New conversations of
   one project now send the same tool list and the same skill and agent
   listings, so they read both from the prompt cache. Which cold tools stay

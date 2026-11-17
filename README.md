@@ -150,7 +150,10 @@ So work on one repository done from another's folder is filed where it belongs.
 When a new conversation starts, the earlier exchanges that match its first
 message are added to that message, along with the titles of the project's most
 recent conversations. Claude Code also gets three read-only tools to look
-further: `memory_search`, `memory_read` and `memory_projects`.
+further: `memory_search`, `memory_read` and `memory_projects`. A tool result
+too long for the transcript is saved whole as well (compressed, secrets
+removed), and `memory_read` with `result` set to its tool call id returns it a
+page at a time: at most 400 lines or 40,000 characters, as a quoted record.
 
 Each exchange is first stored with a title and text written by rule. In the
 background, a small model (`memory.summary_model`, Haiku by default) then
@@ -257,8 +260,11 @@ its answer, and says how long the result was. Tool calls, thinking, and
 everything before your last message are never touched. The stubbed set is stored
 and only grows during the turn, so every later request stubs the same results
 the same way and the cache keeps hitting; if one pass is not enough the next one
-stubs more, down to the newest 4. **A stubbed result cannot be restored:** if
-Claude needs it, it has to run the tool again. The set is cleared when the
+stubs more, down to the newest 4. **A stubbed result can be read back:** it is
+saved whole in the memory first, and the stub names the `memory_read` call that
+returns it (with `memory.enabled` off nothing is saved, and the stub says the
+tool has to be run again). The stub's wording is stored with the set, so a turn
+that was running before an upgrade keeps the old bytes. The set is cleared when the
 prefix is rebuilt, and `window_share` set to 0 turns this off. If the upstream
 refuses a body with stubs, the original goes out and the conversation is left
 alone from then on, as with a refused compaction. Stubs take back the room of the
@@ -1095,7 +1101,7 @@ Everything is under `~/.almanac/` (or `ALMANAC_HOME`):
 
 | File | Holds |
 |---|---|
-| `almanac.db` | The memory tree, exchange transcripts, per-conversation decisions (deleted after 45 days of not being used) |
+| `almanac.db` | The memory tree, exchange transcripts, tool results kept whole (the oldest go past 100 MB), per-conversation decisions (deleted after 45 days of not being used) |
 | `serve.json` | While `almanac serve` runs: its port, its secret and the key that proves it, so `almanac` can find it. Removed when `serve` is stopped with Ctrl+C. A `serve` that is killed leaves it, and the next `serve` overwrites it |
 | `config.json` | Settings you changed |
 | `logs/requests.jsonl` | One line per request: sizes, token counts, timing. No message text, no credentials |
