@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Memory no longer drops an exchange over an odd tool result.** A tool
+  result whose content holds a non-text value made indexing fail; such
+  values are now left out of the stored text.
 - **Prompt library: how each solved prompt was worked.** After an exchange of
   the main conversation ends with at least `library.min_tools` (5) tool calls,
   code writes an entry: the request, the route, files, the fixes (a failed

@@ -162,8 +162,8 @@ def result_text(block) -> str:
     """The text of a tool_result block, cleaned the way everything stored is."""
     inner = block.get("content")
     if isinstance(inner, list):
-        inner = "\n".join(x.get("text") or "" for x in inner if isinstance(x, dict) and x.get("type") == "text")
-    return clean(str(inner or ""))
+        inner = "\n".join(x["text"] for x in inner if isinstance(x, dict) and x.get("type") == "text" and isinstance(x.get("text"), str))
+    return clean(inner if isinstance(inner, str) else "")  # any other content type is left out, not fatal
 
 
 def transcript(group, limit=DETAIL_LIMIT, result_chars=RESULT_CHARS, hint=False, cleaned=None) -> str:
@@ -483,6 +483,8 @@ class Memory:
             touched = {r["parent"] for r in self.store.run(
                 f"select parent from node where id in ({','.join('?' * len(stale))})", stale)} if stale else set()
             self._drop_nodes(stale)  # the conversation was rewound: later exchanges are gone
+            from . import library
+            library.drop_from(self.store, convo["id"], len(turns))
             written, last_project = 0, project
             start_at = max(0, min(convo["turns"], len(turns)) - 1, len(turns) - BACKFILL)
             previous = self.store.run("select project from node where convo = ? and kind = 'leaf' and seq < ? "

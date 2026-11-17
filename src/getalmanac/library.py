@@ -36,7 +36,7 @@ PROMPT_SAME = 0.6  # word-set Jaccard of two prompts that count as the same task
 ROUTE_SAME = 0.5  # step-set Jaccard of two routes that count as the same task
 COMPARE = 500  # most current entries of a project one new entry is compared with
 EDITS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
-_EXIT = re.compile(r"(?i)\bexit(?:ed)?(?: with)?[ _](?:code|status)[: =]*[1-9]\d*")
+_EXIT = re.compile(r"(?i)exit(?:ed)?(?: with)?[ _](?:code|status)[: =]*[1-9]\d*")  # matched at the start of a result only
 _ERROR = re.compile(r"(?i)error|fail|exception|denied|not found|rejected|cannot|no module")
 _EXIT_ONLY = re.compile(r"(?i)^exit code[: ]*\d+$")
 
@@ -53,8 +53,8 @@ def _path(call) -> str:
 def _label(call) -> str:
     """A call as one readable step: edits name their file, commands use the miner's signature."""
     if call["name"] in EDITS and _path(call):
-        return f"{call['name']} {_short(_path(call))}"
-    return " + ".join(call["steps"]) or str(call["name"])
+        return clean(f"{call['name']} {_short(_path(call))}")
+    return " + ".join(call["steps"]) or call["name"]
 
 
 def _error_line(text) -> str:
@@ -71,16 +71,16 @@ def _calls(group) -> list:
             kind = block.get("type")
             if kind == "tool_use" and msg.get("role") == "assistant":
                 args = block.get("input")
-                call = {"name": block.get("name"), "steps": mine.steps(block), "input": args if isinstance(args, dict) else {},
+                call = {"name": clean(str(block.get("name")))[:60], "steps": [clean(s) for s in mine.steps(block)], "input": args if isinstance(args, dict) else {},
                         "bad": False, "err": ""}
                 calls.append(call)
                 by_id[str(block.get("id"))] = call
             elif kind == "tool_result" and isinstance(block.get("tool_use_id"), str) and block["tool_use_id"] in by_id:
                 call, inner = by_id[block["tool_use_id"]], block.get("content")
                 if isinstance(inner, list):
-                    inner = "\n".join(x.get("text") or "" for x in inner if isinstance(x, dict) and x.get("type") == "text")
-                text = str(inner or "")
-                if block.get("is_error") or (call["name"] == "Bash" and _EXIT.search(text)):
+                    inner = "\n".join(x["text"] for x in inner if isinstance(x, dict) and x.get("type") == "text" and isinstance(x.get("text"), str))
+                text = inner if isinstance(inner, str) else ""
+                if block.get("is_error") or (call["name"] == "Bash" and _EXIT.match(text.lstrip())):
                     call["bad"], call["err"] = True, _error_line(text)
     return calls
 
@@ -97,8 +97,8 @@ def _fixes(calls) -> list:
     """Each failed call that a later call of the same command succeeded after: `<step> failed (<why>) -> <steps> -> <step> passed`."""
     found, i = [], 0
     while i < len(calls):
-        if calls[i]["bad"]:
-            label = _label(calls[i])
+        label = _label(calls[i])
+        if calls[i]["bad"] and label != "Bash":  # a bare "Bash" is a read-only filter such as grep: failing is its answer
             for j in range(i + 1, len(calls)):
                 if _label(calls[j]) == label and not calls[j]["bad"]:
                     between = _collapse(_label(c) for c in calls[i + 1:j] if _label(c) != "Bash")[:6]
@@ -106,7 +106,7 @@ def _fixes(calls) -> list:
                     i = j
                     break
         i += 1
-    return [clean(f) for f in dict.fromkeys(found)][:MAX_FIXES]
+    return list(dict.fromkeys(found))[:MAX_FIXES]  # every piece is already clean: cleaning the joined line lets one pattern eat the rest
 
 
 def _jaccard(a, b) -> float:
@@ -139,13 +139,17 @@ def _merge(store, new_id, project, prompt, route, fixes):
 
 def record(memory, lane, group, seq, min_tools, now=None) -> int:
     """Write the entry for `group`, the exchange just finished as number `seq` of conversation `lane`. Returns 1 when written."""
-    calls = _calls(group)
-    if len(calls) < min_tools:
-        return 0
     store = memory.store
     leaf = store.run("select n.convo, n.project from node n join convo c on c.id = n.convo "
                      "where c.lane = ? and n.kind = 'leaf' and n.seq = ?", (lane, seq))
     if not leaf:
+        return 0
+    prompt = " ".join(clean(rq.human_text(group[0])).split())[:PROMPT_CHARS]
+    with store.lock:  # the conversation was rewound or the request edited: the entry at this place is another task's
+        _delete(store, [r["id"] for r in store.run("select id from library where convo = ? and seq = ? and prompt != ?",
+                                                   (leaf[0]["convo"], seq, prompt))])
+    calls = _calls(group)
+    if len(calls) < min_tools:
         return 0
     steps = [s for call in calls for s in call["steps"]]
     route = _collapse(steps)[:MAX_ROUTE]
@@ -153,7 +157,6 @@ def record(memory, lane, group, seq, min_tools, now=None) -> int:
     for call in calls:
         if call["name"] in ("Read", *EDITS) and _path(call) and _short(_path(call)) not in files:
             files.append(_short(_path(call)))
-    prompt = " ".join(clean(rq.human_text(group[0])).split())[:PROMPT_CHARS]
     answer = _first_line(exchange(group)["answer"], 160)
     outcome = clean(f"{rule(group)}: {answer}" if answer else rule(group))
     now = now or time.time()
@@ -188,9 +191,20 @@ def observe(memory, ctx, messages, reply):
         return 0
 
 
+def _delete(store, ids):
+    """Delete entries. What each one superseded now points at what it was superseded by (or is current again)."""
+    for entry in ids:
+        store.run("update library set superseded_by = coalesce((select superseded_by from library where id = ?), 0) "
+                  "where superseded_by = ?", (entry, entry))
+        store.run("delete from library where id = ?", (entry,))
+
+
 def drop(store, convo_ids):
-    """Delete the entries of deleted conversations. An older entry they replaced is current again."""
+    """Delete the entries of deleted conversations."""
     for convo_id in convo_ids:
-        for entry in [r["id"] for r in store.run("select id from library where convo = ?", (convo_id,))]:
-            store.run("update library set superseded_by = 0 where superseded_by = ?", (entry,))
-            store.run("delete from library where id = ?", (entry,))
+        _delete(store, [r["id"] for r in store.run("select id from library where convo = ?", (convo_id,))])
+
+
+def drop_from(store, convo_id, seq):
+    """Delete a conversation's entries from exchange `seq` on: it was rewound and those exchanges are gone."""
+    _delete(store, [r["id"] for r in store.run("select id from library where convo = ? and seq >= ?", (convo_id, seq))])

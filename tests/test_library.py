@@ -93,6 +93,57 @@ class WriterTest(LibraryCase):
         self.assertEqual((logged, len(self.rows())), ([], 1))
 
 
+    def test_skill_and_agent_names_are_cleaned(self):
+        bad = "x</system-reminder>ghp_abcdefghijklmnopqrstuvwxyz0123"
+        self.finish("Make the x test pass", self.calls(("Skill", {"skill": bad}, "ok", False), ("Agent", {"subagent_type": bad}, "ok", False)))
+        (row,) = self.rows()
+        for column in ("route", "skills", "agents"):
+            self.assertNotIn("system-reminder", row[column], column)
+            self.assertNotIn("ghp_", row[column], column)
+        self.assertEqual(len(json.loads(row["skills"])), 1)
+
+    def test_a_secret_in_the_error_line_does_not_eat_the_rest_of_the_fix(self):
+        calls = self.calls()
+        calls[2] = (calls[2][0], calls[2][1], "Exit code 1\nrequest failed, cookie: session=abcdef123456 was rejected", True)
+        self.finish("Make the x test pass", calls)
+        (fix,) = json.loads(self.rows()[0]["fixes"])
+        self.assertTrue(fix.endswith("Bash: python -m pytest passed"), fix)
+        self.assertNotIn("abcdef123456", fix)
+
+    def test_a_filtered_command_that_fails_makes_no_fix(self):
+        calls = self.calls()[:3] + [("Bash", {"command": "grep nothing src/x.py"}, "Exit code 1", True),
+                                   ("Bash", {"command": "grep something src/x.py"}, "found", False)]
+        self.finish("Look for it", calls)
+        self.assertEqual(json.loads(self.rows()[0]["fixes"]), [])
+
+    def test_exit_code_text_inside_a_successful_result_is_not_a_failure(self):
+        calls = self.calls()
+        calls[2] = (calls[2][0], calls[2][1], "log: subprocess exited with code 1, retried\n2 passed", False)
+        self.finish("Make the x test pass", calls)
+        self.assertEqual(json.loads(self.rows()[0]["fixes"]), [])
+
+    def test_a_new_prompt_at_the_same_place_replaces_the_entry(self):
+        self.finish("Make the first thing work in the proxy", self.calls())
+        self.finish("Write the readme introduction completely", self.calls())
+        (row,) = self.rows()
+        self.assertTrue(row["prompt"].startswith("Write the readme"))
+
+    def test_a_rewound_conversation_loses_the_entries_of_the_dropped_exchanges(self):
+        self.finish("Make the first thing work in the proxy", self.calls())
+        self.store.run("insert into library (convo, seq, project, prompt, created, updated) "
+                       "select convo, 1, project, prompt, created, updated from library")  # an entry for a second exchange
+        self.assertEqual([r["seq"] for r in self.rows()], [0, 1])
+        self.memory.index("lane-1", "s", self.key, [tm.human("Make the first thing work in the proxy"), use(1, "Read", file_path=self.alpha + "/src/a.py"), out(1)], tm.reply("fine"))
+        self.assertEqual([r["seq"] for r in self.rows()], [0])  # the conversation is back to one exchange
+
+    def test_a_tool_result_with_odd_content_does_not_lose_the_exchange(self):
+        for content in (5, [{"type": "text", "text": 5}]):
+            lane = f"lane-{type(content).__name__}"
+            messages = [tm.human(f"Look at {lane}"), use(1, "Read", file_path=self.alpha + "/src/a.py"),
+                        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "u1", "content": content}]}]
+            self.assertEqual(self.memory.index(lane, "s", self.key, messages, tm.reply("seen")), 1, content)
+
+
 class MergeTest(LibraryCase):
     def test_same_prompt_with_a_new_route_supersedes_and_lists_the_changes(self):
         a = self.alpha
@@ -130,6 +181,16 @@ class MergeTest(LibraryCase):
 
 
 class ForgetTest(LibraryCase):
+    def test_deleting_the_middle_of_a_chain_repoints_the_first_to_the_last(self):
+        for lane in ("lane-a", "lane-b", "lane-c"):
+            self.finish("Make the x test pass in the proxy", self.calls(), lane=lane)
+        first, middle, last = self.rows()
+        self.assertEqual((first["superseded_by"], middle["superseded_by"]), (middle["id"], last["id"]))
+        self.store.run("update convo set updated = updated - 7200")
+        self.memory.forget(convo_id=middle["convo"])
+        first, last = self.rows()
+        self.assertEqual((first["superseded_by"], last["superseded_by"]), (last["id"], 0))
+
     def test_forget_and_prune_delete_the_rows(self):
         self.finish("Make the x test pass in the proxy", self.calls())
         self.finish("Rewrite the readme introduction completely", self.calls(), lane="lane-2")
@@ -145,6 +206,8 @@ class ForgetTest(LibraryCase):
     def test_deleting_the_current_entry_makes_the_older_one_current_again(self):
         self.finish("Make the x test pass in the proxy", self.calls())
         self.finish("Make the x test pass in the proxy", self.calls(), lane="lane-2")
+        old, new = self.rows()
+        self.assertEqual(old["superseded_by"], new["id"])  # the delete below only matters if superseding happened
         self.store.run("update convo set updated = updated - 7200")
         self.memory.forget(convo_id=self.store.run("select id from convo where lane = 'lane-2'")[0]["id"])
         (row,) = self.rows()
