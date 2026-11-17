@@ -47,7 +47,8 @@ body, in five ways:
     command runs at all.
 - **Never read, store or log credentials.** Auth headers are forwarded as
   received and never written anywhere. A background summary call holds them in
-  memory for the length of the job only.
+  memory for the length of the job only, except that a conversation's summary job
+  keeps it until the conversation has been idle 10 minutes or Almanac exits.
 - **Fail open.** If a transform raises, or the upstream rejects a transformed
   body, the original request goes out unchanged.
 - **Deterministic rewrites.** The same request must always be rewritten to the
