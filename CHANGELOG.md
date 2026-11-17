@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Saved tool output has no size limit.** Results are kept whole however
+  long, and the start-up prune no longer drops the oldest past 100 MB: it all
+  stays on this machine. Conversations still follow `memory.keep_days`.
 - **A long turn is searchable while it runs.** A turn with hundreds of tool
   calls used to be stored only when it ended. Now, after every 30,000
   characters of new work in a turn, an open record of the turn so far is stored

@@ -137,6 +137,15 @@ class PagingTest(StoreCase):
         self.memory.save_raw("lane", "toolu_x", "token ghp_" + "a" * 30)
         self.assertNotIn("ghp_aaaa", reading(self.memory, result="toolu_x"))
 
+    def test_by_default_nothing_is_dropped_or_cut_for_size(self):
+        from getalmanac import memory as mem
+
+        self.assertEqual((mem.RAW_BYTES, mem.RAW_LIMIT), (0, 0))
+        big = "x" * 500000 + "END"
+        self.memory.save_raw("lane", "toolu_big", big)
+        self.memory.prune(0)
+        self.assertEqual(self.memory.raw("toolu_big"), big)
+
     def test_the_size_cap_in_prune_drops_the_oldest_first(self):
         from getalmanac import memory as mem
 

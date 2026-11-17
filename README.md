@@ -1136,7 +1136,7 @@ Everything is under `~/.almanac/` (or `ALMANAC_HOME`):
 
 | File | Holds |
 |---|---|
-| `almanac.db` | The memory tree, exchange transcripts and their search index, tool results kept whole (the oldest go past 100 MB), per-conversation decisions (deleted after 45 days of not being used) |
+| `almanac.db` | The memory tree, exchange transcripts and their search index, tool results kept whole, with no size limit, per-conversation decisions (deleted after 45 days of not being used) |
 | `serve.json` | While `almanac serve` runs: its port, its secret and the key that proves it, so `almanac` can find it. Removed when `serve` is stopped with Ctrl+C. A `serve` that is killed leaves it, and the next `serve` overwrites it |
 | `config.json` | Settings you changed |
 | `logs/requests.jsonl` | One line per request: sizes, token counts, timing. No message text, no credentials |
