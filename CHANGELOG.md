@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Bundled `cli-anything`, edited.** Five skills (`cli-anything`, `list`,
+  `refine`, `test`, `validate`) plus its methodology and guides, to build a
+  command-line tool for a program with no API. Local paths only, no clone,
+  no installs without asking, no generator scripts or MCP guide. Edits are
+  listed in `bundle/SOURCES.md`.
 - **A fork of a conversation sent unchanged is sent unchanged too.** When the
   upstream refused a conversation's rewritten form, its forks were still
   rewritten, so their tool list differed from the parent's.

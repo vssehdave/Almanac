@@ -486,6 +486,7 @@ repository (`src/getalmanac/bundle/`), so there is nothing to install or update.
 | `security-audit` | A multi-phase security audit with validated findings |
 | `crew` | 71 specialist sub-agents (planning, review per language, build fixes, audits); 62 of them are pointed at the skills above |
 | `api-anything` | Calling a website through its own data requests, for scrapers and sites with no API. Runs locally only: nothing goes to its shared catalog |
+| `cli-anything` | Making a program with no API usable by agents through a generated command-line tool, from a local source tree (edited copy) |
 | `bla` | Hardening release artifacts against automated reverse engineering |
 | `almanac` | Almanac's own skill: how to write a [playbook](#playbooks) |
 

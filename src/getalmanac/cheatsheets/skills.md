@@ -29,6 +29,9 @@ apply, and load them before you start. Say in one line which you used.
   `security-audit:security-audit`.
 - Data or an action from a website that has no API, or a scraper: the
   `api-anything:api-anything` skill and its tools.
+- Making a program with no API usable by agents through a generated
+  command-line tool (a local source tree): `cli-anything:cli-anything`, then
+  `cli-anything:test`, `cli-anything:validate` and `cli-anything:refine`.
 - A release that must resist automated reverse engineering:
   `bla:blind-llm-agents`.
 - Two skills change a lot without supervision: `untangle:untangle-codebase`
