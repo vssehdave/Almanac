@@ -5,6 +5,16 @@
 - **A nudge to record a playbook.** When a typed request follows a turn of `playbooks.nudge_after` (default 25, `0` is off) or more tool calls that saved and matched no playbook, the note in the new request says so and points at the `almanac:playbook` skill. It is kept per turn, so the prompt cache holds, and never goes to sub-agents.
 
 - **Which model did which task.** `almanac report` lists the sub-agent threads of the latest conversation with their type, model, requests, tokens and the first 80 characters of their task, and warns when more than four ran at once or an Opus sub-agent was given a build job. The request log now records `agent_type` on sub-agent requests and a redacted `task` (80 characters) on the first one of a thread.
+- **The prefix report skips Claude Code's billing line.** It changes in every
+  conversation, but a real measurement showed the cache still read past it,
+  so naming it as the break hid the real one.
+- **Where the cache prefix breaks.** On the first request of each new main-thread conversation,
+  Almanac now compares the prompt's blocks (tools, system blocks, the first two
+  messages) with the project's previous first request, by hash, and logs the first
+  block that differs as `prefix` (`diverge_at`, `index`, `tokens_before`,
+  `tokens_after`, `since_project`, `same_account`). `almanac report` sums it up for
+  the last 24 hours. Observation only: the request is not changed, and only
+  hashes and a short hash of the login are stored.
 
 - **Security fixes.**
   - A playbook field that contains a `system-reminder` tag is refused, on save

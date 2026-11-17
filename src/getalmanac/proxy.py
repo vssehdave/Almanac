@@ -695,6 +695,7 @@ def build(cfg=None) -> Proxy:
     from .store import Store
     from .summarize import SummaryLayer
     from .sysprefix import SysPrefixLayer
+    from .prefixdiv import PrefixLayer
 
     cfg = cfg or config.load()
     store = Store(config.home() / "almanac.db")
@@ -710,4 +711,5 @@ def build(cfg=None) -> Proxy:
     if cfg["cloud"]["auto"] is True:  # off adds nothing: no layer, no thread, no git; a hand-typed "false" is off too
         from .cloud import HandoffLayer
         layers.append(HandoffLayer(memory, cfg))
+    layers.append(PrefixLayer())  # last: it reads the body as every other layer left it
     return Proxy(cfg, store=store, layers=layers)
