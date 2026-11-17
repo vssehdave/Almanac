@@ -521,6 +521,7 @@ repository (`src/getalmanac/bundle/`), so there is nothing to install or update.
 | `security-audit` | A multi-phase security audit with validated findings |
 | `crew` | 71 specialist sub-agents (planning, review per language, build fixes, audits); 62 of them are pointed at the skills above |
 | `api-anything` | Calling a website through its own data requests, for scrapers and sites with no API. Runs locally only: nothing goes to its shared catalog |
+| `cli-anything` | Making a program with no API usable by agents through a generated command-line tool, from a local source tree (edited copy) |
 | `bla` | Hardening release artifacts against automated reverse engineering |
 | `almanac` | Almanac's own skill: how to write a [playbook](#playbooks) |
 
@@ -1160,7 +1161,7 @@ Everything is under `~/.almanac/` (or `ALMANAC_HOME`):
 
 | File | Holds |
 |---|---|
-| `almanac.db` | The memory tree, exchange transcripts and their search index, tool results kept whole (the oldest go past 100 MB), the prompt library, per-conversation decisions (deleted after 45 days of not being used) |
+| `almanac.db` | The memory tree, exchange transcripts and their search index, tool results kept whole, with no size limit, the prompt library, per-conversation decisions (deleted after 45 days of not being used) |
 | `serve.json` | While `almanac serve` runs: its port, its secret and the key that proves it, so `almanac` can find it. Removed when `serve` is stopped with Ctrl+C. A `serve` that is killed leaves it, and the next `serve` overwrites it |
 | `config.json` | Settings you changed |
 | `logs/requests.jsonl` | One line per request: sizes, token counts, timing. No message text, no credentials |

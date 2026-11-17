@@ -54,8 +54,8 @@ create index if not exists raw_ts on raw (ts);
 TOPIC_BAR = 0.22  # cosine above which an exchange joins an existing topic
 DETAIL_LIMIT = 30000  # most characters of one exchange's full transcript kept for reading back
 RESULT_CHARS = 1500  # a tool result longer than this is cut in the transcript, and kept whole in `raw`
-RAW_LIMIT = 400000  # most characters of one tool result kept whole
-RAW_BYTES = 100 * 1024 * 1024  # prune drops the oldest saved results past this many (compressed) bytes
+RAW_LIMIT = 0  # most characters of one tool result kept whole; 0 keeps it all (the owner wants everything kept locally)
+RAW_BYTES = 0  # prune drops the oldest saved results past this many (compressed) bytes; 0 never drops them
 SEARCH_LIMIT = 200000  # most characters of one exchange the transcript search covers
 SEARCH_RESULT = 20000  # ... and of one tool result in it
 PARTIAL_CHARS = 30000  # a turn still running is stored again after this many new characters
@@ -414,7 +414,7 @@ class Memory:
         """Keep one tool result whole (compressed), so a stub or a cut transcript can be read back.
         `cleaned` says `text` came from result_text, so it need not be cleaned again."""
         text = text if cleaned else clean(text)
-        if len(text) > RAW_LIMIT:
+        if RAW_LIMIT and len(text) > RAW_LIMIT:
             text = text[:RAW_LIMIT] + f"\n... ({len(text) - RAW_LIMIT} more characters not kept)"
         self.store.run("insert or replace into raw (lane, tool_use_id, size, ts, data) values (?, ?, ?, ?, ?)",
                        (lane, tool_use_id, len(text), time.time(), zlib.compress(text.encode("utf-8", "replace"))))
@@ -784,7 +784,9 @@ class Memory:
         self.store.run("delete from raw where lane = ?", (lane,))
 
     def _cap_raw(self):
-        """Drop the oldest saved tool results while they take more than RAW_BYTES."""
+        """Drop the oldest saved tool results while they take more than RAW_BYTES (never when it is 0)."""
+        if not RAW_BYTES:
+            return False
         total = self.store.run("select coalesce(sum(length(data)), 0) n from raw")[0]["n"]
         if total <= RAW_BYTES:
             return False

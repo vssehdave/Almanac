@@ -52,6 +52,13 @@
       "note": "In the bundle (bundle/api-anything), loaded into every session; nothing to install."
     },
     {
+      "name": "cli-anything",
+      "source": "https://github.com/HKUDS/CLI-Anything",
+      "ref": "34f519533bc175d2fe287ab8316b0dd99bb9cc43",
+      "kind": "builtin",
+      "note": "In the bundle (bundle/cli-anything), edited and loaded into every session; nothing to install."
+    },
+    {
       "name": "bla",
       "source": "https://github.com/qybaihe/bla",
       "ref": "883c5bac107f83666410092ebdd1f3e0ed5da53e",
