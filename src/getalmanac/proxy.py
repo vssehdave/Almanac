@@ -27,6 +27,7 @@ from . import accounts, config
 from . import request as rq
 from . import sse
 from . import upstream
+from .memory import redact
 from .report import Log, cache_marks, sections
 
 REQUEST_SKIP = {"host", "connection", "keep-alive", "transfer-encoding", "te", "upgrade",
@@ -203,6 +204,11 @@ class Proxy:
                     self.last_seen[ctx.lane] = started
                 if before is not None:
                     record["idle"] = round(max(0.0, started - before), 1)
+                if ctx.agent:  # which sub-agent this is, and (first request of its thread only) what it was asked, for `almanac report`
+                    record["agent_type"] = ctx.agent_type[:40]
+                    turns = rq.human_turns(orig["messages"])
+                    if before is None and turns:
+                        record["task"] = " ".join(redact(rq.human_text(orig["messages"][turns[0]])).split())[:80]
             except Exception:
                 record.pop("cache", None)
         record.update(ctx.stats)
