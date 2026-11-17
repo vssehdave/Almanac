@@ -308,6 +308,15 @@ class ToolsLayerTest(LayerCase):
         a, b = (json.dumps(self.rig.sent(i)["tools"]) for i in (-2, -1))
         self.assertEqual(a, b)
 
+    def test_a_fork_sends_the_same_tools_as_its_parent(self):  # it shares the parent's cached prefix
+        called = [{"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "PowerShell", "input": {}}]},
+                  {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}]
+        self.rig.messages(body("fix it"))
+        self.rig.messages(body("fix it", extra=called), extra={
+            "x-claude-code-agent-id": "a1", "x-claude-code-agent-type": "fork", "x-claude-code-request-class": "subagent"})
+        parent, fork = (json.dumps(self.rig.sent(i)["tools"]) for i in (-2, -1))
+        self.assertEqual(parent, fork)
+
     def test_hot_setting_wins(self):
         self.rig.cfg["tools"]["hot"] = ["PowerShell"]
         self.rig.messages(body("hi"))

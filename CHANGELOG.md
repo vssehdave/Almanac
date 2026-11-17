@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **A fork sends its parent's tool list.** A fork shares its parent's cached
+  prefix, but made its own deferral decision and could keep a tool loaded that
+  the parent had deferred, so its tools differed and missed the cache. Startup
+  decisions of a fork now come from its parent's conversation. The prefix report
+  also hashes an `x-api-key` login, and its cold limit is one named constant.
+
 - **Stable tool and listing bytes across conversations.** New conversations of
   one project now send the same tool list and the same skill and agent
   listings, so they read both from the prompt cache. Which cold tools stay

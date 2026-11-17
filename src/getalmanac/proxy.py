@@ -88,7 +88,9 @@ class Ctx:
         self.agent = headers.get("x-claude-code-agent-id") or headers.get("x-claude-code-parent-agent-id") or ""
         self.klass = headers.get("x-claude-code-request-class") or ""
         self.agent_type = headers.get("x-claude-code-agent-type") or ""
+        self.parent = headers.get("x-claude-code-parent-agent-id") or ""
         self.lane = self.model = self.cwd = self.project = ""
+        self.frozen_lane = ""  # where startup decisions are kept: a fork reads its parent's, so both send the same bytes
         self.stats = {}
         self.after = None  # the rewritten body, when a layer changed it
         self.orig = None  # the body as Claude Code sent it, for layers that decide from the whole history
@@ -165,6 +167,7 @@ class Proxy:
         try:
             ctx.model = str(orig.get("model") or "")
             ctx.lane = rq.lane_key(ctx.session, ctx.agent, orig["messages"])
+            ctx.frozen_lane = rq.lane_key(ctx.session, ctx.parent, orig["messages"]) if ctx.agent_type.lower() == "fork" else ctx.lane
             ctx.cwd = rq.working_dir(orig)
             ctx.after, ctx.orig = None, orig
             if not self.layers or self.is_fused(ctx.lane):
