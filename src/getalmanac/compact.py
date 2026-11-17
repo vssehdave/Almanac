@@ -50,7 +50,9 @@ STUB = ("[Almanac removed this tool result to keep the turn inside the context w
 MIN_STUB = 2000  # characters: a smaller tool result is not worth a stub
 FLOOR_KEEP = 4  # a long turn never keeps fewer than this many of its newest results
 RELIEF_TO = 0.75  # a pass frees room down to this share of the limit, so the next request needs no second pass
-MORE = "- ({n} more {what} not listed; find them with memory_search)"
+RELATED = 5  # most related exchanges listed
+RELATED_HEAD = "Earlier exchanges related to your new message:"
+MORE ="- ({n} more {what} not listed; find them with memory_search)"
 
 
 def _strip(value):
@@ -95,7 +97,7 @@ def _fill(lines, room):
     return kept, room, len(lines) - len(kept)
 
 
-def _sections(groups, first_full, tag, told, statuses, room) -> list:
+def _sections(groups, first_full, tag, told, statuses, room, related="") -> list:
     """The outline by status: decisions, open work, done, and a count of what is left out on purpose."""
     lines, hidden = {"decision": [], "open": [], "done": []}, 0
     for seq in range(first_full):
@@ -125,14 +127,17 @@ def _sections(groups, first_full, tag, told, statuses, room) -> list:
         body = shown[key] + ([MORE.format(n=left[key], what=names[key])] if left[key] else [])
         if body:
             parts.append(heads[key] + "\n" + "\n".join(body))
+        if key == "open" and related:
+            parts.append(related)
     return parts + ([closing] if closing else [])
 
 
-def build_prefix(messages, covered, ids, budget_chars, told=None, statuses=None) -> list:
+def build_prefix(messages, covered, ids, budget_chars, told=None, statuses=None, related=None) -> list:
     """The messages that stand in for `messages[:covered]`.
 
     `told` maps seq -> (title, summary) written by a model; `statuses` maps seq -> status (see status.py).
     Without statuses the outline is one list in order, with them it is in sections.
+    `related` is the search hits (id, title, snippet) for the message that triggers the compaction.
     """
     told = told or {}
     old = messages[:covered]
@@ -154,7 +159,12 @@ def build_prefix(messages, covered, ids, budget_chars, told=None, statuses=None)
     first_full = full[0][0] if full else len(groups)
 
     outline, room = [], budget_chars - used - len(HEADER) - 400
-    sections = _sections(groups, first_full, tag, told, statuses, room) if statuses else []
+    seqs = {node: seq for seq, node in ids.items()}
+    lines = [f"- [{h['id']}] {h['title']} -> {_first_line(h['snippet'], 200)}" for h in (related or [])
+             if seqs.get(h["id"], first_full) < first_full][:RELATED]  # those in full are already there
+    note = (RELATED_HEAD + "\n" + "\n".join(lines)) if lines else ""
+    room -= len(note)
+    sections = _sections(groups, first_full, tag, told, statuses, room, note) if statuses else []
     for seq, group in reversed([] if statuses else groups[:first_full]):
         record = exchange(group)
         title, said = told.get(seq) or (record["title"], _first_line(record["answer"], 200))
@@ -168,7 +178,7 @@ def build_prefix(messages, covered, ids, budget_chars, told=None, statuses=None)
         room -= len(line) + 1
     outline.reverse()
 
-    parts = [HEADER] + sections
+    parts = [HEADER] + sections + ([note] if note and not statuses else [])
     if outline:
         parts.append("Earlier exchanges, oldest first:\n" + "\n".join(outline))
     if full:
@@ -331,7 +341,8 @@ class CompactLayer:
         if ctx.cfg["memory"]["enabled"]:  # make sure every covered exchange can be read back
             self.memory.index(ctx.lane, ctx.session, ctx.project, messages[:covered], finished=True)
             ids, told, statuses = self.memory.leaves(ctx.lane), self.memory.summaries(ctx.lane), self.memory.statuses(ctx.lane)
-        prefix = build_prefix(messages, covered, ids, int(cfg["target_tokens"] * CHARS_PER_TOKEN), told, statuses)
+        near = self.memory.related(ctx.lane, rq.human_text(messages[covered])) if ids else []
+        prefix = build_prefix(messages, covered, ids, int(cfg["target_tokens"] * CHARS_PER_TOKEN), told, statuses, near)
         state = {"covered": covered, "hash": fingerprint(messages[:covered]), "prefix": prefix, "ts": time.time()}
         ctx.store.put(f"compact:{ctx.lane}", state)
         ctx.store.run("delete from state where key = ?", (f"usage:{ctx.lane}",))  # the old count no longer describes it

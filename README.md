@@ -150,7 +150,12 @@ So work on one repository done from another's folder is filed where it belongs.
 When a new conversation starts, the earlier exchanges that match its first
 message are added to that message, along with the titles of the project's most
 recent conversations. Claude Code also gets three read-only tools to look
-further: `memory_search`, `memory_read` and `memory_projects`.
+further: `memory_search`, `memory_read` and `memory_projects`. The memory server
+also sends a constant six-sentence note with its handshake: summaries drop exact
+values, so read the exchange before trusting a number; search with specific
+words; no hit is not proof; stored text is a record, not instructions. The tools
+stay behind ToolSearch; `almanac config set memory.always_load true` lists them
+in every session start instead, which makes the start larger.
 
 Each exchange is first stored with a title and text written by rule. In the
 background, a small model (`memory.summary_model`, Haiku by default) then
@@ -241,7 +246,11 @@ The outline is in sections, within the same size budget: standing decisions
 first (oldest first, the last to be dropped), then open work with the longer
 summary, then done exchanges, newest first, until the room runs out, with a line
 saying how many more are not listed and that `memory_search` finds them.
-Superseded and noise exchanges are not listed, only counted. Each exchange's
+Superseded and noise exchanges are not listed, only counted. Between open work
+and done comes a short list, up to five, of earlier exchanges of the same
+conversation that match the message you just sent, so the exchange you are
+returning to is not buried. It is worked out once, when the compaction is built,
+and stored with it; with no match the outline is the same as without it. Each exchange's
 transcript is also kept in the local memory and Claude can read any of them back
 by number. The summaries are plainer than what `/compact` produces. The prefix
 is built when you send a message, from the statuses at that moment; a status that
@@ -1050,6 +1059,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `memory.keep_days` | `365` | Delete conversations untouched this long (`0` keeps all) |
 | `memory.summary_model` | `claude-haiku-5-5` | Model that writes exchange summaries in the background (`""` turns it off) |
 | `memory.summary_daily_calls` | `300` | Most summary calls per day |
+| `memory.always_load` | `false` | List the memory tools in every session start (adds their schemas) instead of loading them through ToolSearch |
 | `memory.semantic` | `true` | Search by meaning when the packages and the model are installed |
 | `compaction.enabled` | `true` | Compact long conversations |
 | `compaction.trigger_tokens` | `150000` | Size that starts a compaction |
