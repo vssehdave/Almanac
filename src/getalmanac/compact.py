@@ -114,7 +114,7 @@ def _sections(groups, first_full, tag, told, statuses, room, related="") -> list
     closing = (f"{hidden} earlier exchange{'s' if hidden != 1 else ''} marked superseded or noise "
                "are not listed; they stay readable through the memory tools (memory_search, memory_read).") if hidden else ""
     heads = {"decision": "Standing decisions, oldest first:", "open": "Open work:", "done": "Done, newest first:"}
-    room -= len(closing) + len(related) + sum(len(heads[k]) + 1 for k in lines if lines[k])
+    room -= len(closing) + sum(len(heads[k]) + 1 for k in lines if lines[k])
     # Decisions take the room first and lose their newest first; open work next; what is done fills the rest.
     shown, left = {}, {}
     shown["decision"], room, left["decision"] = _fill(lines["decision"], room)

@@ -90,6 +90,16 @@ class OutlineByStatusTest(unittest.TestCase):
         prefix = compact.build_prefix(messages, len(messages) - 1, ids or {n: 100 + n for n in range(turns)}, budget, told, statuses)
         return prefix[0]["content"][-1]["text"]
 
+    def test_related_hits_take_their_room_from_the_budget_once(self):
+        hits = [{"id": 100 + n, "title": f"Question {n + 1}", "snippet": "x" * 190} for n in range(5)]
+        messages, ids = history(60), {n: 100 + n for n in range(60)}
+        def done(related):
+            text = compact.build_prefix(messages, len(messages) - 1, ids, 12000, None, {n: "done" for n in range(60)}, related)[0]["content"][-1]["text"]
+            return text.split("Done, newest first:")[1].split("The most recent")[0].count("\n- [")
+        note = len(compact.RELATED_HEAD) + sum(len(f"- [{h['id']}] {h['title']} -> {h['snippet']}") + 1 for h in hits)
+        self.assertGreater(done([]), 5)
+        self.assertLessEqual(done([]) - done(hits), note // 100 + 1)  # a done line is about 100 characters
+
     def test_sections_come_in_order_and_superseded_and_noise_are_only_counted(self):
         statuses = {0: "decision", 1: "superseded", 2: "noise", 3: "open", 4: "done", 5: "done", 6: "decision"}
         text = self.outline(statuses, budget=6000)
