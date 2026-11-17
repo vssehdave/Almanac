@@ -758,6 +758,13 @@ watchdog` prints.
 When a takeover happened, `almanac cloud status` names the branch. Pull the
 work back with `claude --teleport` or `git fetch origin <branch>`.
 
+**Status:** tried once for real on 2026-11-17 with a test task and the state
+`stalled`. The scheduled task cloned the repository, read the hand-off, made
+the takeover branch and did the task. Its push was refused: the Claude GitHub
+App had no access to the repository. A public repository is enough to clone
+but not to push, so the app (or `/web-setup`) is needed either way. A takeover
+that ends in a pushed branch and a draft pull request has not been seen yet.
+
 Know this before you turn it on:
 
 - **What is sent where.** To the `origin` remote of each repository you turned
@@ -925,8 +932,9 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `upstream_proxy` | `""` | Corporate `http://` proxy to reach the upstream through. Empty uses `HTTPS_PROXY` |
 | `upstream_ca` | `""` | Extra certificate file to trust for the upstream |
 
-For one run, `ALMANAC_DISABLE=skills,agents,tools,memory,compaction` (or `all`) turns
-layers off, and `ALMANAC_HOME` moves the files.
+For one run, `ALMANAC_DISABLE=skills,agents,tools,memory,compaction` turns those
+layers off (`all` turns off every change to a request, the cheatsheet and
+playbooks included), and `ALMANAC_HOME` moves the files.
 
 ## What is stored, and where
 
