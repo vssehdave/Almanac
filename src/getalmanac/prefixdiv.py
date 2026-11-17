@@ -13,8 +13,6 @@ from .compact import CHARS_PER_TOKEN
 from .report import _spans
 from .routing import RoutingLayer
 
-COLD_SECONDS = 3600
-
 
 def _entry(label, value):
     text = json.dumps(value, sort_keys=True, ensure_ascii=False)
@@ -59,7 +57,8 @@ def compare(old, new):
 
 
 def account(headers) -> str:
-    value = next((v for k, v in (headers or {}).items() if k.lower() == "authorization"), "")
+    sent = {k.lower(): v for k, v in (headers or {}).items()}
+    value = sent.get("authorization") or sent.get("x-api-key") or ""
     return hashlib.sha256(value.encode("utf-8", "replace")).hexdigest()[:12] if value else ""
 
 
