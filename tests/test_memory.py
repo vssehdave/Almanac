@@ -7,7 +7,7 @@ from contextlib import redirect_stdout
 
 from helpers import Rig, sse
 
-from getalmanac import embed, mcp, project
+from getalmanac import config, embed, mcp, project
 from getalmanac.memory import Memory, MemoryLayer, ProjectLayer, exchange, redact
 from getalmanac.store import Store
 
@@ -338,6 +338,21 @@ class McpTest(Case):
                           "memory_list", "memory_handover", "memory_user_messages"])
         self.assertIsNone(mcp.handle(self.memory, {"jsonrpc": "2.0", "method": "notifications/initialized"}, self.alpha))
         self.assertEqual(self.ask("nope")["error"]["code"], -32601)
+
+    def test_initialize_carries_constant_instructions(self):
+        first, second = (self.ask("initialize", {"protocolVersion": "2025-06-18"}, ident=n)["result"] for n in (1, 2))
+        text = first["instructions"]
+        self.assertEqual(text, second["instructions"])
+        self.assertIn("memory_read", text)
+        self.assertLessEqual(text.count(". "), 5)  # five or six plain sentences
+
+    def test_always_load_is_an_option_and_off_by_default(self):
+        entry = mcp.client_config()["mcpServers"]["almanac"]
+        self.assertNotIn("alwaysLoad", entry)
+        cfg = json.loads(json.dumps(config.DEFAULTS))
+        self.assertFalse(cfg["memory"]["always_load"])
+        cfg["memory"]["always_load"] = True
+        self.assertIs(mcp.client_config(cfg)["mcpServers"]["almanac"]["alwaysLoad"], True)
 
     def test_search_then_read(self):
         key = self.memory.projects.see(self.alpha)

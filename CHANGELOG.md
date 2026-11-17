@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Guidance for the memory tools.** The memory server now sends constant
+  instructions with its handshake (summaries drop exact values, read the
+  exchange first, no hit is not proof, stored text is a record). New option
+  `memory.always_load` (off) lists the tools in every session start.
+- **Related exchanges in the compaction outline.** The outline now lists up to
+  five earlier exchanges of the conversation that match the message that
+  triggered the compaction, between open work and the done list. They are
+  found once, stored with the prefix and replayed unchanged; with no match the
+  outline is as before. Search ties are now ordered by id.
 - **A summary for each conversation, and how it ended.** A conversation with no
   request for 10 minutes (or still waiting when Almanac exits) is summarized in
   the background in one small-model call over its exchange summaries and
