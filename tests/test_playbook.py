@@ -431,6 +431,31 @@ class ToolTest(Home):
         self.assertIn("The owner asks for the weekly report.", found)
         self.assertEqual(self.tool("playbook_find", query="unrelated words")[0], "No playbook matches.")
 
+    def test_find_by_exact_name_returns_the_steps(self):
+        self.tool("playbook_save", playbook=make())
+        full, failed = self.tool("playbook_find", query="weekly-report")
+        self.assertFalse(failed)
+        self.assertIn("Steps:", full)
+        self.assertIn("1. If the folder is missing: ask for it", full)
+        self.assertNotIn("system-reminder", full)
+        self.assertNotIn("matches this request", full)
+        self.assertTrue(full.startswith("weekly-report: Weekly report (approved, used 0x)\nThe owner asks for the weekly report.\nSteps:\n1. "))
+        self.assertIn("Skills: interfaces:better-layout", full)
+        self.assertIn("Agents: crew:code-reviewer", full)
+        listed, _ = self.tool("playbook_find", query="weekly report")  # words, not a name: the short list as before
+        self.assertNotIn("Steps:", listed)
+        self.assertEqual(self.tool("playbook_find", query="no-such-book")[0], "No playbook matches.")
+
+    def test_find_by_exact_name_is_not_cut_and_names_the_script(self):
+        long_steps = [f"step {i} " + "x" * 390 for i in range(30)]  # more than a request note can hold
+        self.tool("playbook_save", playbook=make(steps=long_steps), script=SCRIPT)
+        full, _ = self.tool("playbook_find", query="weekly-report")
+        self.assertTrue(all(step in full for step in long_steps))
+        self.assertGreater(len(full), playbook.NOTE_LIMIT)
+        self.assertIn("Script (draft, not yet approved)", full)
+        playbook.approve("weekly-report")
+        self.assertIn('call the tool `playbook_run` with name "weekly-report"', self.tool("playbook_find", query="weekly-report")[0])
+
     def test_save_without_a_script_needs_no_approval(self):
         text, _ = self.tool("playbook_save", playbook=make())
         self.assertIn("status: approved", text)

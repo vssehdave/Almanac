@@ -249,6 +249,21 @@ def find(request: str, project="", limit=5) -> list:
     return [pb for _, pb in scored[:limit]]
 
 
+def _script_line(pb) -> str:
+    if runnable(pb):
+        names_ = ", ".join(f"<{a['name']}>" for a in pb["args"])
+        return f'Script: call the tool `playbook_run` with name "{pb["name"]}" and args [{names_}]\n'
+    return f'Script (draft, not yet approved): run `python "{script_path(pb["name"])}" --help` with Bash\n'
+
+
+def full(pb) -> str:
+    """The whole playbook as plain text, for a tool reply: nothing cut, no reminder tags."""
+    lines = [f'{pb["name"]}: {pb["title"]} ({pb["status"]}, used {pb["uses"]}x)', pb["when"], "Steps:"]
+    lines += [f"{i}. {step}" for i, step in enumerate(pb["steps"], 1)]
+    lines += [f'{label}: {", ".join(pb[key])}' for label, key in (("Skills", "skills"), ("Agents", "agents")) if pb[key]]
+    return "\n".join(lines + ([_script_line(pb).rstrip()] if pb["script"] else []))
+
+
 def note(pb) -> str:
     """The reminder added to the request, at most NOTE_LIMIT characters."""
     uses = pb["uses"]
@@ -259,11 +274,7 @@ def note(pb) -> str:
     if lists:
         extra.append(" ".join(f"{label}: {text[:300]}." for label, text in lists) + "\n")
     if pb["script"]:
-        if runnable(pb):
-            names_ = ", ".join(f"<{a['name']}>" for a in pb["args"])
-            extra.append(f'Script: call the tool `playbook_run` with name "{pb["name"]}" and args [{names_}]\n')
-        else:
-            extra.append(f'Script (draft, not yet approved): run `python "{script_path(pb["name"])}" --help` with Bash\n')
+        extra.append(_script_line(pb))
     tail = ("Follow it unless this request differs. If you change the approach or finish a task that will come up again, "
             "record it with `playbook_save`.\n</system-reminder>")
     fixed = head + "".join(extra) + tail

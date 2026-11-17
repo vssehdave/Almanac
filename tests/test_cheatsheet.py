@@ -1,15 +1,17 @@
 import copy
 import json
 import os
+import shutil
 import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
 from helpers import Rig, sse
 from test_routing import LARGE, MAIN, MEDIUM, SMALL, SetProject, body, convo, sub_headers
 
-from getalmanac import cheatsheet, cli, config, proxy as proxy_mod
+from getalmanac import cheatsheet, cli, config, playbook, proxy as proxy_mod
 from getalmanac.cheatsheet import CheatsheetLayer
 from getalmanac.routing import RoutingLayer
 from getalmanac.store import Store
@@ -162,6 +164,69 @@ class ProxyTest(Fresh):
         with mock.patch.object(proxy_mod, "Proxy", side_effect=lambda cfg, store, layers: layers):
             layers = [type(layer).__name__ for layer in proxy_mod.build(config.load())]
         self.assertEqual(layers.index("CheatsheetLayer"), layers.index("RoutingLayer") + 1)
+
+
+class IndexTest(Fresh):
+    def setUp(self):
+        super().setUp()
+        self.home = tempfile.mkdtemp(prefix="almanac-sheet-")
+        patch = mock.patch.dict(os.environ, {"ALMANAC_HOME": self.home})
+        patch.start()
+        for undo in (patch.stop, cheatsheet.index.cache_clear, lambda: shutil.rmtree(self.home, True)):
+            self.addCleanup(undo)
+        cheatsheet.index.cache_clear()
+
+    def save(self, name="weekly-report", **over):
+        playbook.save({"name": name, "title": "Weekly report", "when": "w", "triggers": ["weekly report"], "steps": ["Run it"], **over})
+
+    def sent(self, inject=True, model=MEDIUM, **kw):
+        work = body(convo([{"text": "hello"}]), model, system=claude_system())
+        there = ctx(**kw)
+        there.cfg["playbooks"]["inject"] = inject
+        CheatsheetLayer().transform(work, there)
+        return work
+
+    def test_nothing_without_playbooks(self):
+        self.assertEqual(cheatsheet.index(), "")
+        self.assertEqual(self.sent()["system"][-1]["text"], "Main prompt.\n\n" + cheatsheet.text_for(MEDIUM))
+
+    def test_the_sheet_ends_with_the_playbooks_on_hand(self):
+        self.save("b-report")
+        self.save("a-report")
+        listing = cheatsheet.index()
+        self.assertIn("# Playbooks on hand", listing)
+        self.assertLess(listing.index("- a-report: Weekly report"), listing.index("- b-report: Weekly report"))
+        self.assertTrue(self.sent()["system"][-1]["text"].endswith(cheatsheet.text_for(MEDIUM) + "\n\n" + listing))
+
+    def test_the_list_is_by_name_only_for_playbooks_that_apply_everywhere_with_one_line_titles(self):
+        self.save("b-report", title="Weekly\nreport   here")
+        self.save("a-report")
+        self.save("c-report", project="some/project")
+        playbook.bump("a-report")  # use counts must not change the order
+        playbook.bump("b-report")
+        playbook.bump("b-report")
+        lines = cheatsheet.index().splitlines()[-2:]
+        self.assertEqual(lines, ["- a-report: Weekly report", "- b-report: Weekly report here"])
+        self.assertNotIn("c-report", cheatsheet.index())
+
+    def test_main_thread_and_forks_get_the_list_other_threads_and_haiku_do_not(self):
+        self.save()
+        plain = cheatsheet.text_for(MEDIUM)
+        self.assertIn("Playbooks on hand", self.sent()["system"][-1]["text"])
+        fork = self.sent(klass="subagent", agent="a1", agent_type="fork")["system"][-1]["text"]
+        self.assertEqual(fork, self.sent()["system"][-1]["text"])  # a fork shares its parent's cached prefix
+        self.assertEqual(self.sent(klass="subagent", agent="a1")["system"][-1]["text"], "Main prompt.\n\n" + plain)
+        self.assertEqual(self.sent(model=SMALL)["system"][-1]["text"], "Main prompt.\n\n" + cheatsheet.text_for(SMALL))
+
+    def test_not_added_when_inject_is_off_or_there_is_no_sheet(self):
+        self.save()
+        self.assertIn("Playbooks on hand", json.dumps(self.sent()))
+        self.assertEqual(self.sent(inject=False)["system"][-1]["text"], "Main prompt.\n\n" + cheatsheet.text_for(MEDIUM))
+        self.assertEqual(self.sent(model="some-model")["system"], claude_system())
+
+    def test_a_broken_playbook_folder_gives_nothing(self):
+        Path(self.home, "playbooks").write_text("a file where the folder should be")
+        self.assertEqual(cheatsheet.index(), "")
 
 
 class CommandTest(Fresh):

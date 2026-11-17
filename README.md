@@ -484,6 +484,24 @@ your past sessions and write it up, with no effort from you.
   no playbook's triggers already match, is a candidate. The top 20 by tokens
   are saved in `~/.almanac/playbooks/_candidates.json` and printed as a table
   with the count, sessions, tokens and a first example.
+  **Ways of working.** Often you do the same job in different words ("ship
+  it", "open the PR", "wrap this up"). So the miner also groups requests by
+  how the work was done, whatever the words. Each tool call falls into a
+  *phase*: branch, edit, test, commit, push, pr, ci, merge, release, sync,
+  install, delegate, skill, web, browser or schedule. A command chained with
+  `&&`, `;` or `|` counts as one step per command. Text in quotes and the
+  body of a here-document are ignored, and a step keeps only the program and
+  one or two plain words after it (`gh pr merge`, `python -m build`), never a
+  path or an argument. Requests whose sets of phases overlap by 60% or
+  more, with at least 3 phases each, from at least 2 sessions, that no
+  playbook's triggers already match, make a candidate marked `way of working`, shown in the table as the phases in the
+  order they usually occur (for example `branch > edit > commit > push > pr`).
+  Reading, searching and one-off commands have no phase and do not count. A
+  group that is mostly one worded group again is not listed twice, and one
+  whose phases mostly match a way of working already compiled is not compiled
+  again. A candidate
+  of this kind is compiled like any other, but the playbook is written for the
+  way of working, not for one request.
 - `almanac playbook compile [--top 1] [--dry-run]` takes the best candidate not
   yet compiled and runs one headless Claude Code session (Sonnet, in a fresh
   temporary folder, allowed only to read and write there and to run Python) to
@@ -501,7 +519,16 @@ your past sessions and write it up, with no effort from you.
   Claude Code login (one by default; `0` turns compiling off). When a draft made
   this way waits for your approval, the next start shows one line with its name.
   A script it wrote runs only after `almanac playbook approve NAME`, like any
-  other.
+  other. While a session stays open, the same check repeats every 6 hours, with
+  no output.
+- **Playbooks on hand.** A way of working cannot be found from the words of a
+  request such as "yes, do it". So when `playbooks.enabled` and
+  `playbooks.inject` are on, the cheatsheet ends with a list of the playbooks
+  you have that apply everywhere: one line each, by name, 12 at most. It goes
+  to the main thread and its forks, not to other sub-agents or to Haiku. Claude is told to call
+  `playbook_find` with a playbook's name, which returns its full steps, and to
+  run one marked `(script)` with `playbook_run`. The list is read once per run,
+  so it does not change the system prompt in the middle of a run.
 
 Settings for this: `playbooks.background` (default `true`),
 `playbooks.compile_per_day` (default `1`) and `playbooks.transcript_dirs`
