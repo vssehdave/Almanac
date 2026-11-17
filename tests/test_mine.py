@@ -392,7 +392,7 @@ FAKE = r'''
 import json, os, sys
 from pathlib import Path
 mode = os.environ.get("FAKE_MODE", "good")
-log = {"argv": sys.argv[1:], "cwd": os.getcwd(), "prompt": Path("PROMPT.md").read_text(encoding="utf-8") if Path("PROMPT.md").exists() else ""}
+log = {"argv": sys.argv[1:], "cwd": os.getcwd(), "home": os.environ.get("ALMANAC_HOME"), "prompt": Path("PROMPT.md").read_text(encoding="utf-8") if Path("PROMPT.md").exists() else ""}
 Path(os.environ["FAKE_LOG"]).open("a").write(json.dumps(log) + "\n")
 if mode == "fail":
     sys.exit(3)
@@ -401,6 +401,9 @@ if mode == "good":
         "when": "The owner asks for the weekly sales report.", "triggers": ["weekly sales report"],
         "steps": ["If the repo is behind: pull", "Run build.py"], "status": "approved", "hash": "x"}))
     Path("run.py").write_text("print('ok')\n")
+elif mode == "badtest":
+    Path("playbook.json").write_text(json.dumps({"name": "weekly-sales-report", "title": "t", "when": "w", "triggers": ["weekly sales"], "steps": ["s"]}))
+    Path("run.py").write_text("import sys; sys.exit(1 if '--self-test' in sys.argv else 0)")
 elif mode == "badjson":
     Path("playbook.json").write_text('{"name": "Bad Name"}')
 elif mode == "taken":
@@ -445,7 +448,9 @@ class CompileTest(Fake):
         argv = call["argv"]
         self.assertEqual(argv[0], "-p")
         self.assertEqual(argv[2:], ["--model", "sonnet", "--permission-mode", "acceptEdits", "--allowedTools", "Read", "Write", "Edit",
-                                    "Bash(python:*)", "--strict-mcp-config"])
+                                    "--strict-mcp-config"])
+        self.assertNotIn("Bash(python:*)", mine.command("claude"))
+        self.assertNotIn("--self-test` if you wrote one", call["prompt"])  # Almanac runs the self-test itself
         self.assertNotEqual(Path(call["cwd"]), Path.cwd())
         self.assertFalse(Path(call["cwd"]).exists())  # the temp folder is gone
         prompt = call["prompt"]
@@ -488,6 +493,19 @@ class CompileTest(Fake):
         plain = mine.build_prompt(self.cand)
         self.assertNotIn("worded differently", plain)
         self.assertNotIn('"phases"', plain)
+
+    def test_the_session_gets_its_own_almanac_home_inside_the_box(self):
+        self.compile()
+        (call,) = self.calls()[:1]
+        self.assertEqual(Path(call["home"]).parent, Path(call["cwd"]))
+        self.assertNotEqual(Path(call["home"]), Path(os.environ["ALMANAC_HOME"]))
+
+    def test_a_failing_self_test_saves_nothing(self):
+        with mock.patch.dict(os.environ, {"FAKE_MODE": "badtest"}):
+            code, out = self.compile()
+        self.assertIn("self-test failed", out)
+        self.assertIsNone(playbook.load("weekly-sales-report"))
+        self.assertFalse(playbook.folder("weekly-sales-report").exists())
 
     def test_valid_result_saved_as_miner_draft(self):
         self.compile()
