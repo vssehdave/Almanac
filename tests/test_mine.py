@@ -223,7 +223,7 @@ class StepsTest(unittest.TestCase):
         chain = 'cd /work/app && git add -A && git commit -m "m" && gh pr create --fill'
         self.assertEqual(mine.steps(block("Bash", command=chain)), ["Bash: git add", "Bash: git commit", "Bash: gh pr create"])
         self.assertEqual(mine.steps(block("Bash", command="git pull | tee out.log; python build.py")),
-                         ["Bash: git pull", "Bash: tee out.log", "Bash: python build.py"])
+                         ["Bash: git pull", "Bash: python build.py"])
 
     def test_a_here_document_body_is_not_read_as_commands(self):
         command = "git commit -F - <<'DONE'\nrm -rf everything\nDONE\ngit push"
@@ -263,7 +263,18 @@ class StepsTest(unittest.TestCase):
     def test_quoted_text_and_odd_words_never_become_steps(self):
         self.assertEqual(mine.steps(block("Bash", command='echo "x; mysql -phunter2 db"')), ["Bash: echo"])
         self.assertEqual(mine.steps(block("Bash", command="mysql -phunter2 db")), ["Bash: mysql"])
-        self.assertEqual(mine.steps(block("Bash", command="git commit -m 'a | b'\nls")), ["Bash: git commit", "Bash: ls"])
+        self.assertEqual(mine.steps(block("Bash", command="git commit -m 'a | b'\nls")), ["Bash: git commit"])
+
+    def test_read_only_filters_are_not_steps_but_stay_in_the_tools(self):
+        def of(command):
+            return mine.steps(block("Bash", command=command))
+
+        self.assertEqual(of("git log | head -5 | wc -l && cat a.txt | sort | uniq | cut -d, -f1 && grep x f | tr a b"), ["Bash: git log"])
+        self.assertEqual(of("ls -la"), [])
+        self.assertEqual(of("find . | xargs ls && sed -n 1,5p f && git status"), ["Bash: find", "Bash: git status"])
+        self.assertEqual(of("sed -i s/a/b/ f.py"), ["Bash: sed -i"])
+        self.assertEqual(mine.phase("Bash: sed -i"), "edit")
+        self.assertEqual(mine._signature(block("Bash", command="head -5 f")), "Bash: head -5")
 
     def test_a_huge_command_is_read_fast(self):
         started = time.time()
@@ -273,7 +284,7 @@ class StepsTest(unittest.TestCase):
         started = time.time()
         mine.steps(block("Bash", command="<<x " * 30000))
         self.assertLess(time.time() - started, 1)
-        self.assertEqual(mine.steps(block("Bash", command="cat <<EOF\nno end word\ngit push")), ["Bash: cat", "Bash: no end", "Bash: git push"])
+        self.assertEqual(mine.steps(block("Bash", command="cat <<EOF\nno end word\ngit push")), ["Bash: no end", "Bash: git push"])  # cat is a filter
 
 
 SHIP = [("Bash", {"command": "git checkout -b feat/work"}), ("Edit", {"file_path": "a.py"}),
@@ -352,6 +363,64 @@ class WorkflowTest(Home):
         with contextlib.redirect_stdout(out):
             mine.mine(30, 3, self.cfg)
         self.assertIn("way of working: branch > edit > commit > push > pr", out.getvalue())
+
+
+TEN = ["Bash: git checkout", "Bash: git pull", "Edit", "Bash: python -m unittest", "Bash: git commit", "Bash: git push",
+       "Bash: gh pr create", "Bash: gh pr checks", "Bash: gh pr merge", "Bash: git tag"]
+
+
+class GroupTest(unittest.TestCase):
+    def turns(self, steps, n):
+        return [{"steps": steps, "text": f"t{len(steps)}-{i}"} for i in range(n)]
+
+    def test_a_short_turn_sharing_three_phases_with_a_long_seed_is_apart(self):
+        four = ["Bash: git checkout", "Edit", "Bash: git commit", "Bash: pip install"]  # branch, edit, commit, install
+        groups = mine.workflows(self.turns(TEN, 3) + self.turns(four, 2))
+        self.assertEqual(sorted(len(g) for _, g in groups), [2, 3])
+        self.assertEqual(sorted(len(seed) for seed, _ in groups), [4, 10])
+
+    def test_near_identical_phase_sets_still_group(self):
+        five = ["Bash: git checkout", "Edit", "Bash: git commit", "Bash: git push", "Bash: gh pr create"]
+        groups = mine.workflows(self.turns(five, 3) + self.turns(five[:4], 1))
+        self.assertEqual([len(g) for _, g in groups], [4])
+
+
+class StoredPhasesTest(Home):
+    mined, sessions = WorkflowTest.mined, WorkflowTest.sessions
+
+    def save(self, name, phases):
+        return playbook.save({"name": name, "title": "t", "when": "w", "triggers": ["zzz qqq"], "steps": ["x"], "phases": phases})
+
+    def test_a_stored_playbook_with_the_same_phases_suppresses_the_candidate(self):
+        self.sessions()
+        self.save("ship-it", ["branch", "edit", "commit", "push", "pr"])
+        self.assertEqual(self.mined(), [])
+        playbook.remove("ship-it")
+        self.save("check-it", ["install", "test", "delegate", "skill"])  # unrelated
+        (c,) = self.mined()
+        self.assertEqual(c["seed"], ["branch", "commit", "edit", "pr", "push"])
+
+    def test_a_saved_candidate_is_skipped_when_a_playbook_now_covers_it(self):
+        self.sessions()
+        self.mined()
+        self.assertIsNotNone(mine.next_candidate())
+        self.save("ship-it", ["branch", "edit", "commit", "push", "pr"])
+        self.assertIsNone(mine.next_candidate())
+
+    def test_phases_are_stored_by_the_compile_and_old_files_still_load(self):
+        self.sessions()
+        (c,) = self.mined()
+        self.assertEqual(playbook.clean({"name": "ab", "title": "t", "when": "w", "triggers": ["x y"], "steps": ["s"]})["phases"], [])
+        with self.assertRaises(ValueError):
+            playbook.clean({"name": "ab", "title": "t", "when": "w", "triggers": ["x y"], "steps": ["s"], "phases": "pr"})
+
+        def run(cmd, cwd, **_):
+            Path(cwd, "playbook.json").write_text(json.dumps({"name": "ship-x", "title": "t", "when": "w", "triggers": ["a b"], "steps": ["s"],
+                                                              "phases": ["bogus"]}), encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0)
+
+        self.assertEqual(mine.compile_candidate(c, "claude", run), ("ship-x", ""))
+        self.assertEqual(playbook.load("ship-x")["phases"], ["branch", "commit", "edit", "pr", "push"])
 
 
 class KeepCheckingTest(Home):
