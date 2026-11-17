@@ -10,7 +10,7 @@ import sys
 import time
 from urllib.parse import urlsplit
 
-from . import __version__, config, launcher, report, summarize, upstream
+from . import __version__, accounts, config, launcher, report, summarize, upstream
 
 USAGE = """almanac: a local proxy for Claude Code
 
@@ -110,6 +110,8 @@ def _status(_rest):
     for layer in ("skills", "tools", "memory", "compaction"):
         print(f"  {layer:<10} {'on' if cfg[layer]['enabled'] else 'off'}")
     print(f"  routing    {cfg['routing']['mode']}")
+    if cfg["accounts"]["fallback"]:
+        print(f"  accounts   {accounts.status_line(cfg, records)}")
     if records:
         last = time.strftime("%Y-%m-%d %H:%M", time.localtime(records[-1].get("ts", 0)))
         totals = report.summary(records)

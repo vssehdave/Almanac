@@ -8,6 +8,7 @@ the original bytes are sent instead.
 import http.client
 import hmac
 import http.server
+import io
 import json
 import os
 import queue
@@ -22,7 +23,7 @@ import threading
 import time
 from urllib.parse import parse_qs, urlsplit
 
-from . import config
+from . import accounts, config
 from . import request as rq
 from . import sse
 from . import upstream
@@ -52,6 +53,25 @@ def _tell(proxy, method, *args):
                 getattr(layer, method)(*args)
             except Exception:
                 pass
+
+
+class Replay:
+    """A reply whose body was read to inspect it, served to the client as if it had not been."""
+
+    def __init__(self, resp, body):
+        self.status, self.reason, self._headers, self._body = resp.status, resp.reason, resp.getheaders(), io.BytesIO(body)
+
+    def getheaders(self):
+        return self._headers
+
+    def getheader(self, name, default=None):
+        return next((v for k, v in self._headers if k.lower() == name.lower()), default)
+
+    def read(self):
+        return self._body.read()
+
+    def read1(self, size):
+        return self._body.read(size)
 
 
 class Ctx:
@@ -336,8 +356,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.flush()
         time.sleep(min(PING_EVERY, hold.until - now))
 
-    def _send(self, body: bytes, identity: bool):
-        """Send this request upstream with its own headers. Returns the response."""
+    def _send(self, body: bytes, identity: bool, authorization=None):
+        """Send this request upstream with its own headers. Returns the response.
+
+        `authorization` replaces the Authorization header and nothing else."""
         proxy = self.server.proxy
         for attempt in (0, 1):
             reused = self._conn is not None
@@ -352,7 +374,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     low = key.lower()
                     if low in REQUEST_SKIP or (identity and low == "accept-encoding"):
                         continue
-                    conn.putheader(key, value)
+                    conn.putheader(key, authorization if authorization and low == "authorization" else value)
                 if identity:  # the reply is read here, so ask for it uncompressed
                     conn.putheader("Accept-Encoding", "identity")
                 if body or self.command in ("POST", "PUT", "PATCH"):
@@ -363,6 +385,50 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._drop()
                 if not reused or attempt:  # only a stale kept-alive connection is retried
                     raise
+
+    def _account(self, ctx):
+        """(Authorization value or None, the token this request goes out with, the folder it came from)."""
+        try:
+            if not ctx or not self.server.proxy.cfg["accounts"]["fallback"]:
+                return None, "", None
+            mine = (self.headers.get("authorization") or "")[7:].strip()  # after "Bearer "
+            if mine and accounts.cooling_until(mine):
+                alt = accounts.alternative(self.server.proxy.cfg, mine)
+                if alt:
+                    return "Bearer " + alt[1], alt[1], alt[0]
+            return None, mine, None
+        except Exception:  # fail open
+            return None, "", None
+
+    def _switch(self, ctx, resp, sent, used, folder):
+        """A 429 came back. If it is a usage limit, send the same body once on another login.
+
+        Returns (the reply for the client, the folder it went out on or None). Any failure, or no
+        working alternative, returns the original 429 unchanged."""
+        cfg = self.server.proxy.cfg
+        body = resp.read()  # a 429 is small JSON: read it whole and serve it again if nothing changes
+        original = Replay(resp, body)
+        try:
+            if not cfg["accounts"]["fallback"] or not accounts.is_limit(429, body):
+                return original, folder
+            accounts.mark(cfg, used, accounts.reset_at(cfg, original.getheader, body))
+            alt = accounts.alternative(cfg, used)
+            if not alt:
+                return original, folder
+            new = self._send(sent, identity=True, authorization="Bearer " + alt[1])
+            if new.status < 400:
+                accounts.announce(cfg, used, alt[0])
+                return new, alt[0]
+            if new.status == 429:
+                data = new.read()
+                if accounts.is_limit(429, data):
+                    accounts.mark(cfg, alt[1], accounts.reset_at(cfg, new.getheader, data))
+            else:
+                new.read()
+            return original, folder
+        except Exception:
+            self._drop()
+            return original, folder
 
     def _pipe(self, resp, tee: bool) -> bytes:
         held = bool(self.hold and self.hold.begun)  # the client already has a 200 from the wait
@@ -493,7 +559,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except Exception:  # a setting that is not a number turns the wait off, never the request
             pass
         try:
-            resp = self._send(sent, identity=ctx is not None)
+            auth, used, folder = self._account(ctx)  # a login known to be out of usage is skipped from the start
+            resp = self._send(sent, identity=ctx is not None, authorization=auth)
             if ctx and sent is not raw and (resp.status == 400 or (resp.status in ROUTE_REFUSED and "route" in ctx.stats)):
                 detail = resp.read()[:400].decode("utf-8", "replace")
                 routed = ctx.stats.get("route")  # kept: the loop below removes it from the stats
@@ -527,7 +594,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         retry, _ = proxy.rewrite(raw, ctx)
                     except Exception:  # fail open on the retry too
                         retry = raw
-                    resp = self._send(retry, identity=True)
+                    resp = self._send(retry, identity=True, authorization=auth)
                     if mark == "route" and resp.status < 400:  # only now is the model known to be the cause
                         _tell(proxy, "blame", ctx, routed)
                     if retry is raw or resp.status not in ROUTE_REFUSED + (400,):
@@ -537,13 +604,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     retry = raw
                 if retry is raw:  # the rewrite was refused: send the original
                     if not resent:
-                        resp = self._send(raw, identity=True)
+                        resp = self._send(raw, identity=True, authorization=auth)
                         if resp.status < 400:
                             proxy.fuse(ctx.lane, detail)
                     ctx.after = None
                 if resp.status in ROUTE_REFUSED + (400,) and routed:  # the original fails too, so the model was not the cause
                     _tell(proxy, "forgive", ctx, routed)
                 sent = retry
+            if ctx and used and resp.status == 429:
+                resp, folder = self._switch(ctx, resp, sent, used, folder)
+            if ctx and folder:
+                ctx.stats["account"] = {"switched": accounts.name(folder), "reason": "usage limit",
+                                        "until": accounts.back_at(proxy.cfg)}
         except (OSError, http.client.HTTPException) as exc:
             self._drop()
             if self.hold and self.hold.begun:  # the 200 is out, so no 502 can follow: cut the stream and let the client re-issue

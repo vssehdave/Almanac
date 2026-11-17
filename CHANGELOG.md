@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **A second login takes over when the first is out of usage.** With
+  `accounts.fallback` set to a list of Claude Code config folders (off by
+  default), a model request that comes back with a usage-limit 429 is sent
+  again once with the next valid login's token, and later requests skip the
+  spent login until its usage comes back (read from the reply's reset
+  header, `retry-after` or "resets 2:30am" wording, else
+  `accounts.cooldown_minutes`). A plain rate limit, an expired alternative
+  or two spent logins return the original reply unchanged.
+  Almanac never refreshes or writes a login. `almanac status` shows the
+  folders and the log records which one was used.
 - **A playbook script can run before Claude sees the request.** The note
   only asked Claude to call `playbook_run`, and Claude could ignore it.
   `almanac playbook approve NAME --auto` now also lets the proxy run the
