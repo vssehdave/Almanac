@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **`ALMANAC_DISABLE=all` now turns everything off.** It left the cheatsheet
+  and playbooks on, so a run meant to be plain Claude Code still had text
+  added to it.
 - **A status on every exchange, and a compaction outline by status.** Each
   stored exchange is tagged `open`, `done`, `decision`, `superseded` or `noise`
   by plain rules (the summary model may refine it, never downgrading a rule-made

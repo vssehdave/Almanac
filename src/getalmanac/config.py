@@ -148,6 +148,8 @@ def load() -> dict:
             for layer in ("skills", "tools", "memory", "compaction"):
                 cfg[layer]["enabled"] = False
             cfg["startup"]["agent_chars"] = 0
+            cfg["cheatsheet"]["mode"] = "off"  # "all" means no change to the request at all
+            cfg["playbooks"]["enabled"] = False
         elif name == "agents":
             cfg["startup"]["agent_chars"] = 0
         elif isinstance(cfg.get(name), dict):

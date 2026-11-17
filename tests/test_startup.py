@@ -215,6 +215,12 @@ class AgentsLayerTest(LayerCase):
         self.assertEqual(cfg["startup"]["agent_chars"], 0)
         self.assertTrue(cfg["skills"]["enabled"])
 
+    def test_disable_all_leaves_no_layer_that_changes_a_request(self):
+        with mock.patch.dict(os.environ, {"ALMANAC_DISABLE": "all"}):
+            cfg = config.load()
+        self.assertEqual([cfg[name]["enabled"] for name in ("skills", "tools", "memory", "compaction", "playbooks")], [False] * 5)
+        self.assertEqual((cfg["startup"]["agent_chars"], cfg["cheatsheet"]["mode"]), (0, "off"))
+
     def test_a_malformed_block_fails_open(self):
         request = body("hello")
         request["messages"][1]["content"][0]["text"] = 5
