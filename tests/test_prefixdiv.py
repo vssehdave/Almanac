@@ -4,7 +4,6 @@ import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
-from unittest import mock
 
 from helpers import SESSION, Rig
 

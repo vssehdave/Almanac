@@ -170,7 +170,7 @@ class Proxy:
             ctx.frozen_lane = rq.lane_key(ctx.session, ctx.parent, orig["messages"]) if ctx.agent_type.lower() == "fork" else ctx.lane
             ctx.cwd = rq.working_dir(orig)
             ctx.after, ctx.orig = None, orig
-            if not self.layers or self.is_fused(ctx.lane):
+            if not self.layers or self.is_fused(ctx.lane) or self.is_fused(ctx.frozen_lane):
                 return raw, orig
             work = json.loads(raw)
         except Exception as exc:  # fail open before any layer runs; nothing is indexed under a half-known lane

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **A fork of a conversation sent unchanged is sent unchanged too.** When the
+  upstream refused a conversation's rewritten form, its forks were still
+  rewritten, so their tool list differed from the parent's.
 - **A fork sends its parent's tool list.** A fork shares its parent's cached
   prefix, but made its own deferral decision and could keep a tool loaded that
   the parent had deferred, so its tools differed and missed the cache. Startup

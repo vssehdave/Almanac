@@ -317,6 +317,17 @@ class ToolsLayerTest(LayerCase):
         parent, fork = (json.dumps(self.rig.sent(i)["tools"]) for i in (-2, -1))
         self.assertEqual(parent, fork)
 
+    def test_a_fork_of_a_raw_parent_is_sent_raw_too(self):  # a parent sent unchanged must not get a rewritten fork
+        called = [{"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {}}]},
+                  {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}]
+        self.rig.messages(body("fix it"))
+        self.rig.proxy.fuse(self.rig.records()[-1]["lane"], "refused")
+        self.rig.messages(body("fix it"))
+        self.rig.messages(body("fix it", extra=called), extra={
+            "x-claude-code-agent-id": "a1", "x-claude-code-agent-type": "fork", "x-claude-code-request-class": "subagent"})
+        parent, fork = (json.dumps(self.rig.sent(i)["tools"]) for i in (-2, -1))
+        self.assertEqual(parent, fork)
+
     def test_hot_setting_wins(self):
         self.rig.cfg["tools"]["hot"] = ["PowerShell"]
         self.rig.messages(body("hi"))
