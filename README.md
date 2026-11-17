@@ -113,8 +113,11 @@ whether or not the conversation will use them.
 - **Tools.** Schemas of rarely used tools (`tools.cold`) are deferred. Their
   names are added to the list of deferred tools Claude Code already keeps, and
   the model loads one through its normal tool search when it needs it. A tool
-  your message names, a tool the conversation already called, or one used in two
-  recent conversations stays loaded.
+  the conversation already called stays loaded, and so does one used in two
+  recent conversations of the project. That second set is read once per project
+  per day, so every new conversation that day sends the same tool list and
+  reads it from the cache. A cold tool your first message names is not kept
+  loaded: it is announced by name and the model loads it through ToolSearch.
 
 Matching is keyword-based (BM25) and runs locally. It does not understand
 synonyms: "make slides" finds a skill that says "slide deck", but a request

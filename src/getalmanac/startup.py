@@ -7,6 +7,7 @@ still be invoked by name, and a deferred tool is loaded by the client's own tool
 search, which the API expands from the request's tool list.
 """
 import re
+import time
 
 from . import request as rq
 from .match import Index
@@ -27,6 +28,17 @@ EXPAND_LIMIT = 20  # most skills ever expanded after the first turn of one conve
 
 def _project(ctx) -> str:
     return getattr(ctx, "project", "") or ctx.cwd
+
+
+def _today() -> str:
+    return time.strftime("%Y-%m-%d")
+
+
+def _daily(ctx, name, compute):
+    """A per-project, per-day snapshot of what drifts with usage, so new conversations of one project agree."""
+    if ctx.store is None:
+        return compute()
+    return ctx.store.frozen(f"{name}-day:{_project(ctx)}:{_today()}", compute)
 
 
 def _frozen(ctx, name, compute):
@@ -211,13 +223,13 @@ class ToolsLayer:
             return
         messages = body.get("messages") or []
         turns = rq.human_turns(messages)
-        first = rq.human_text(messages[turns[0]]) if turns else ""
+
+        def promoted():
+            used = ctx.store.recently_used("tool", _project(ctx)) if ctx.store is not None else {}
+            return sorted(name for name, count in used.items() if count >= cfg["promote_after"])
 
         def decide():
-            keep = set(Index({t["name"]: "" for t in cold}).named(first))  # the message names the tool
-            if ctx.store is not None:
-                used = ctx.store.recently_used("tool", _project(ctx))
-                keep.update(name for name, count in used.items() if count >= cfg["promote_after"])
+            keep = set(_daily(ctx, "tools", promoted))  # a tool the message names is loaded by ToolSearch, not kept here
             for msg in messages:  # a tool this conversation already called must stay loaded
                 for b in rq.blocks(msg):
                     if b.get("type") == "tool_use":

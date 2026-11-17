@@ -269,7 +269,7 @@ class ToolsLayerTest(LayerCase):
         self.rig.messages(body("hi", tools=["Bash", "PowerShell", "ScheduleWakeup"]))
         self.assertEqual(self.deferred(), [])
 
-    def test_a_tool_the_message_names_stays_loaded(self):
+    def test_a_tool_the_message_names_is_still_deferred(self):  # ToolSearch loads it; the tool list must not depend on the text
         self.rig.messages(body("run this in powershell please"))
         self.assertEqual(self.deferred(), ["ScheduleWakeup"])
 
@@ -277,7 +277,7 @@ class ToolsLayerTest(LayerCase):
         called = [{"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "PowerShell", "input": {}}]},
                   {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}]
         self.rig.messages(body("fix it", extra=called))
-        self.assertEqual(self.deferred(), ["ScheduleWakeup"])
+        self.assertEqual(self.deferred(), ["PowerShell", "ScheduleWakeup"])
 
     def test_use_in_two_conversations_promotes_a_tool(self):
         self.rig.upstream.respond = lambda req: (200, {"content-type": "text/event-stream"},
@@ -285,7 +285,8 @@ class ToolsLayerTest(LayerCase):
         self.rig.messages(body("first conversation"))
         self.rig.messages(body("second conversation"))
         self.rig.records()
-        self.rig.messages(body("third conversation"))
+        with mock.patch.object(startup, "_today", return_value="2099-01-01"):  # the project's snapshot is taken per day
+            self.rig.messages(body("third conversation"))
         self.assertEqual(self.deferred(), ["PowerShell"])
 
     def test_hot_setting_wins(self):
@@ -299,6 +300,14 @@ class ToolsLayerTest(LayerCase):
         self.rig.messages(copy.deepcopy(request))
         a, b = (r["body"] for r in self.rig.upstream.requests[-2:])
         self.assertEqual(a, b)
+    def test_new_conversations_of_a_project_get_identical_tools(self):
+        self.rig.messages(body("fix the failing test"), session="s1")
+        self.store.mark_used("tool", "ScheduleWakeup", "/repo/demo", "x1")  # usage changes between them
+        self.store.mark_used("tool", "ScheduleWakeup", "/repo/demo", "x2")
+        self.rig.messages(body("run this in powershell please"), session="s2")
+        a, b = (json.dumps(self.rig.sent(i)["tools"]) for i in (-2, -1))
+        self.assertEqual(a, b)
+
 
 
 if __name__ == "__main__":
