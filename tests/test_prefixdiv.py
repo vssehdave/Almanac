@@ -2,7 +2,9 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
+from unittest import mock
 
 from helpers import SESSION, Rig
 
@@ -133,6 +135,23 @@ class LineTest(unittest.TestCase):
         self.assertIn("2 cold", line)
         self.assertIn("1 identical", line)
         self.assertEqual(report.prefix_line([], now=100000.0), "")
+
+    def test_cold_uses_the_shared_threshold(self):
+        records = [{"ts": 90000.0, "prefix": {"diverge_at": "none", "since_project": 100, "same_account": True}}]
+        self.assertIn("0 cold", report.prefix_line(records, now=100000.0))
+        with mock.patch.object(report, "COLD_SECONDS", 50):
+            self.assertIn("1 cold", report.prefix_line(records, now=100000.0))
+
+
+class AccountTest(unittest.TestCase):
+    def test_api_key_header_is_hashed_when_there_is_no_authorization(self):
+        got = prefixdiv.account({"X-Api-Key": "sk-secret-key"})
+        self.assertEqual(len(got), 12)
+        self.assertNotIn("secret", got)
+        self.assertEqual(got, prefixdiv.account({"x-api-key": "sk-secret-key"}))
+        self.assertNotEqual(got, prefixdiv.account({"x-api-key": "sk-other"}))
+        self.assertEqual(prefixdiv.account({"authorization": "Bearer a", "x-api-key": "b"}), prefixdiv.account({"authorization": "Bearer a"}))
+        self.assertEqual(prefixdiv.account({}), "")
 
 
 class BillingLineTest(unittest.TestCase):
