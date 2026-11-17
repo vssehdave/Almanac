@@ -510,6 +510,7 @@ class PlaybookLayer:
                 text = self._auto(ctx, low, akey)
                 if text is None:
                     text = ctx.store.frozen(key, lambda: self._first(ctx, low, key))
+        nudge = ctx.store.frozen("playbooknudge" + key[len("playbook"):], lambda: self._nudge(ctx, orig, seen, last))
         # Earlier turns got their note when they were new: put it back, byte for byte, so the cached prefix holds.
         # When compaction changed the history the turns no longer line up, and there is nothing to put back.
         if len(mine) == len(seen):
@@ -518,15 +519,35 @@ class PlaybookLayer:
                 old = ctx.store.get(f"{earlier}:m{seen[turn]}")
                 if old is None:
                     old = ctx.store.get(earlier)
+                old = "\n".join(x for x in (old, ctx.store.get("playbooknudge" + earlier[len("playbook"):])) if x)
                 if old:
                     _insert_before_last(messages[mine[turn]], old)
         for turn in range(last):  # a reminder that went into an earlier turn's tool loop stays where it was put
             earlier = self._key(ctx, turn, person_text(orig[seen[turn]]))
             self._place(messages, orig, ctx.store.get("playbookskip" + earlier[len("playbook"):]))
+        text = "\n".join(x for x in (text, nudge) if x)
         if text:
             _insert_before_last(messages[mine[-1]], text)
             ctx.stats.setdefault("playbook", {})["chars"] = len(text)
+            if nudge:
+                ctx.stats["playbook"]["nudge"] = True
             self._place(messages, orig, self._skipped(ctx, orig, seen[last], key))
+
+    def _nudge(self, ctx, orig, seen, last) -> str:
+        """A reminder, frozen with the turn that starts now, to record the previous turn as a playbook: it took
+        `playbooks.nudge_after` tool calls or more, saved none and matched none. "" when there is nothing to say."""
+        limit = (ctx.cfg.get("playbooks") or {}).get("nudge_after", 0)
+        if last < 1 or type(limit) is not int or limit <= 0:
+            return ""
+        prev = seen[last - 1]
+        calls = [b.get("name") or "" for m in orig[prev + 1:seen[last]] if isinstance(m, dict) and m.get("role") == "assistant"
+                 for b in rq.blocks(m) if b.get("type") == "tool_use"]
+        earlier = self._key(ctx, last - 1, person_text(orig[prev]))
+        matched = ctx.store.get(f"{earlier}:m{prev}") or ctx.store.get(earlier)
+        if len(calls) < limit or matched or any(c.endswith("playbook_save") for c in calls):
+            return ""
+        return (f"<system-reminder>\nThe previous task took {len(calls)} tool calls and has no playbook. If it will come up again, "
+                "record it with the `almanac:playbook` skill once this request is answered.\n</system-reminder>")
 
     @staticmethod
     def _place(messages, orig, kept):
