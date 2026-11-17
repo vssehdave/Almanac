@@ -558,6 +558,17 @@ compacted or rewound so that the place is gone, it is left out.
 `playbooks.inject` (default `true`) set to `false` stops the notes but leaves
 the tools.
 
+**A nudge to record one.** Recording a playbook depends on Claude remembering
+the cheatsheet. So when you type a new request and your previous one took at
+least `playbooks.nudge_after` tool calls (default `25`, `0` is off), saved no
+playbook with `playbook_save` and matched none, Almanac adds one sentence to
+the note in the new request: "The previous task took N tool calls and has no
+playbook. If it will come up again, record it with the `almanac:playbook` skill
+once this request is answered." Earlier messages are not touched. The sentence
+is decided once per request and kept, so later requests of the same turn carry
+the same bytes. It is never added to a sub-agent's thread, and not when
+`playbooks.enabled` or `playbooks.inject` is off.
+
 **Finding playbooks by itself.** Almanac can also notice a task you repeat in
 your past sessions and write it up, with no effort from you.
 
@@ -1046,6 +1057,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `playbooks.inject` | `true` | Add the note about the matching playbook to a request |
 | `playbooks.auto_run` | `true` | Run the approved script of a playbook approved with `--auto` before a matching request goes to Claude (`false` never runs one) |
 | `playbooks.transcript_dirs` | `[]` | More Claude Code config folders to mine for repeated tasks (`~/.claude` and `$CLAUDE_CONFIG_DIR` are always read), for example `["~/.claude-work"]` |
+| `playbooks.nudge_after` | `25` | Tool calls in a turn with no playbook saved or matched after which the next request is told to record one (`0` is off) |
 | `playbooks.background` | `true` | Mine and compile in the background at each start |
 | `playbooks.compile_per_day` | `1` | Most Sonnet sessions a day that write a playbook from a repeated task (`0` is off) |
 | `cheatsheet.mode` | `"on"` | `"off"` stops adding the working rules for each model |

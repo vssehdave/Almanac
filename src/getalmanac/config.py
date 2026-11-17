@@ -95,6 +95,7 @@ DEFAULTS = {
         # for example ["~/.claude-work"]
         "transcript_dirs": [],
         "background": True,  # mine past sessions and compile the best repeat into a playbook draft, in the background
+        "nudge_after": 25,  # a turn of this many tool calls, with no playbook saved or matched, is flagged to the next request; 0 is off
         "compile_per_day": 1,  # most Sonnet sessions a day that do the compiling; 0 turns it off
     },
     "cloud": {
