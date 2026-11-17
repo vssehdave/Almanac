@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Stable tool and listing bytes across conversations.** New conversations of
+  one project now send the same tool list and the same skill and agent
+  listings, so they read both from the prompt cache. Which cold tools stay
+  loaded and which skills and agents stay full in the listing are decided from
+  the project's recent use once per project per day. A cold tool named in the
+  first message is no longer kept loaded (ToolSearch loads it), and the skills
+  and agents that message matches are shown in full next to it instead of in
+  the listing. The system prefix now moves the skill and agent listings
+  whenever they are present.
 - **The prefix report skips Claude Code's billing line.** It changes in every
   conversation, but a real measurement showed the cache still read past it,
   so naming it as the break hid the real one.

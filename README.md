@@ -107,9 +107,9 @@ whether or not the conversation will use them.
   With this on, those sections are cut out of that message and placed as one
   block at the end of the system prompt, ahead of your text, and the cache
   breakpoint on the old last system block moves with them. The text is moved
-  as it is, in a fixed order, and only on the main thread. A skill or agent list
-  that shows an entry in full for your first message stays where it is. The cut
-  depends only on the request itself, so every request of a conversation is
+  as it is, in a fixed order, and only on the main thread. The skill and agent
+  lists move too, because they are the same in every conversation of a project.
+  The cut depends only on the request itself, so every request of a conversation is
   rewritten the same way. When those sections change (a new MCP server or
   skill, say), the next conversation writes them to the cache once.
 - **Tools.** Schemas of rarely used tools (`tools.cold`) are deferred. Their

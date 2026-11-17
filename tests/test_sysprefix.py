@@ -3,9 +3,14 @@ import json
 import unittest
 from types import SimpleNamespace
 
-from helpers import config
+import os
+import tempfile
 
-from getalmanac import report
+from helpers import Rig, config
+from test_startup import body as startup_body
+
+from getalmanac import report, startup
+from getalmanac.store import Store
 from getalmanac.sysprefix import SysPrefixLayer
 
 MCP = "# MCP Server Instructions\n\nThe following MCP servers have provided instructions:\n\n## docs\nUse docs well.\n\n"
@@ -113,16 +118,39 @@ class SysPrefixTest(unittest.TestCase):
         body["messages"][1]["content"] = body["messages"][1]["content"][:1]
         self.assertEqual(dump(run(body)[0]), dump(body))
 
-    def test_skill_shown_in_full_stays(self):
-        out, ctx = run(request(), stats={"skills": {"first_full": 1, "full": 1}, "agents": {"first_full": 0, "full": 0}})
-        self.assertIn("pdf things", out["messages"][1]["content"][0]["text"])
-        self.assertNotIn("skill listing", ctx.stats["sysprefix"]["moved"])
+    def test_listing_with_pinned_entries_still_moves(self):
+        out, ctx = run(request(), stats={"skills": {"first_full": 1, "full": 1}, "agents": {"first_full": 1, "full": 1}})
+        self.assertNotIn("pdf things", out["messages"][1]["content"][0]["text"])
+        self.assertIn("skill listing", ctx.stats["sysprefix"]["moved"])
         self.assertIn("agent types", ctx.stats["sysprefix"]["moved"])
 
     def test_later_turn_expansion_does_not_change_the_cut(self):
         a, _ = run(request(), stats={"skills": {"first_full": 0, "full": 0}})
         b, _ = run(request(), stats={"skills": {"first_full": 0, "full": 2}})
         self.assertEqual(dump(a), dump(b))
+
+    def stack(self):
+        rig = Rig(layers=[startup.SkillsLayer(), startup.AgentsLayer(), startup.ToolsLayer(), SysPrefixLayer()],
+                  store=Store(os.path.join(tempfile.mkdtemp(prefix="almanac-db-"), "a.db")), overrides={"startup.system_prefix": True})
+        self.addCleanup(rig.close)
+        return rig
+
+    def test_new_conversations_get_the_same_system_and_tools(self):
+        rig = self.stack()
+        rig.messages(startup_body("make a slide deck for the board"), session="s1")
+        rig.messages(startup_body("review this database migration query"), session="s2")
+        a, b = rig.sent(-2), rig.sent(-1)
+        self.assertIn("The following skills", a["system"][-1]["text"])
+        self.assertEqual(dump(a["system"]), dump(b["system"]))
+        self.assertEqual(dump(a["tools"]), dump(b["tools"]))
+
+    def test_same_body_through_a_fresh_stack_gives_the_same_bytes(self):
+        sent = []
+        for _ in range(2):
+            rig = self.stack()
+            rig.messages(startup_body("make a slide deck for the board"))
+            sent.append(rig.upstream.requests[-1]["body"])
+        self.assertEqual(sent[0], sent[1])
 
     def test_sub_agent_untouched(self):
         body = request()
