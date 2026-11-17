@@ -11,7 +11,6 @@ cut the same way."""
 import copy
 import re
 
-from . import request as rq
 from .report import _spans
 from .routing import RoutingLayer
 
@@ -26,7 +25,7 @@ def _cuts(text, listings):
     for label, start, end in _spans(text):
         if label not in ORDER or (listings.get(label) or 0) > 0:
             continue
-        hit = _UNKNOWN.search(text, start + 1, end)
+        hit = None if label == "MCP instructions" else _UNKNOWN.search(text, start + 1, end)  # server text has its own # headings
         out.append((label, start, hit.end() if hit else end))
     return out
 
@@ -43,12 +42,12 @@ class SysPrefixLayer:
         listings = {"skill listing": (ctx.stats.get("skills") or {}).get("first_full"),
                     "agent types": (ctx.stats.get("agents") or {}).get("first_full")}
         for msg in messages[:LOOK]:
-            content = msg.get("content") if isinstance(msg, dict) else None
+            content = msg.get("content") if isinstance(msg, dict) and msg.get("role") == "system" else None  # a user block may quote typed text
             if not isinstance(content, list):
                 continue
             for at, block in enumerate(content):
                 text = block.get("text") if isinstance(block, dict) and block.get("type") == "text" else None
-                if not isinstance(text, str) or (msg.get("role") == "user" and not text.lstrip().startswith(rq.REMINDER)):
+                if not isinstance(text, str):
                     continue
                 cuts = _cuts(text, listings)
                 if cuts:

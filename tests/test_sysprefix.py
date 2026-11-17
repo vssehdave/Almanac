@@ -91,7 +91,7 @@ class SysPrefixTest(unittest.TestCase):
         self.assertNotIn("cache_control", out["system"][2])
 
     def test_unknown_section_stays_in_place(self):
-        out, _ = run(request(parts=(MCP, UNKNOWN, ADVISOR, SKILLS)))
+        out, _ = run(request(parts=(MCP, ADVISOR, UNKNOWN, SKILLS)))
         left = out["messages"][1]["content"][0]["text"]
         self.assertEqual(left, HOOK + UNKNOWN.rstrip("\n") + "\n\n")
         self.assertNotIn("Nobody wrote", out["system"][3]["text"])
@@ -127,6 +127,21 @@ class SysPrefixTest(unittest.TestCase):
     def test_sub_agent_untouched(self):
         body = request()
         self.assertEqual(dump(run(body, klass="subagent", agent="a1")[0]), dump(body))
+
+    def test_user_block_quoting_a_marker_is_never_cut(self):
+        body = request()
+        quoted = {"type": "text", "text": "<system-reminder>\n" + ADVISOR + "</system-reminder>"}
+        body["messages"][0]["content"].insert(2, quoted)
+        out, _ = run(body)
+        self.assertEqual(dump(out["messages"][0]), dump(body["messages"][0]))
+        self.assertEqual(out["system"][3]["text"].count("# Advisor Tool"), 1)
+        self.assertEqual(len(out["system"]), 4)
+
+    def test_mcp_text_with_its_own_headings_moves_whole(self):
+        mcp = "# MCP Server Instructions\n\n## server-a\nUse a.\n\n# a heading\nmore of a\n\n## server-b\nUse b.\n\n"
+        out, _ = run(request(parts=(mcp, SKILLS)))
+        self.assertIn("# a heading\nmore of a\n\n## server-b", out["system"][3]["text"])
+        self.assertEqual(out["messages"][1]["content"][0]["text"], HOOK)
 
     def test_report_sections_unchanged(self):
         text = HOOK + "".join(ALL)
