@@ -31,7 +31,7 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "playbook_find",
      "description": "Find recorded playbooks (a way of doing a repeated task) that match some words. Returns the top 5 "
-                    "with name, title, when it applies and its status.",
+                    "with name, title, when it applies and its status. Given a playbook's exact name, returns its steps.",
      "inputSchema": {"type": "object", "required": ["query"], "properties": {
          "query": {"type": "string", "description": "The request, or words from it"}}}},
     {"name": "playbook_save",
@@ -103,7 +103,11 @@ def call(memory, name, args, cwd) -> str:
     if name == "memory_projects":
         return render_projects(memory)
     if name == "playbook_find":
-        found = playbook.find(str(args.get("query") or ""), memory.projects.see(cwd, touch=False) or "")
+        query = str(args.get("query") or "").strip()
+        named = playbook.load(query) if playbook.valid_name(query) else None
+        if named:  # asked for by name: the whole playbook, nothing cut
+            return playbook.full(named)
+        found = playbook.find(query, memory.projects.see(cwd, touch=False) or "")
         return ("\n".join(f"{pb['name']}: {pb['title']} ({pb['status']}, used {pb['uses']}x)\n    {pb['when']}" for pb in found)
                 or "No playbook matches.")
     if name == "playbook_save":

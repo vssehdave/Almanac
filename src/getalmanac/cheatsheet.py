@@ -14,6 +14,7 @@ from .routing import RoutingLayer
 FAMILIES = ("opus", "sonnet", "haiku", "fable")
 NAMES = (*FAMILIES, "common", "skills")
 ALIASES = {"mythos": "fable"}  # the same model under another name
+INDEX = 12  # playbooks listed
 
 
 def override_dir():
@@ -45,6 +46,29 @@ def text_for(model: str) -> str:
     return "\n\n".join(parts)
 
 
+@functools.lru_cache(maxsize=None)
+def index() -> str:
+    """The recorded playbooks that apply everywhere, one line each by name, or "" when there are none.
+
+    A way of working cannot be matched from the words of a request ("yes, do it"), so Claude is told what is on
+    hand. Read once per process and ordered by name only (use counts and projects change in the middle of a
+    conversation), so a conversation's system prompt keeps its bytes for the run.
+    """
+    try:
+        from . import playbook
+
+        books = sorted((pb for pb in playbook.listing() if not pb["project"]), key=lambda pb: pb["name"])[:INDEX]
+        lines = [f"- {pb['name']}: {' '.join(pb['title'].split())[:80]}" + (" (script)" if playbook.runnable(pb) else "")
+                 for pb in books]
+    except Exception:  # a bad playbook folder must never block a request
+        return ""
+    if not lines:
+        return ""
+    return ("# Playbooks on hand\n\nWays of doing recurring work, recorded from earlier sessions. When the work in front of you "
+            "is one of these, call `playbook_find` with its name for the steps and follow them, and run one marked (script) "
+            "with `playbook_run` instead of doing its steps by hand.\n" + "\n".join(lines))
+
+
 def _thread(ctx, body) -> bool:
     # a fork shares its parent's cached prefix, so it needs the same system prompt
     return bool(RoutingLayer._kind(ctx, body) or (body.get("tools") and ctx.agent_type.lower() == "fork"))
@@ -57,6 +81,11 @@ class CheatsheetLayer:
         if not _thread(ctx, body):
             return
         sheet = text_for(body["model"])
+        books = ctx.cfg.get("playbooks") or {}
+        # the main thread and its forks only (a fork shares its parent's cached prefix); Haiku's sheet is short on purpose
+        main = RoutingLayer._kind(ctx, body) == "main" or ctx.agent_type.lower() == "fork"
+        if sheet and main and family(body["model"]) != "haiku" and books.get("enabled") and books.get("inject") and index():
+            sheet += "\n\n" + index()
         system = body.get("system")
         if not sheet or not system:
             return
