@@ -44,7 +44,7 @@ def _daily(ctx, name, compute):
 def _frozen(ctx, name, compute):
     if ctx.store is None:
         return compute()
-    return ctx.store.frozen(f"{name}:{ctx.lane}", compute)
+    return ctx.store.frozen(f"{name}:{ctx.frozen_lane or ctx.lane}", compute)  # a fork shares its parent's cached prefix
 
 
 def _untooled(description: str) -> str:

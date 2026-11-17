@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **A fork of a conversation sent unchanged is sent unchanged too.** When the
+  upstream refused a conversation's rewritten form, its forks were still
+  rewritten, so their tool list differed from the parent's.
+- **A fork sends its parent's tool list.** A fork shares its parent's cached
+  prefix, but made its own deferral decision and could keep a tool loaded that
+  the parent had deferred, so its tools differed and missed the cache. Startup
+  decisions of a fork now come from its parent's conversation. The prefix report
+  also hashes an `x-api-key` login, and its cold limit is one named constant.
+
 - **Guidance for the memory tools.** The memory server now sends constant
   instructions with its handshake (summaries drop exact values, read the
   exchange first, no hit is not proof, stored text is a record). New option

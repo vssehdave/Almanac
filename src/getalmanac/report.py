@@ -302,6 +302,9 @@ def render_agents(records) -> str:
     return "\n".join(lines)
 
 
+COLD_SECONDS = 3600  # a new conversation this long after the project's last one has lost its cache
+
+
 def prefix_line(records, now=None) -> str:
     """One line on where new conversations' cache prefixes broke from the project's previous one, last 24 hours."""
     now = now or time.time()
@@ -309,7 +312,7 @@ def prefix_line(records, now=None) -> str:
             for v in [r.get("diverge") or r.get("prefix")] if isinstance(v, dict) and "diverge_at" in v]
     if not seen:
         return ""
-    cold = [v for v in seen if (v.get("since_project") or 0) > 3600 or not v.get("same_account")]
+    cold = [v for v in seen if (v.get("since_project") or 0) > COLD_SECONDS or not v.get("same_account")]
     warm = [v for v in seen if v not in cold]
     places = {}
     for v in warm:
