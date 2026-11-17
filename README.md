@@ -150,7 +150,20 @@ So work on one repository done from another's folder is filed where it belongs.
 When a new conversation starts, the earlier exchanges that match its first
 message are added to that message, along with the titles of the project's most
 recent conversations. Claude Code also gets three read-only tools to look
-further: `memory_search`, `memory_read` and `memory_projects`.
+further: `memory_search`, `memory_read`, `memory_projects` and `memory_list`.
+
+Each conversation also gets a summary and a note of how it ended (the last thing
+you asked and the start of the reply). When a conversation has had no request
+for 10 minutes, or is still waiting when Almanac exits, one small-model call
+over its exchange summaries and statuses writes the summary, under the same
+`memory.summary_model`, daily cap and pause as the exchange summaries. Until
+then, and when `memory.summary_model` is `""`, the summary is written by rule
+from the exchange titles. The login the call uses stays in memory until the
+conversation has been idle that long, then is dropped. A new conversation's note
+lists the recent conversations with their summaries and endings.
+
+`memory_list` lists conversations (`since`, `until` as `2026-11-14`,
+`2026-11-14 09:30` or `7d`, and `project`).
 
 Each exchange is first stored with a title and text written by rule. In the
 background, a small model (`memory.summary_model`, Haiku by default) then

@@ -8,7 +8,7 @@ import sys
 import time
 
 from . import __version__, config, playbook
-from .memory import Memory
+from .memory import Memory, ended
 from .store import Store
 
 TOOLS = [
@@ -47,6 +47,14 @@ TOOLS = [
                     "A draft script is not run.",
      "inputSchema": {"type": "object", "required": ["name"], "properties": {
          "name": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}}}}},
+    {"name": "memory_list",
+     "description": "List stored conversations, newest first: number, day, title, a summary and how each one ended. "
+                    "Filter by time and project. Use the number as `conversation` in memory_handover and memory_user_messages.",
+     "inputSchema": {"type": "object", "properties": {
+         "since": {"type": "string", "description": "From when: YYYY-MM-DD, YYYY-MM-DD HH:MM, or a number of days ago such as 7d"},
+         "until": {"type": "string", "description": "Until when (same forms; a plain date means the end of that day)"},
+         "project": {"type": "string", "description": "A project name or key, or \"all\". Default: this folder's project"},
+         "limit": {"type": "integer", "minimum": 1, "maximum": 50}}}},
 ]
 
 
@@ -70,6 +78,43 @@ def render_node(memory, node) -> str:
     return f"{head}\n\n{node['text']}" + (f"\n\nPart of topic [{node['parent']}]." if node.get("parent") else "")
 
 
+def _when(value, end=False):
+    """Epoch seconds for `7d` (days ago), `2026-11-14` (its start, or its end when `end`) or `2026-11-14 09:30`; None when empty."""
+    value = str(value or "").strip()
+    if not value:
+        return None
+    if value.endswith("d") and value[:-1].isdigit():
+        return time.time() - int(value[:-1]) * 86400
+    for form, span in (("%Y-%m-%d %H:%M", 0), ("%Y-%m-%dT%H:%M", 0), ("%Y-%m-%d", 86400 if end else 0)):
+        try:
+            return time.mktime(time.strptime(value, form)) + span
+        except ValueError:
+            pass
+    raise ValueError(f"cannot read the time {value!r}: use YYYY-MM-DD, YYYY-MM-DD HH:MM or days ago such as 7d")
+
+
+def _scope(memory, args, cwd):
+    """(project key or None for all, error text or "") for the `project` argument of a tool."""
+    wanted = str(args.get("project") or "")
+    if wanted.lower() == "all":
+        return None, ""
+    if not wanted:
+        return memory.projects.see(cwd, touch=False), ""
+    key = memory.projects.find(wanted)
+    return key, "" if key else f"No project is called {wanted!r}. memory_projects lists them."
+
+
+def _stamp(ts) -> str:
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
+
+
+def render_list(memory, convos) -> str:
+    if not convos:
+        return "No conversation is stored for that."
+    return "\n".join(f"#{c['id']} {_day(c['updated'])} {c['title']} ({c['turns']} exchange{'s' if c['turns'] != 1 else ''}, "
+                     f"project {memory.projects.name(c['project'])})" + ended(c, 300) for c in convos)
+
+
 def render_projects(memory) -> str:
     lines = []
     for row in memory.projects.listing():
@@ -77,7 +122,8 @@ def render_projects(memory) -> str:
         if not convos:
             continue
         lines.append(f"{row['name']}  ({row['key']})")
-        lines += [f"    {_day(c['updated'])} {c['title']} ({c['turns']} exchange{'s' if c['turns'] != 1 else ''})" for c in convos]
+        lines += [f"    #{c['id']} {_day(c['updated'])} {c['title']} ({c['turns']} exchange{'s' if c['turns'] != 1 else ''})"
+                  + ended(c, 160) for c in convos]
     return "\n".join(lines) or "No conversations are stored yet."
 
 
@@ -102,6 +148,12 @@ def call(memory, name, args, cwd) -> str:
         return text
     if name == "memory_projects":
         return render_projects(memory)
+    if name == "memory_list":
+        project, error = _scope(memory, args, cwd)
+        if error:
+            return error
+        return render_list(memory, memory.recent(project=project, limit=max(1, min(50, int(args.get("limit") or 20))),
+                                                 since=_when(args.get("since")), until=_when(args.get("until"), end=True)))
     if name == "playbook_find":
         query = str(args.get("query") or "").strip()
         named = playbook.load(query) if playbook.valid_name(query) else None
