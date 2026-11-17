@@ -1,0 +1,7 @@
+{
+  "state": "stalled",
+  "time": "2026-11-17T07:33:19Z",
+  "base_branch": "test/cloud-handoff",
+  "base_commit": "f080ae0e3e52677f57b18a1484c842df16e42752",
+  "session": "cloud-handoff-test-2"
+}
