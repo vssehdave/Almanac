@@ -683,6 +683,7 @@ def build(cfg=None) -> Proxy:
     from .compact import CompactLayer
     from .memory import Memory, MemoryLayer, ProjectLayer
     from .playbook import PlaybookLayer
+    from .prefix import PrefixLayer
     from .routing import RoutingLayer
     from .startup import AgentsLayer, SkillsLayer, ToolsLayer
     from . import semantic
@@ -697,8 +698,9 @@ def build(cfg=None) -> Proxy:
     # Order matters: the project first, then the history is settled, then the parts inside it.
     # Routing comes after them: it prices the prefix as it will really be sent.
     # The cheatsheet comes after routing: it is chosen by the model the request goes out on.
+    # The stable prefix comes last of the rewriters: it moves blocks the layers above have finished with.
     layers = [ProjectLayer(memory), CompactLayer(memory), MemoryLayer(memory), PlaybookLayer(), SkillsLayer(), AgentsLayer(), ToolsLayer(), RoutingLayer(),
-              CheatsheetLayer(), SummaryLayer(memory)]
+              CheatsheetLayer(), PrefixLayer(), SummaryLayer(memory)]
     if cfg["cloud"]["auto"] is True:  # off adds nothing: no layer, no thread, no git; a hand-typed "false" is off too
         from .cloud import HandoffLayer
         layers.append(HandoffLayer(memory, cfg))

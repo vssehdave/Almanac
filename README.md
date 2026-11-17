@@ -103,6 +103,19 @@ whether or not the conversation will use them.
   the model loads one through its normal tool search when it needs it. A tool
   your message names, a tool the conversation already called, or one used in two
   recent conversations stays loaded.
+- **Stable blocks first** (`startup.stable_first`, off by default). In a new
+  conversation Claude Code puts text that differs every time (hook output,
+  CLAUDE.md, your first message) in front of text that is the same in every
+  session of a project (MCP instructions, agent types, the skill listing, the
+  deferred tool names, advisor notes), and the cache only reuses what comes
+  before the first difference. With this on, those blocks move, unchanged, to the
+  front of the first message, and a cache breakpoint is added after them when
+  the request would still have at most 4. A listing that shows some skills or
+  agents in full because your message matched them differs between
+  conversations, so it is placed after the breakpoint. The order is fixed for the
+  conversation, and a request whose first message no longer holds exactly the
+  same blocks (after compaction, say) is left as it came. Sub-agents are not
+  touched.
 
 Matching is keyword-based (BM25) and runs locally. It does not understand
 synonyms: "make slides" finds a skill that says "slide deck", but a request
@@ -965,6 +978,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `skills.stub_chars` | `90` | Characters kept for a collapsed skill |
 | `skills.always_full` | `[]` | Skills never collapsed |
 | `startup.agent_chars` | `60` | Characters kept for a listed agent type (`0` leaves the agent list alone) |
+| `startup.stable_first` | `false` | Move the blocks that are the same in every session to the front of the first message and cache them |
 | `skills.scan_on_launch` | `true` | Scan new or changed skills and plugins in the background at each start, and warn about flagged ones |
 | `tools.enabled` | `true` | Defer cold tool schemas |
 | `tools.cold` | six tools | Tools deferred unless called for |

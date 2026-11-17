@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Stable blocks first in a new conversation** (`startup.stable_first`, off by
+  default). The first request of a conversation read only the tools and system
+  prompt from the cache and wrote about 20,000 to 28,000 tokens again, because
+  hook output, CLAUDE.md and the typed text sit in front of MCP instructions,
+  agent types, the skill listing, deferred tool names and advisor notes, which
+  are the same in every session of a project. The layer moves those blocks,
+  byte for byte, to the front of the first user message in a fixed order, and
+  adds a cache breakpoint (same `ttl` as the request's others) after them when
+  the request would then have at most 4. A listing with descriptions chosen by
+  the typed message goes after the breakpoint. The order is frozen per
+  conversation; if the first message no longer holds the same blocks the
+  request is sent as it came. Main thread only. The log records `prefix`.
 - **A usage and cache meter.** Each request in the log now records `cache`
   (how many `cache_control` breakpoints the client sent and the `ttl` of each,
   "5m" when none is given) and `idle` (seconds since the previous request of

@@ -29,6 +29,10 @@ DEFAULTS = {
     },
     "startup": {
         "agent_chars": 60,  # characters of description kept for a listed agent type; 0 leaves the agent listing alone
+        # true moves the blocks of the first message that are the same in every session of a project (MCP instructions,
+        # advisor notes, deferred tool names, agent types, skill listing) to its front and puts a cache breakpoint after
+        # them, so a new conversation reads them from the cache (see prefix.py)
+        "stable_first": False,
     },
     "tools": {
         "enabled": True,
