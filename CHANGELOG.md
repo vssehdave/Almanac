@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **A usage and cache meter.** Each request in the log now records `cache`
+  (how many `cache_control` breakpoints the client sent and the `ttl` of each,
+  "5m" when none is given) and `idle` (seconds since the previous request of
+  the same conversation thread). `almanac status` prints usage for the last 5
+  and 24 hours and a cache line: the share of input read from cache, the
+  "cold returns" (requests that came back after a pause longer than the
+  shortest ttl they asked for) with the cache writes they cost, and the ttl
+  values seen. `almanac report --json` adds the same data under `meter`.
+  Nothing about a request or reply changes.
 - **A second login takes over when the first is out of usage.** With
   `accounts.fallback` set to a list of Claude Code config folders (off by
   default), a model request that comes back with a usage-limit 429 is sent

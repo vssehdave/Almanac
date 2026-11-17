@@ -95,7 +95,8 @@ def _report(rest):
     args = parser.parse_args(rest)
     records = _log().tail()
     if args.json:
-        print(json.dumps({"startup": report.startup(records), "summary": report.summary(records)}, indent=2))
+        print(json.dumps({"startup": report.startup(records), "summary": report.summary(records),
+                          "meter": report.meter(records)}, indent=2))
     else:
         print(report.render(records))
     return 0
@@ -117,6 +118,8 @@ def _status(_rest):
         totals = report.summary(records)
         print(f"  last request {last}; last 24 hours: {totals['requests']} requests, "
               f"about {totals['saved_tokens']:,} input tokens kept out")
+        for text in report.render_meter(records):
+            _print(text)
     else:
         print("  no requests recorded yet")
     memory = _memory_handle()

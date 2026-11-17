@@ -356,6 +356,14 @@ request is never dropped.
 
 **Audit it.** `almanac route status` lists each decision with its reason, the
 estimated cost of staying and of switching, and whether it was applied.
+`almanac status` also shows usage for the last 5 and 24 hours (requests, input,
+cache write, cache read and output tokens, and a weighted total at list-price
+ratios, not the plan's real accounting) and a cache line: the share of input
+read from cache, the cold returns (a request that came back after a pause
+longer than the shortest cache life it asked for) with the cache writes they
+cost, and the cache lives Claude Code asked for. `almanac report --json`
+carries the same under `meter`. The log records `cache` and `idle` per request.
+
 `almanac report` and `almanac status` add requests per tier, moves made and
 declined, raises after failures, and tokens per model, read from the replies'
 own `usage`. The request log also records the model that really answered.
@@ -917,7 +925,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac [claude arguments]` | Run Claude Code through the proxy |
 | `almanac claude [arguments]` | The same, for arguments that clash with a command below |
 | `almanac report [--json]` | Where the latest session's context went, and what was kept out |
-| `almanac status` | Settings, files and recent activity |
+| `almanac status` | Settings, files and recent activity, usage for 5 and 24 hours, and cache health |
 | `almanac doctor` | Check that everything needed is in place |
 | `almanac memory search WORDS` | Search stored conversations (`--project NAME`, `--all`) |
 | `almanac memory show ID` | Read one stored exchange or topic |

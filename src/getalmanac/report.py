@@ -135,6 +135,86 @@ def summary(records, now=None) -> dict:
             "held": len(held), "held_s": sum(held)}
 
 
+TTL_SECONDS = {"5m": 300, "1h": 3600}
+# List-price ratios to plain input, not the plan's real accounting.
+WEIGHTS = {"input_tokens": 1, "cache_creation_input_tokens": 1.25, "cache_read_input_tokens": 0.1, "output_tokens": 5}
+
+
+def cache_marks(body) -> dict:
+    """The cache breakpoints in a request as the client sent it, and the ttl of each in order."""
+    ttl = []
+
+    def walk(blocks):
+        for block in blocks if isinstance(blocks, list) else []:
+            mark = block.get("cache_control") if isinstance(block, dict) else None
+            if isinstance(mark, dict):
+                ttl.append("1h" if mark.get("ttl") == "1h" else str(mark.get("ttl") or "5m"))
+
+    walk(body.get("system"))
+    walk(body.get("tools"))
+    for msg in body.get("messages") or []:
+        walk(msg.get("content") if isinstance(msg, dict) else None)
+    return {"marks": len(ttl), "ttl": ttl}
+
+
+def meter(records, now=None) -> dict:
+    """Usage over 5 hours and 24 hours, and how often a pause outlasted the cache's life."""
+    now = now or time.time()
+    keys = tuple(WEIGHTS)
+    out = {"5h": None, "24h": None}
+    for name, span in (("5h", 5 * 3600), ("24h", 86400)):
+        total = {"requests": 0, "weighted": 0.0, **dict.fromkeys(keys, 0)}
+        for r in records:
+            usage = r.get("usage") if isinstance(r, dict) else None
+            if not isinstance(usage, dict) or r.get("kind") != "messages" or not isinstance(r.get("ts"), (int, float))                     or r["ts"] <= now - span:
+                continue
+            total["requests"] += 1
+            for k in keys:
+                n = usage.get(k)
+                n = n if isinstance(n, int) else 0
+                total[k] += n
+                total["weighted"] += WEIGHTS[k] * n
+        total["weighted"] = round(total["weighted"])
+        out[name] = total
+    day = out["24h"]
+    side = sum(day[k] for k in keys[:3])
+    cold = {"requests": 0, "cache_write_tokens": 0}
+    seen = {}
+    for r in records:
+        c = r.get("cache") if isinstance(r, dict) else None
+        if not isinstance(c, dict) or not isinstance(r.get("ts"), (int, float)) or r["ts"] <= now - 86400:
+            continue
+        ttls = [t for t in c.get("ttl") or [] if isinstance(t, str)]
+        for t in ttls:
+            seen[t] = seen.get(t, 0) + 1
+        idle, usage = r.get("idle"), r.get("usage") or {}
+        if ttls and isinstance(idle, (int, float)) and idle > min(TTL_SECONDS.get(t, 300) for t in ttls):
+            cold["requests"] += 1
+            n = usage.get("cache_creation_input_tokens")
+            cold["cache_write_tokens"] += n if isinstance(n, int) else 0
+    out["cache"] = {"read_share": round(day["cache_read_input_tokens"] / side, 3) if side else None,
+                    "cold_returns": cold["requests"], "cold_write_tokens": cold["cache_write_tokens"], "ttl_seen": seen}
+    return out
+
+
+def render_meter(records, now=None) -> list:
+    """The three `almanac status` lines."""
+    m = meter(records, now)
+
+    def line(label, t):
+        return (f"  {label:<10} {t['requests']} requests, input {t['input_tokens']:,}, cache write "
+                f"{t['cache_creation_input_tokens']:,}, cache read {t['cache_read_input_tokens']:,}, "
+                f"output {t['output_tokens']:,}; weighted {t['weighted']:,}")
+
+    c = m["cache"]
+    share = "no usage yet" if c["read_share"] is None else f"{c['read_share']:.0%} of input read from cache"
+    seen = ", ".join(f"{k} {v}" for k, v in sorted(c["ttl_seen"].items())) or "none seen"
+    return [line("usage 5h", m["5h"]),
+            line("usage 24h", m["24h"]) + " (weighted: list-price ratios, not the plan's accounting)",
+            f"  {'cache':<10} {share}; {c['cold_returns']} cold returns cost {c['cold_write_tokens']:,} "
+            f"write tokens; ttl seen: {seen}"]
+
+
 def routing(records) -> dict:
     """What model routing did in the log: requests per tier, moves made and declined, raises, tokens per model."""
     out = {"tiers": {}, "moves": {}, "raised": 0, "models": {}, "unrouted": 0}
