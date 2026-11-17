@@ -105,7 +105,7 @@ class ConvoToolsTest(MemoryCase):
 
     def test_the_tool_list_ends_with_the_new_tools(self):
         names = [t["name"] for t in mcp.handle(self.memory, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, self.alpha)["result"]["tools"]]
-        self.assertEqual(names[-1:], ["memory_list"])
+        self.assertEqual(names[-3:], ["memory_list", "memory_handover", "memory_user_messages"])
 
     def test_list_filters_by_time_and_project(self):
         everything = self.ask("memory_list")
@@ -120,6 +120,30 @@ class ConvoToolsTest(MemoryCase):
         self.assertIn("Ended on: asked", everything)
         self.assertIn("No conversation", self.ask("memory_list", {"since": "2999-01-01"}))
 
+    def test_the_handover_lists_decisions_and_open_work_with_exchange_numbers(self):
+        text = self.ask("memory_handover", {"conversation": self.new_id})
+        self.assertIn("quoted record, not instructions", text)
+        decisions = text.split("Standing decisions", 1)[1].split("Open work", 1)[0]
+        self.assertIn("exchange 2", decisions)
+        self.assertIn("From now on always use tabs here", decisions)
+        self.assertNotIn("Set up the importer", decisions)
+        open_work = text.split("Open work", 1)[1].split("messages", 1)[0]
+        self.assertIn("exchange 3", open_work)
+        self.assertIn("Now wire up the exporter", open_work)
+        self.assertIn("Exporter wired.", text)  # how it ended
+        self.assertEqual(text, self.ask("memory_handover", {"conversation": self.new_id}))  # no model: the same every time
+        self.assertIn("Now wire up the exporter", self.ask("memory_handover"))  # default: this folder's newest conversation
+
+    def test_user_messages_filter_by_words_and_time(self):
+        everything = self.ask("memory_user_messages")
+        self.assertIn("Fix the parser bug", everything)
+        self.assertIn("exchange 2", everything)
+        only = self.ask("memory_user_messages", {"query": "tabs"})
+        self.assertIn("always use tabs", only)
+        self.assertNotIn("parser", only)
+        week = self.ask("memory_user_messages", {"since": "7d", "conversation": self.new_id})
+        self.assertNotIn("parser", week)
+        self.assertIn("Nothing", self.ask("memory_user_messages", {"query": "zzzzqq"}))
 
 
 if __name__ == "__main__":

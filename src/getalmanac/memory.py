@@ -171,6 +171,13 @@ def transcript(group, limit=DETAIL_LIMIT, result_chars=1500) -> str:
     return text
 
 
+def asked(text: str) -> str:
+    """What the person typed, from a stored exchange's text (which may start with a model-written summary line)."""
+    if text.startswith("Summary: "):
+        text = text.split("\n\n", 1)[-1]
+    return text[len("Asked: "):].split("\n\nAnswer: ", 1)[0] if text.startswith("Asked: ") else text
+
+
 def ended(convo, summary=220) -> str:
     """A conversation's summary and how it ended, as the end of one line."""
     out = (": " + convo["summary"][:summary]) if convo.get("summary") else ""
@@ -485,6 +492,36 @@ class Memory:
             f"{r['seq'] + 1}. [{r['status']}] {r['title']}" + (f": {r['summary']}" if r["summary"] else "")
             for r in self.store.run("select n.seq, n.status, n.title, n.summary from node n join convo c on c.id = n.convo "
                                     "where c.lane = ? and n.kind = 'leaf' order by n.seq", (lane,)))
+
+    def exchanges(self, convo_id: int) -> list:
+        """A conversation's stored exchanges in order: id, number (from 1), time, status, what the person asked, summary."""
+        out = []
+        for r in self.store.run("select n.id, n.seq, n.ts, n.status, n.text, n.summary, c.lane from node n join convo c "
+                                "on c.id = n.convo where n.convo = ? and n.kind = 'leaf' order by n.seq", (convo_id,)):
+            shown = self.statuses(r["lane"]).get(r["seq"], r["status"])
+            out.append({"id": r["id"], "number": r["seq"] + 1, "ts": r["ts"], "status": shown, "summary": r["summary"],
+                        "asked": asked(r["text"])})
+        return out
+
+    def user_messages(self, project=None, convo_id=None, since=None, until=None, query="", limit=30) -> list:
+        """What the person typed, oldest first: the newest `limit` that fit the filters. Words in `query` must all appear."""
+        sql, args = ("select n.id, n.seq, n.ts, n.text, n.convo, c.title ctitle from node n join convo c on c.id = n.convo "
+                     "where n.kind = 'leaf' and n.status != 'noise'"), []
+        for clause, value in ((" and n.convo = ?", convo_id), (" and n.project = ?", project),
+                              (" and n.ts >= ?", since), (" and n.ts < ?", until)):
+            if value:
+                sql, args = sql + clause, args + [value]
+        words = re.findall(r"[a-z0-9_]{2,}", query.lower())
+        found = []
+        # shortcut: reads every matching exchange of the range and filters in Python; narrow it with `since` on a big store
+        for r in self.store.run(sql + " order by n.ts desc, n.id desc", args):
+            typed = asked(r["text"])
+            if all(w in typed.lower() for w in words):
+                found.append({"id": r["id"], "convo": r["convo"], "ctitle": r["ctitle"], "number": r["seq"] + 1,
+                              "ts": r["ts"], "text": typed})
+                if len(found) >= limit:
+                    break
+        return found[::-1]
 
     def detail(self, node_id: int) -> str:
         """The full transcript kept for an exchange, or ""."""

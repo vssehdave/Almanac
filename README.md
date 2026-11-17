@@ -150,7 +150,8 @@ So work on one repository done from another's folder is filed where it belongs.
 When a new conversation starts, the earlier exchanges that match its first
 message are added to that message, along with the titles of the project's most
 recent conversations. Claude Code also gets three read-only tools to look
-further: `memory_search`, `memory_read`, `memory_projects` and `memory_list`.
+further: `memory_search`, `memory_read`, `memory_projects`, `memory_list`,
+`memory_handover` and `memory_user_messages`.
 
 Each conversation also gets a summary and a note of how it ended (the last thing
 you asked and the start of the reply). When a conversation has had no request
@@ -163,7 +164,12 @@ conversation has been idle that long, then is dropped. A new conversation's note
 lists the recent conversations with their summaries and endings.
 
 `memory_list` lists conversations (`since`, `until` as `2026-11-14`,
-`2026-11-14 09:30` or `7d`, and `project`).
+`2026-11-14 09:30` or `7d`, and `project`). `memory_handover` and
+`memory_user_messages` need no model: the handover lists a conversation's
+summary and ending, the decisions you set in your own words, its open work and
+your last messages; the other lists what you typed, filtered by conversation,
+time and words. Both cite the exchange number and treat the stored text as a
+quoted record.
 
 Each exchange is first stored with a title and text written by rule. In the
 background, a small model (`memory.summary_model`, Haiku by default) then

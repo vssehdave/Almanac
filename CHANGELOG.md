@@ -13,6 +13,11 @@
   how it ended, and `memory_projects` does the same. The note of a running
   conversation does not change. A new tool, `memory_list`, lists conversations
   with `since`, `until` and `project` filters.
+- **A handover and a view of what you typed, with no model.** `memory_handover`
+  gives a conversation's summary, how it ended, the decisions you set, the open
+  work and your last messages. `memory_user_messages` lists what you typed,
+  filtered by conversation, time and words. Both cite exchange numbers and show
+  stored text as a quoted record.
 - **Stable tool and listing bytes across conversations.** New conversations of
   one project now send the same tool list and the same skill and agent
   listings, so they read both from the prompt cache. Which cold tools stay
