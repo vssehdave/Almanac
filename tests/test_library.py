@@ -78,6 +78,42 @@ class WriterTest(LibraryCase):
         self.assertIn("fix the build", row["prompt"])
 
 
+class MergeTest(LibraryCase):
+    def test_same_prompt_with_a_new_route_supersedes_and_lists_the_changes(self):
+        a = self.alpha
+        self.finish("Make the x test pass in the proxy", self.calls())
+        self.finish("Make the x test pass in the proxy", [
+            ("Bash", {"command": "git checkout -b feat/x"}, "ok", False),
+            ("Read", {"file_path": a + "/src/proxy.py"}, "code", False),
+            ("Edit", {"file_path": a + "/src/proxy.py", "old_string": "a", "new_string": "b"}, "edited", False),
+            ("Bash", {"command": "python -m pytest tests/test_x.py"}, "2 passed", False),
+            ("Bash", {"command": "git commit -m x"}, "ok", False),
+            ("Bash", {"command": "gh pr create"}, "url", False)], lane="lane-2")
+        old, new = self.rows()
+        self.assertEqual(old["superseded_by"], new["id"])
+        self.assertEqual(new["superseded_by"], 0)
+        changes = json.loads(new["changes"])
+        self.assertIn("added step: Bash: git commit", changes)
+        self.assertIn("added step: Bash: gh pr create", changes)
+        self.assertEqual([c for c in changes if c.startswith("dropped")], [])
+        self.assertEqual(json.loads(old["changes"]), [])
+
+    def test_dropped_steps_and_uses_carry_to_the_current_entry(self):
+        self.finish("Make the x test pass in the proxy", self.calls())
+        self.store.run("update library set uses = 3")
+        self.finish("Make the x test pass in the proxy", self.calls()[:1] + self.calls()[3:] + [("Bash", {"command": "ruff check"}, "ok", False)],
+                    lane="lane-2", min_tools=4)
+        old, new = self.rows()
+        self.assertEqual(new["uses"], 3)
+        self.assertIn("dropped step: Read", json.loads(new["changes"]))
+        self.assertIn("added step: Bash: ruff check", json.loads(new["changes"]))
+
+    def test_a_different_prompt_is_not_merged(self):
+        self.finish("Make the x test pass in the proxy", self.calls())
+        self.finish("Rewrite the readme introduction completely", self.calls(), lane="lane-2")
+        self.assertEqual([r["superseded_by"] for r in self.rows()], [0, 0])
+
+
 class ForgetTest(LibraryCase):
     def test_forget_and_prune_delete_the_rows(self):
         self.finish("Make the x test pass in the proxy", self.calls())
@@ -90,6 +126,14 @@ class ForgetTest(LibraryCase):
         self.store.run("update convo set updated = updated - 400 * 86400")
         self.memory.prune(365)
         self.assertEqual(self.rows(), [])
+
+    def test_deleting_the_current_entry_makes_the_older_one_current_again(self):
+        self.finish("Make the x test pass in the proxy", self.calls())
+        self.finish("Make the x test pass in the proxy", self.calls(), lane="lane-2")
+        self.store.run("update convo set updated = updated - 7200")
+        self.memory.forget(convo_id=self.store.run("select id from convo where lane = 'lane-2'")[0]["id"])
+        (row,) = self.rows()
+        self.assertEqual(row["superseded_by"], 0)
 
 
 if __name__ == "__main__":

@@ -252,7 +252,12 @@ conversation and exchange number so the full transcript can be read with
 machine, and text is redacted and stripped of reminder tags like the rest of
 memory. Sub-agent exchanges write nothing.
 
-Entries are deleted with their conversation by `almanac memory forget` and by `memory.keep_days`.
+It is kept current without a model. When a new entry in the same project has
+nearly the same request (at least 0.6 word overlap) and nearly the same steps
+(at least 0.5 overlap), it becomes the current entry, the older one is kept
+and linked as superseded, and the new one lists what changed: steps added,
+steps dropped and fixes that are new. Entries are deleted with their
+conversation by `almanac memory forget` and by `memory.keep_days`.
 
 The library is not shown to the model yet: nothing is added to any request.
 

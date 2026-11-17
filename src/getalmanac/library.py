@@ -3,7 +3,9 @@
 When an exchange of the main conversation ends after at least `library.min_tools` tool calls, one entry is
 written from it: the typed request, the route (the miner's step signatures, repeats collapsed), the files
 touched, the fixes (a failed step and what recovered it) and how it ended. No model is called. Text is
-redacted and tag-stripped like the rest of memory. Rows go with their conversation (forget, prune).
+redacted and tag-stripped like the rest of memory. When a later entry in the same project asks for the same
+thing by nearly the same route, it replaces the older one as the current entry, which is kept and linked
+under `superseded_by`; the newer one lists what changed. Rows go with their conversation (forget, prune).
 """
 import json
 import re
@@ -11,6 +13,7 @@ import time
 
 from . import mine
 from . import request as rq
+from .match import tokens
 from .memory import _first_line, clean, exchange
 from .status import rule
 
@@ -29,6 +32,9 @@ PROMPT_CHARS = 600
 MAX_FILES = 20
 MAX_FIXES = 8
 MAX_ROUTE = 60
+PROMPT_SAME = 0.6  # word-set Jaccard of two prompts that count as the same task
+ROUTE_SAME = 0.5  # step-set Jaccard of two routes that count as the same task
+COMPARE = 500  # most current entries of a project one new entry is compared with
 EDITS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 _EXIT = re.compile(r"(?i)\bexit(?:ed)?(?: with)?[ _](?:code|status)[: =]*[1-9]\d*")
 _ERROR = re.compile(r"(?i)error|fail|exception|denied|not found|rejected|cannot|no module")
@@ -103,6 +109,34 @@ def _fixes(calls) -> list:
     return [clean(f) for f in dict.fromkeys(found)][:MAX_FIXES]
 
 
+def _jaccard(a, b) -> float:
+    return len(a & b) / len(a | b) if a | b else 0.0
+
+
+def _fix_key(fix) -> str:
+    return fix.split(" failed (")[0]
+
+
+def _merge(store, new_id, project, prompt, route, fixes):
+    """Make the new entry the current one when it is the same task as a current entry of the project."""
+    words, steps, best = set(tokens(prompt)), set(route), None
+    for old in store.run("select id, prompt, route, fixes, uses from library where project = ? and superseded_by = 0 "
+                         "and id != ? order by updated desc limit ?", (project, new_id, COMPARE)):
+        old_route = json.loads(old["route"])
+        same, similar = _jaccard(words, set(tokens(old["prompt"]))), _jaccard(steps, set(old_route))
+        if same >= PROMPT_SAME and similar >= ROUTE_SAME and (best is None or same + similar > best[0]):
+            best = (same + similar, old, old_route)
+    if not best:
+        return
+    _, old, old_route = best
+    seen = {_fix_key(f) for f in json.loads(old["fixes"])}
+    changes = ([f"added step: {s}" for s in dict.fromkeys(route) if s not in set(old_route)]
+               + [f"dropped step: {s}" for s in dict.fromkeys(old_route) if s not in steps]
+               + [f"new fix: {f}" for f in fixes if _fix_key(f) not in seen])
+    store.run("update library set superseded_by = ? where id = ?", (new_id, old["id"]))
+    store.run("update library set changes = ?, uses = ? where id = ?", (json.dumps(changes, ensure_ascii=False), old["uses"], new_id))
+
+
 def record(memory, lane, group, seq, min_tools, now=None) -> int:
     """Write the entry for `group`, the exchange just finished as number `seq` of conversation `lane`. Returns 1 when written."""
     calls = _calls(group)
@@ -134,6 +168,7 @@ def record(memory, lane, group, seq, min_tools, now=None) -> int:
                                   "outcome, created, updated) values (?,?,?,?,?,?,?,?,?,?,?,?)", row)
         if not cursor.rowcount:  # this exchange already has its entry
             return 0
+        _merge(store, cursor.lastrowid, row[2], prompt, route, fixes)
     return 1
 
 

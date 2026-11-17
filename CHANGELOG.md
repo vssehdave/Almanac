@@ -7,6 +7,9 @@
   code writes an entry: the request, the route, files, the fixes (a failed
   step and what recovered it) and the outcome. No model call, redacted, and
   deleted with its conversation. Not shown to the model yet.
+- **Entries on the same task replace each other.** A new entry with nearly the
+  same request and route becomes the current one; the older is kept, linked
+  as superseded, and the new one lists the steps added, dropped and new fixes.
 
 - **A fork of a conversation sent unchanged is sent unchanged too.** When the
   upstream refused a conversation's rewritten form, its forks were still
