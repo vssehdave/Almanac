@@ -7,6 +7,24 @@
   move from the session message, which follows the typed text, to one block at
   the end of the system prompt, with the cache breakpoint. A new conversation
   can then read them from cache. The cut depends only on the request's bytes.
+- **A tighter playbook miner.** The steps of a way of working no longer list
+  read-only shell filters (`head`, `tail`, `cut`, `cat`, `wc`, `sort`,
+  `uniq`, `grep`, `ls`, `tr`, `tee`, `xargs`, `sed -n`); the tools still do.
+  Turns join a group only at 75% phase overlap (was 60%) and share at least
+  3 phases with its seed, so one catch-all group no longer swallows the rest.
+  A playbook now records the `phases` it was mined from (an optional list in
+  `playbook.json`; older files load as before), and a way of working that a
+  stored playbook of any source already covers is not mined or compiled
+  again, so the same work no longer gets several drafts.
+- **Short working rules for sub-agents.** A sub-agent thread used to get the
+  model's whole cheatsheet, most of it the lead's method (handovers, briefing
+  agents, merging, deadlines). It now gets a new `agent.md` (do the one job in
+  the brief, check before saying done, stop after two failed attempts, report
+  result first) plus `skills.md` unless the model is Haiku. The main thread and
+  forks keep the full sheet unchanged, so a fork still shares its parent's
+  cached prefix. For Opus a sub-agent's text drops from about 4,450 to about
+  1,320 tokens. `almanac cheatsheet show agent` prints it, and an `agent.md` in
+  `almanac cheatsheet path` replaces the packaged one.
 - **A usage and cache meter.** Each request in the log now records `cache`
   (how many `cache_control` breakpoints the client sent and the `ttl` of each,
   "5m" when none is given) and `idle` (seconds since the previous request of

@@ -42,7 +42,7 @@ too very yes yeah okay sure thanks thank still again next first last same each e
 _REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
 _DROP = re.compile(r"https?://\S+|\S*[\\/]\S*|\S*\d\S*")  # urls, paths, numbers, hashes
 _CD = re.compile(r"^\s*cd\s+(\"[^\"]*\"|\S+)\s*(&&|;)\s*")
-SHAPE_SIMILAR = 0.6  # share of phases two turns must have in common to count as the same way of working
+SHAPE_SIMILAR = 0.75  # share of phases two turns must have in common to count as the same way of working
 MIN_PHASES = 3  # fewer is ordinary editing or a question, not a way of working
 RECHECK = 6 * 3600  # while a session runs, look for work this often
 MAX_COMMAND = 8192  # a longer command is cut here, before it is read
@@ -55,6 +55,8 @@ PYFLAGS = frozenset("-B -u -E -I -s -S -O -OO".split())
 _PIECES = re.compile(r"&&|\|\||[;|\n]")
 _COMMAND = re.compile(r"^[A-Za-z][\w.-]*$")
 NOISE = frozenset("cd echo printf export set sleep wait true exit do done then else fi for while if".split())
+# Read-only filters say nothing about the way of working: left out of the steps (not the tools). `sed -n` too, `sed -i` not.
+FILTERS = frozenset("head tail cut cat wc sort uniq grep ls tr tee xargs".split())
 # The phase of work a tool call belongs to; the first pattern that matches wins.
 PHASES = [(name, re.compile(pattern)) for name, pattern in (
     ("release", r"^Bash: (git tag|gh release|twine|npm publish|(python3?|py) -m build)\b"),
@@ -170,8 +172,13 @@ def steps(block) -> list:
         return [_signature(block)]
     command = _QUOTED.sub(" ", _without_here_documents(args["command"][:MAX_COMMAND]))  # a quoted ; or | is not a command
     pieces = _PIECES.split(command)
-    found = [step for step in map(_step, pieces) if step] or [step for step in (_step(p, ()) for p in pieces) if step]  # only noise
-    return list(dict.fromkeys(found)) or [_signature(block)]
+    def kept(found):
+        return [s for s in found if s and s.split()[1] not in FILTERS and s != "Bash: sed -n"]
+
+    found = kept(map(_step, pieces)) or kept(_step(p, ()) for p in pieces)  # the second pass: only noise
+    if found:
+        return list(dict.fromkeys(found))
+    return [] if any(_step(p, ()) for p in pieces) else [_signature(block)]  # only filters: no step at all
 
 
 def _typed(d):
@@ -346,7 +353,7 @@ def workflows(turns) -> list:
     counts = Counter(s for s, _ in shaped)
     seeds, home = [], {}
     for s in sorted(counts, key=lambda s: (-counts[s], sorted(s))):
-        near = max(seeds, key=lambda seed: (len(s & seed) / len(s | seed), sorted(seed)), default=None)
+        near = max((x for x in seeds if len(s & x) >= MIN_PHASES), key=lambda seed: (len(s & seed) / len(s | seed), sorted(seed)), default=None)
         if near is None or len(s & near) / len(s | near) < SHAPE_SIMILAR:
             seeds.append(s)
             near = s
@@ -393,8 +400,9 @@ def find_candidates(turns, minimum=3) -> list:
     alike = [g for g in cluster(turns) if enough(g)]
     found = [describe(g) for g in alike if not _matched(g)]
     worded = [{id(t) for t in g} for g in alike]
+    stored = [set(pb["phases"]) for pb in playbook.listing() if pb["phases"]]
     for seed, g in workflows(turns):  # a way of working that is mostly one worded request again adds nothing
-        if enough(g) and not _matched(g) and not any(len(ids & {id(t) for t in g}) * 2 > len(g) for ids in worded):
+        if enough(g) and not _matched(g) and not _overlaps(seed, stored) and not any(len(ids & {id(t) for t in g}) * 2 > len(g) for ids in worded):
             found.append(describe_workflow(seed, g))
     return sorted(found, key=lambda c: (-c["tokens"], c["id"]))[:KEEP]
 
@@ -433,13 +441,19 @@ def runs_today(now=None) -> int:
     return n if type(n) is int else 0
 
 
+def _overlaps(seed, others) -> bool:
+    seed = set(seed)
+    return any(seed | o and len(seed & o) / len(seed | o) >= SHAPE_SIMILAR for o in map(set, others))
+
+
 def _done(candidate, state) -> bool:
-    """A way of working whose phases mostly match one already compiled: its id may have drifted, the work is the same."""
+    """A way of working whose phases mostly match one already compiled, or one a stored playbook (any source) already does.
+
+    Its id may have drifted, the work is the same."""
     seed = candidate.get("seed")
     if candidate.get("kind") != "workflow" or not isinstance(seed, list):
         return False
-    now = set(seed)
-    return any(now | set(old) and len(now & set(old)) / len(now | set(old)) >= SHAPE_SIMILAR for old in state["seeds"])
+    return _overlaps(seed, state["seeds"]) or _overlaps(seed, [pb["phases"] for pb in playbook.listing() if pb["phases"]])
 
 
 def next_candidate(now=None):
@@ -462,7 +476,7 @@ FIELDS = """playbook.json is one JSON object with these fields (nothing else):
   agents: list of agent names used (may be empty)
   project: "" (applies everywhere)
   args: list of {"name": ..., "help": ...} for the inputs run.py takes (may be empty)
-Do not write status, hash, uses, created, source or script: Almanac sets them."""
+Do not write status, hash, uses, created, source, phases or script: Almanac sets them."""
 
 
 def build_prompt(candidate) -> str:
@@ -525,7 +539,7 @@ def compile_candidate(candidate, exe, run=subprocess.run) -> tuple:
                 return None, "playbook.json has no valid name"
             if playbook.load(data["name"]) is not None or playbook.folder(data["name"]).exists():
                 return None, f"a playbook called {data['name']!r} already exists"
-            return playbook.save(dict(data, source="miner"), script)["name"], ""
+            return playbook.save(dict(data, source="miner", phases=[x for x in candidate.get("seed") or () if isinstance(x, str)]), script)["name"], ""
         except (ValueError, OSError, RecursionError) as exc:  # UnicodeDecodeError is a ValueError
             return None, f"invalid result: {exc}"
     finally:
