@@ -98,11 +98,11 @@ class SkillsLayerTest(LayerCase):
         self.assertTrue(text.endswith("Today's date is 2026-01-01."))
         self.assertGreater(self.rig.records()[-1]["skills"]["saved_chars"], 500)
 
-    def test_matched_skill_keeps_its_full_description(self):
+    def test_matched_skill_is_shown_in_full_next_to_the_message(self):
         self.rig.messages(body("make a slide deck for the board"))
         sent = listing_of(self.rig.sent())
-        self.assertEqual(sent["slides"], SKILLS["slides"])
-        self.assertTrue(sent["pdf-tools"].endswith("…"))
+        self.assertTrue(sent["slides"].endswith("…"))
+        self.assertIn("- slides: " + SKILLS["slides"], self.rig.sent()["messages"][0]["content"][1]["text"])
 
     def test_decision_is_frozen_for_the_conversation(self):
         first = body("make a slide deck for the board")
@@ -124,6 +124,17 @@ class SkillsLayerTest(LayerCase):
         self.assertIn("- pdf-tools: " + SKILLS["pdf-tools"], note["text"])
         self.assertEqual(human["text"], "now merge these pdf forms")
         self.assertEqual(sent[5]["content"], "and fill another pdf form")  # already shown: not repeated
+
+    def test_new_conversations_share_one_listing_and_the_match_goes_to_the_turn(self):
+        self.rig.messages(body("make a slide deck for the board"), session="s1")
+        self.rig.messages(body("look inside this pdf"), session="s2")
+        a, b = self.rig.sent(-2), self.rig.sent(-1)
+        self.assertEqual(a["messages"][1], b["messages"][1])
+        self.assertTrue(listing_of({"messages": a["messages"]})["slides"].endswith("…"))
+        note = a["messages"][0]["content"][-2]["text"]
+        self.assertIn("- slides: " + SKILLS["slides"], note)
+        self.assertIn("- pdf-tools: " + SKILLS["pdf-tools"], b["messages"][0]["content"][-2]["text"])
+        self.assertEqual(self.rig.records()[-1]["skills"]["first_full"], 0)
 
     def test_recently_used_skills_stay_full(self):
         self.store.mark_used("skill", "charts", "/repo/demo", "x1")
@@ -170,11 +181,11 @@ class AgentsLayerTest(LayerCase):
         self.assertGreater(self.rig.records()[-1]["agents"]["saved_chars"], 400)
         self.assertTrue(listing_of(self.rig.sent())["slides"].endswith("…"))  # the skills layer still ran
 
-    def test_matched_agent_keeps_its_full_line(self):
+    def test_matched_agent_is_shown_in_full_next_to_the_message(self):
         self.rig.messages(body("review this database migration query"))
         sent = self.agents()
-        self.assertEqual(sent["crew:db-reviewer"], AGENTS["crew:db-reviewer"])
-        self.assertTrue(sent["infra-planner"].endswith("…"))
+        self.assertTrue(sent["crew:db-reviewer"].endswith("…"))
+        self.assertIn("- crew:db-reviewer: " + AGENTS["crew:db-reviewer"], " ".join(b["text"] for b in self.rig.sent()["messages"][0]["content"]))
 
     def test_same_request_is_rewritten_to_the_same_bytes(self):
         request = body("fix the failing test")
@@ -269,9 +280,9 @@ class ToolsLayerTest(LayerCase):
         self.rig.messages(body("hi", tools=["Bash", "PowerShell", "ScheduleWakeup"]))
         self.assertEqual(self.deferred(), [])
 
-    def test_a_tool_the_message_names_stays_loaded(self):
+    def test_a_tool_the_message_names_is_still_deferred(self):  # ToolSearch loads it; the tool list must not depend on the text
         self.rig.messages(body("run this in powershell please"))
-        self.assertEqual(self.deferred(), ["ScheduleWakeup"])
+        self.assertEqual(self.deferred(), ["PowerShell", "ScheduleWakeup"])
 
     def test_a_tool_already_called_stays_loaded(self):
         called = [{"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "PowerShell", "input": {}}]},
@@ -285,8 +296,17 @@ class ToolsLayerTest(LayerCase):
         self.rig.messages(body("first conversation"))
         self.rig.messages(body("second conversation"))
         self.rig.records()
-        self.rig.messages(body("third conversation"))
+        with mock.patch.object(startup, "_today", return_value="2099-01-01"):  # the project's snapshot is taken per day
+            self.rig.messages(body("third conversation"))
         self.assertEqual(self.deferred(), ["PowerShell"])
+
+    def test_new_conversations_of_a_project_get_identical_tools(self):
+        self.rig.messages(body("fix the failing test"), session="s1")
+        self.store.mark_used("tool", "ScheduleWakeup", "/repo/demo", "x1")  # usage changes between them
+        self.store.mark_used("tool", "ScheduleWakeup", "/repo/demo", "x2")
+        self.rig.messages(body("run this in powershell please"), session="s2")
+        a, b = (json.dumps(self.rig.sent(i)["tools"]) for i in (-2, -1))
+        self.assertEqual(a, b)
 
     def test_hot_setting_wins(self):
         self.rig.cfg["tools"]["hot"] = ["PowerShell"]

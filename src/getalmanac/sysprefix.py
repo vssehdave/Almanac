@@ -4,10 +4,10 @@ Claude Code puts them in a session message that follows the typed text, so a new
 conversation never finds them in cache. As the last system block they sit before
 the typed text and are read from cache.
 
-Determinism: the result is a pure function of the request's own bytes and the
-skill and agent listings' first_full counts (fixed by the first typed text). No
-state is kept, so every request of a conversation, a resume and a fresh layer
-cut the same way."""
+Determinism: the result is a pure function of the request's own bytes. No state
+is kept, so every request of a conversation, a resume and a fresh layer cut the
+same way. The skill and agent listings are the same in every conversation of a
+project (see startup.py), so they move like the other sections."""
 import copy
 import re
 
@@ -19,11 +19,11 @@ _UNKNOWN = re.compile(r"\n\n(?=# \S)")  # a top-level heading inside a span: a s
 LOOK = 4  # messages searched, as the report does
 
 
-def _cuts(text, listings):
+def _cuts(text):
     """[(label, start, end)] of the movable sections in one text block."""
     out = []
     for label, start, end in _spans(text):
-        if label not in ORDER or (listings.get(label) or 0) > 0:
+        if label not in ORDER:
             continue
         hit = None if label == "MCP instructions" else _UNKNOWN.search(text, start + 1, end)  # server text has its own # headings
         out.append((label, start, hit.end() if hit else end))
@@ -39,8 +39,6 @@ class SysPrefixLayer:
         system, messages = body.get("system"), body.get("messages")
         if not isinstance(system, list) or not system or not isinstance(system[-1], dict) or not isinstance(messages, list):
             return
-        listings = {"skill listing": (ctx.stats.get("skills") or {}).get("first_full"),
-                    "agent types": (ctx.stats.get("agents") or {}).get("first_full")}
         for msg in messages[:LOOK]:
             content = msg.get("content") if isinstance(msg, dict) and msg.get("role") == "system" else None  # a user block may quote typed text
             if not isinstance(content, list):
@@ -49,7 +47,7 @@ class SysPrefixLayer:
                 text = block.get("text") if isinstance(block, dict) and block.get("type") == "text" else None
                 if not isinstance(text, str):
                     continue
-                cuts = _cuts(text, listings)
+                cuts = _cuts(text)
                 if cuts:
                     self._move(body, ctx, content, at, text, cuts)
                     return

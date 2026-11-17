@@ -88,15 +88,17 @@ Every session begins by sending every skill description and every tool schema,
 whether or not the conversation will use them.
 
 - **Skills.** Each description is cut to a short stub. A skill keeps its full
-  description when your first message matches it, when you list it in
-  `skills.always_full`, or when two of the project's last ten conversations used
-  it. If a later message matches a collapsed skill, its full description is
-  placed next to that message. Every skill stays listed and can be invoked by
-  name at any time.
+  description in the list when you put it in `skills.always_full` or when two of
+  the project's last ten conversations used it; that second set is read once per
+  project per day, so every new conversation of the project gets the same list.
+  When your first message matches a collapsed skill, its full description is
+  placed next to that message, and so it is for a later message that matches.
+  Every skill stays listed and can be invoked by name at any time.
 - **Agents.** The list of agent types gets the same treatment: each description
   is cut to `startup.agent_chars` characters (60 by default, `0` turns this off),
   and the `(Tools: ...)` part of a cut line is dropped. An agent whose
-  description matches your message gets its full line back, as skills do. Every
+  description matches your message gets its full line next to that message, as
+  skills do. Every
   agent stays listed and can be used by name.
 - **System prefix** (off by default, `startup.system_prefix`). Claude Code sends
   its session notes (MCP server instructions, advisor notes, the deferred tool
@@ -105,16 +107,19 @@ whether or not the conversation will use them.
   With this on, those sections are cut out of that message and placed as one
   block at the end of the system prompt, ahead of your text, and the cache
   breakpoint on the old last system block moves with them. The text is moved
-  as it is, in a fixed order, and only on the main thread. A skill or agent list
-  that shows an entry in full for your first message stays where it is. The cut
-  depends only on the request itself, so every request of a conversation is
+  as it is, in a fixed order, and only on the main thread. The skill and agent
+  lists move too, because they are the same in every conversation of a project.
+  The cut depends only on the request itself, so every request of a conversation is
   rewritten the same way. When those sections change (a new MCP server or
   skill, say), the next conversation writes them to the cache once.
 - **Tools.** Schemas of rarely used tools (`tools.cold`) are deferred. Their
   names are added to the list of deferred tools Claude Code already keeps, and
   the model loads one through its normal tool search when it needs it. A tool
-  your message names, a tool the conversation already called, or one used in two
-  recent conversations stays loaded.
+  the conversation already called stays loaded, and so does one used in two
+  recent conversations of the project. That second set is read once per project
+  per day, so every new conversation that day sends the same tool list and
+  reads it from the cache. A cold tool your first message names is not kept
+  loaded: it is announced by name and the model loads it through ToolSearch.
 
 Matching is keyword-based (BM25) and runs locally. It does not understand
 synonyms: "make slides" finds a skill that says "slide deck", but a request
