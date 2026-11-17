@@ -19,6 +19,11 @@
     runs in the conversation's folder with no model and no prompt, so it can
     run that repository's own code.
 
+- **A stable system prefix** (`startup.system_prefix`, off by default). The MCP
+  instructions, advisor notes, deferred tool names, agent types and skill list
+  move from the session message, which follows the typed text, to one block at
+  the end of the system prompt, with the cache breakpoint. A new conversation
+  can then read them from cache. The cut depends only on the request's bytes.
 - **A tighter playbook miner.** The steps of a way of working no longer list
   read-only shell filters (`head`, `tail`, `cut`, `cat`, `wc`, `sort`,
   `uniq`, `grep`, `ls`, `tr`, `tee`, `xargs`, `sed -n`); the tools still do.

@@ -27,20 +27,24 @@ _MARKS = [
 _MARK = re.compile("|".join(f"(?P<m{i}>{p})" for i, (p, _) in enumerate(_MARKS)), re.M)
 
 
-def _text_parts(text: str):
-    """Split injected text into (label, chars) by the markers above."""
+def _spans(text: str):
+    """Split injected text into (label, start, end) by the markers above."""
     if "Codebase and user instructions are shown below" in text[:300]:
-        return [("instructions (CLAUDE.md, memory index)", len(text))]
+        return [("instructions (CLAUDE.md, memory index)", 0, len(text))]
     if "you can use the following context" in text[:300]:
-        return [("user context", len(text))]
+        return [("user context", 0, len(text))]
     hits = [(m.start(), _MARKS[int(m.lastgroup[1:])][1]) for m in _MARK.finditer(text)]
     if not hits:
-        return [("conversation", len(text))]
-    parts = [("session context (other)", hits[0][0])] if hits[0][0] else []
+        return [("conversation", 0, len(text))]
+    spans = [("session context (other)", 0, hits[0][0])] if hits[0][0] else []
     for i, (pos, label) in enumerate(hits):
-        end = hits[i + 1][0] if i + 1 < len(hits) else len(text)
-        parts.append((label, end - pos))
-    return parts
+        spans.append((label, pos, hits[i + 1][0] if i + 1 < len(hits) else len(text)))
+    return spans
+
+
+def _text_parts(text: str):
+    """The same cut as (label, chars)."""
+    return [(label, end - start) for label, start, end in _spans(text)]
 
 
 def sections(body) -> dict:
