@@ -51,6 +51,9 @@ DEFAULTS = {
     },
     "library": {
         "min_tools": 5,  # an exchange with at least this many tool calls leaves an entry in the prompt library (no model call; deleted with its conversation)
+        "inject": True,  # tell Claude how an earlier, matching prompt was solved, when no playbook matches (see library.py)
+        "threshold": 0.5,  # word overlap (0 to 1) a typed prompt needs with a stored one before that note is shown
+        "note_chars": 800,  # most characters of that note
     },
     "compaction": {
         "enabled": True,
@@ -164,6 +167,7 @@ def load() -> dict:
             cfg["startup"]["system_prefix"] = False
             cfg["cheatsheet"]["mode"] = "off"  # "all" means no change to the request at all
             cfg["playbooks"]["enabled"] = False
+            cfg["library"]["inject"] = False
             cfg["accounts"]["fallback"] = []
         elif name == "agents":
             cfg["startup"]["agent_chars"] = 0

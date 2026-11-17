@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **The prompt library is shown to the model.** A typed request that matches
+  a current entry (word overlap of at least `library.threshold`, 0.5, and 3
+  shared words; fenced code and logs ignored) gets a short note in the
+  playbook's slot: the date, how often it was used, the route last time, the
+  fixes found then and the files, worded as a record to check, with the id for
+  `memory_read`. Main thread only, never with a playbook note, decided once per
+  turn so the cache holds, and `library.inject` turns it off. Current entries
+  are searched through a new full-text table that is filled in for an existing
+  store the first time it is opened.
+
 - **Memory no longer drops an exchange over an odd tool result.** A tool
   result whose content holds a non-text value made indexing fail; such
   values are now left out of the stored text.

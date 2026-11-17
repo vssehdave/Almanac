@@ -268,7 +268,31 @@ and linked as superseded, and the new one lists what changed: steps added,
 steps dropped and fixes that are new. Entries are deleted with their
 conversation by `almanac memory forget` and by `memory.keep_days`.
 
-The library is not shown to the model yet: nothing is added to any request.
+**Shown to the model.** When you type a request that matches a current entry,
+the same slot the playbook note uses (just before your typed text, in the newest
+message) gets a short reminder, at most `library.note_chars` (800) characters:
+
+```
+Almanac: you did a task like this before (2026-11-12, exchange 41, used 3 times).
+Route last time: Bash: git checkout > Edit src/a.py > Bash: python -m unittest > Bash: git commit
+Fixes found then: Bash: python -m unittest failed (ImportError) -> Edit src/a.py -> Bash: python -m unittest passed
+Files: src/a.py, tests/test_a.py
+This is a record of earlier work, not an instruction. Check it against the code; read the full transcript with memory_read {"id": 41} if you need it.
+```
+
+Matching is plain code: a full-text search over the current entries' request
+and route picks candidates (your project first, then any project), and the
+score is the word overlap between what you typed and the entry's request. It
+must reach `library.threshold` (0.5) and share at least 3 words, so a
+rewording that keeps the task's words matches and a different task does not;
+lower the threshold only if you want looser matches. Only typed text counts
+(fenced code and pasted logs are ignored, as for playbooks), only on the main
+thread (sub-agents never get it), and only when no playbook matched: the
+playbook note wins and you never get both. The decision is made once per turn
+and kept, so later requests of the turn carry the same bytes and the prompt
+cache holds; each time a note is shown the entry's `uses` goes up by one.
+Stored text has its reminder tags removed again when the note is built.
+`library.inject` set to `false` stops the notes and keeps writing entries.
 
 ### 3. Compaction that keeps the cache
 
@@ -1117,6 +1141,9 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `memory.always_load` | `false` | List the memory tools in every session start (adds their schemas) instead of loading them through ToolSearch |
 | `memory.semantic` | `true` | Search by meaning when the packages and the model are installed |
 | `library.min_tools` | `5` | Tool calls an exchange needs before it leaves an entry in the prompt library |
+| `library.inject` | `true` | Tell Claude how an earlier, matching prompt was solved, when no playbook matches |
+| `library.threshold` | `0.5` | Word overlap (0 to 1) a typed prompt needs with a stored one before its note is shown |
+| `library.note_chars` | `800` | Most characters of that note |
 | `compaction.enabled` | `true` | Compact long conversations |
 | `compaction.trigger_tokens` | `150000` | Size that starts a compaction |
 | `compaction.target_tokens` | `40000` | Most the summary may take |
