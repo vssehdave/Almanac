@@ -330,7 +330,8 @@ class CompactLayer:
         for block, n in fresh:
             if "{id}" in tpl:  # save it whole before it is replaced; a result that cannot be saved stays as it is
                 try:
-                    self.memory.save_raw(ctx.lane, block["tool_use_id"], result_text(block) or NO_TEXT)
+                    if not self.memory.has_raw(ctx.lane, block["tool_use_id"]):  # a long turn's results are often saved already
+                        self.memory.save_raw(ctx.lane, block["tool_use_id"], result_text(block) or NO_TEXT, cleaned=True)
                 except Exception:
                     continue
             ids[block["tool_use_id"]] = n

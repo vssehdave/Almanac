@@ -163,9 +163,10 @@ def result_text(block) -> str:
     return clean(str(inner or ""))
 
 
-def transcript(group, limit=DETAIL_LIMIT, result_chars=RESULT_CHARS, hint=False) -> str:
+def transcript(group, limit=DETAIL_LIMIT, result_chars=RESULT_CHARS, hint=False, cleaned=None) -> str:
     """One exchange as readable text: what was typed, each reply, each tool call and its result.
-    With `hint`, a cut result says which memory_read call returns the rest (the caller keeps it whole in `raw`)."""
+    With `hint`, a cut result says which memory_read call returns the rest (the caller keeps it whole in `raw`).
+    `cleaned` maps id(block) to result_text(block) when the caller has them already."""
     lines = []
     for msg in group:
         if msg.get("role") == "user" and not rq.is_tool_result(msg):
@@ -180,7 +181,9 @@ def transcript(group, limit=DETAIL_LIMIT, result_chars=RESULT_CHARS, hint=False)
             elif kind == "tool_use":
                 lines.append(f"[tool {block.get('name')}] " + clean(json.dumps(block.get("input"), ensure_ascii=False))[:600])
             elif kind == "tool_result":
-                inner = result_text(block)
+                inner = (cleaned or {}).get(id(block))
+                if inner is None:
+                    inner = result_text(block)
                 if len(inner) > result_chars:
                     call_id = block.get("tool_use_id")
                     how = (f'; memory_read {{"result": "{call_id}"}} returns it'
@@ -344,29 +347,39 @@ class Memory:
         if len(found) == 1:
             self.store.run("update convo set lane = ?, session = ? where id = ?", (lane, session, found[0]))
 
-    def _store_leaf(self, convo, project, seq, record, group):
+    def _leaf_texts(self, group) -> dict:
+        """What _store_leaf writes for an exchange, made without the store: the two transcripts and the tool results
+        long enough to keep whole. The regex cleaning is the slow part, so each result is cleaned once."""
+        cleaned = {id(b): result_text(b) for m in group if m.get("role") == "user" for b in rq.blocks(m)
+                   if b.get("type") == "tool_result"}
+        return {"detail": transcript(group, hint=True, cleaned=cleaned),
+                "search": transcript(group, limit=SEARCH_LIMIT, result_chars=SEARCH_RESULT, cleaned=cleaned),
+                "raw": [(b["tool_use_id"], cleaned[id(b)]) for m in group if m.get("role") == "user" for b in rq.blocks(m)
+                        if b.get("type") == "tool_result" and isinstance(b.get("tool_use_id"), str) and len(cleaned[id(b)]) > RESULT_CHARS]}
+
+    def _store_leaf(self, convo, project, seq, record, group, texts=None):
         """Write one exchange under a topic, with its transcript, the transcript search text and its large tool results.
         Returns (leaf id, topic id)."""
+        texts = texts or self._leaf_texts(group)
         vec = embed.embed(record["title"] + "\n" + record["text"])
         topic = self._topic_for(convo["id"], project, seq, record["title"], vec)
         leaf = self._add_node(convo["id"], project, topic, "leaf", seq, record["title"], record["text"], record["mark"], vec)
-        self.store.run("insert or replace into detail (node, text) values (?, ?)", (leaf, transcript(group, hint=True)))
-        self.store.run("insert into detail_fts (rowid, text) values (?, ?)",
-                       (leaf, transcript(group, limit=SEARCH_LIMIT, result_chars=SEARCH_RESULT)))
-        for msg in group:
-            for block in rq.blocks(msg) if msg.get("role") == "user" else ():
-                try:  # keeping a result whole is a bonus: a failure here must not lose the exchange
-                    if block.get("type") == "tool_result" and isinstance(block.get("tool_use_id"), str):
-                        text = result_text(block)
-                        if len(text) > RESULT_CHARS:
-                            self.save_raw(convo["lane"], block["tool_use_id"], text)
-                except Exception:
-                    pass
+        self.store.run("insert or replace into detail (node, text) values (?, ?)", (leaf, texts["detail"]))
+        self.store.run("insert into detail_fts (rowid, text) values (?, ?)", (leaf, texts["search"]))
+        for call_id, text in texts["raw"]:
+            try:  # keeping a result whole is a bonus: a failure here must not lose the exchange
+                self.save_raw(convo["lane"], call_id, text, cleaned=True)
+            except Exception:
+                pass
         return leaf, topic
 
-    def save_raw(self, lane, tool_use_id, text):
-        """Keep one tool result whole (compressed), so a stub or a cut transcript can be read back. `text` is cleaned first."""
-        text = clean(text)
+    def has_raw(self, lane, tool_use_id) -> bool:
+        return bool(self.store.run("select 1 from raw where lane = ? and tool_use_id = ?", (lane, tool_use_id)))
+
+    def save_raw(self, lane, tool_use_id, text, cleaned=False):
+        """Keep one tool result whole (compressed), so a stub or a cut transcript can be read back.
+        `cleaned` says `text` came from result_text, so it need not be cleaned again."""
+        text = text if cleaned else clean(text)
         if len(text) > RAW_LIMIT:
             text = text[:RAW_LIMIT] + f"\n... ({len(text) - RAW_LIMIT} more characters not kept)"
         self.store.run("insert or replace into raw (lane, tool_use_id, size, ts, data) values (?, ?, ?, ?, ?)",
@@ -386,17 +399,20 @@ class Memory:
         seq = len(turns) - 1
         group = messages[turns[-1]:] + ([{"role": "assistant", "content": reply["content"]}] if reply else [])
         size = len(json.dumps(group, ensure_ascii=False))
+        seen = self.store.get(f"partial:{lane}") or {}
+        if size - (seen.get("size", 0) if seen.get("seq") == seq else 0) < PARTIAL_CHARS:
+            return False
+        # the slow text work is done before the lock, which request threads also take
+        record, texts = exchange(group), self._leaf_texts(group)
+        record["text"] += "\n\nThis exchange was still running when it was stored: it is a partial record."
+        record["mark"] = "partial"
         with self.store.lock:
             rows = self.store.run("select id, lane, project from convo where lane = ?", (lane,))
-            seen = self.store.get(f"partial:{lane}") or {}
-            if not rows or size - (seen.get("size", 0) if seen.get("seq") == seq else 0) < PARTIAL_CHARS:
+            if not rows:
                 return False
-            record = exchange(group)
-            record["text"] += "\n\nThis exchange was still running when it was stored: it is a partial record."
-            record["mark"] = "partial"
             old = self.store.run("select id, parent from node where convo = ? and kind = 'leaf' and seq = ?", (rows[0]["id"], seq))
             self._drop_nodes([r["id"] for r in old])
-            leaf, topic = self._store_leaf(rows[0], rows[0]["project"], seq, record, group)
+            leaf, topic = self._store_leaf(rows[0], rows[0]["project"], seq, record, group, texts)
             # open, and never offered to the summary model (it would be replaced before the summary came back)
             self.store.run("update node set status = 'open', tries = 99 where id = ?", (leaf,))
             for node in {topic} | {r["parent"] for r in old}:
@@ -742,6 +758,8 @@ class Memory:
             old = self.store.run("select id, lane from convo where updated < ?", (time.time() - days * 86400,)) if days and days > 0 else []
             for row in old:
                 self._remove(row)
+            if days and days > 0:  # results kept for lanes with no conversation row (subagents) age out the same way
+                self.store.run("delete from raw where ts < ? and lane not in (select lane from convo)", (time.time() - days * 86400,))
             if self._cap_raw() or old:
                 self._scrub()
         return len(old)

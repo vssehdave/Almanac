@@ -135,6 +135,15 @@ class PagingTest(StoreCase):
         self.assertNotIn("toolu_0", left)
 
 
+class PruneDaysTest(StoreCase):
+    def test_old_results_of_a_lane_with_no_conversation_age_out(self):
+        self.memory.save_raw("agent-lane", "toolu_old", "old result " * 50)
+        self.memory.save_raw("agent-lane", "toolu_new", "new result " * 50)
+        self.store.run("update raw set ts = ? where tool_use_id = 'toolu_old'", (time.time() - 40 * 86400,))
+        self.memory.prune(30)
+        self.assertEqual([r["tool_use_id"] for r in self.store.run("select tool_use_id from raw")], ["toolu_new"])
+
+
 class SearchTranscriptTest(StoreCase):
     def big(self):
         return "noise " * 500 + " ERR_0xBEEF in row 7"
