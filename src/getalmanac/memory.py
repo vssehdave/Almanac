@@ -214,6 +214,9 @@ class Memory:
                                 ("last_user", "text not null default ''"), ("last_reply", "text not null default ''")):
                 if column not in have:  # a database written before conversation summaries
                     store.run(f"alter table convo add column {column} {ddl}")
+        from . import library  # imports this module, so not at the top
+        with store.lock:
+            store.db.executescript(library.SCHEMA)
         self.projects = Projects(store)
         self.kept = 0  # open conversations the last forget() left alone
 
@@ -622,7 +625,9 @@ class Memory:
 
     def _remove(self, row):
         """One conversation, and every copy of its text: nodes, and the per-conversation rows in `state` and `used`."""
+        from . import library
         self._drop_nodes([r["id"] for r in self.store.run("select id from node where convo = ?", (row["id"],))])
+        library.drop(self.store, [row["id"]])
         self.store.run("delete from convo where id = ?", (row["id"],))
         self._drop_lane(row["lane"])
 
@@ -703,6 +708,7 @@ class Memory:
             self.projects.merge(source, target)
             self.store.run("update node set project = ? where project = ?", (target, source))
             self.store.run("update convo set project = ? where project = ?", (target, source))
+            self.store.run("update library set project = ? where project = ?", (target, source))
             self.store.run("update used set project = ? where project = ?", (target, source))
 
 
@@ -750,4 +756,6 @@ class MemoryLayer:
         if not ctx.cfg["memory"]["enabled"] or not self._main_thread(orig, ctx):
             return
         self.memory.index(ctx.lane, ctx.session, ctx.project, orig["messages"], reply)
+        from . import library
+        library.observe(self.memory, ctx, orig["messages"], reply)
         self.memory.embed_pending()

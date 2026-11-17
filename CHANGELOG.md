@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Prompt library: how each solved prompt was worked.** After an exchange of
+  the main conversation ends with at least `library.min_tools` (5) tool calls,
+  code writes an entry: the request, the route, files, the fixes (a failed
+  step and what recovered it) and the outcome. No model call, redacted, and
+  deleted with its conversation. Not shown to the model yet.
+
 - **A fork of a conversation sent unchanged is sent unchanged too.** When the
   upstream refused a conversation's rewritten form, its forks were still
   rewritten, so their tool list differed from the parent's.
