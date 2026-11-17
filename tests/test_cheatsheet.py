@@ -101,10 +101,37 @@ class LayerTest(Fresh):
 
     def test_threads_get_it_and_other_requests_do_not(self):
         sheet = cheatsheet.text_for(MEDIUM)
-        self.assertTrue(run(MEDIUM, klass="subagent", agent="a1")["system"][-1]["text"].endswith(sheet))
+        self.assertTrue(run(MEDIUM, klass="subagent", agent="a1")["system"][-1]["text"].endswith(cheatsheet.text_for(MEDIUM, True)))
         self.assertTrue(run(MEDIUM, klass="subagent", agent="a1", agent_type="fork")["system"][-1]["text"].endswith(sheet))
         self.assertEqual(run(MEDIUM, tools=[])["system"], claude_system())  # titles and quota checks carry no tools
         self.assertEqual(run(MEDIUM, klass="title")["system"], claude_system())
+
+    def test_main_thread_text_is_the_full_sheet_and_a_fork_gets_the_same(self):
+        for model in (LARGE, MEDIUM, SMALL):
+            full = "Main prompt.\n\n" + cheatsheet.text_for(model)
+            self.assertEqual(run(model)["system"][-1]["text"], full)
+            self.assertEqual(run(model, klass="subagent", agent="a1", agent_type="fork")["system"][-1]["text"], full)
+
+    def test_a_sub_agent_gets_the_short_rules_and_the_skills_except_on_haiku(self):
+        agent, skills = cheatsheet.read("agent"), cheatsheet.read("skills")
+        for model in (LARGE, MEDIUM):
+            text = run(model, klass="subagent", agent="a1")["system"][-1]["text"]
+            self.assertEqual(text, "Main prompt.\n\n" + agent + "\n\n" + skills)
+        text = run(SMALL, klass="subagent", agent="a1")["system"][-1]["text"]
+        self.assertEqual(text, "Main prompt.\n\n" + agent)
+        self.assertNotIn(cheatsheet.read("opus"), json.dumps(run(LARGE, klass="subagent", agent="a1")))
+        self.assertNotIn("(Opus)", json.dumps(run(LARGE, klass="subagent", agent="a1")))
+        self.assertEqual(run("some-model", klass="subagent", agent="a1")["system"], claude_system())
+
+    def test_the_users_agent_copy_is_used(self):
+        home = tempfile.mkdtemp(prefix="almanac-sheet-")
+        os.makedirs(os.path.join(home, "cheatsheets"))
+        with open(os.path.join(home, "cheatsheets", "agent.md"), "w", encoding="utf-8") as handle:
+            handle.write("Be brief.\n")
+        with mock.patch.dict(os.environ, {"ALMANAC_HOME": home}):
+            self.assertEqual(cheatsheet.text_for(SMALL, True), "Be brief.")
+            self.assertEqual(cheatsheet.text_for(LARGE, True), "Be brief.\n\n" + cheatsheet.read("skills"))
+            self.assertIn("(Opus)", cheatsheet.text_for(LARGE))  # the full sheet is untouched
 
     def test_mode_off(self):
         self.assertEqual(run(LARGE, mode="off")["system"], claude_system())
@@ -129,11 +156,21 @@ class ProxyTest(Fresh):
         first = convo([{"text": "hi"}])
         self.rig.messages(body(first, SMALL, system=claude_system()), extra=MAIN)
         self.rig.messages(body(convo([{"text": "hi"}, {"text": "and more"}]), SMALL, system=claude_system()), extra=MAIN)
-        self.rig.messages(body(first, SMALL, system=claude_system()), extra=sub_headers())
         raw = [r["body"] for r in self.rig.upstream.requests]
         cut = [b[b.index(b'"system"'):b.index(b'"tools"')] for b in raw]
         self.assertEqual(len(set(cut)), 1)
         self.assertIn(json.dumps(cheatsheet.text_for(SMALL))[1:-1].encode(), cut[0])
+
+    def test_a_sub_agent_sends_the_same_system_bytes_every_time(self):
+        self.start()
+        self.rig.messages(body(convo([{"text": "hi"}]), LARGE, system=claude_system()), extra=sub_headers())
+        self.rig.messages(body(convo([{"text": "hi"}, {"text": "and more"}]), LARGE, system=claude_system()), extra=sub_headers())
+        raw = [r["body"] for r in self.rig.upstream.requests]
+        cut = [b[b.index(b'"system"'):b.index(b'"tools"')] for b in raw]
+        self.assertEqual(len(cut), 2)
+        self.assertEqual(cut[0], cut[1])
+        self.assertIn(json.dumps(cheatsheet.text_for(LARGE, True))[1:-1].encode(), cut[0])
+        self.assertNotIn(b"(Opus)", cut[0])
 
     def test_the_sheet_follows_the_routed_model_and_the_fallback(self):
         def respond(req):
@@ -215,7 +252,7 @@ class IndexTest(Fresh):
         self.assertIn("Playbooks on hand", self.sent()["system"][-1]["text"])
         fork = self.sent(klass="subagent", agent="a1", agent_type="fork")["system"][-1]["text"]
         self.assertEqual(fork, self.sent()["system"][-1]["text"])  # a fork shares its parent's cached prefix
-        self.assertEqual(self.sent(klass="subagent", agent="a1")["system"][-1]["text"], "Main prompt.\n\n" + plain)
+        self.assertEqual(self.sent(klass="subagent", agent="a1")["system"][-1]["text"], "Main prompt.\n\n" + cheatsheet.text_for(MEDIUM, True))
         self.assertEqual(self.sent(model=SMALL)["system"][-1]["text"], "Main prompt.\n\n" + cheatsheet.text_for(SMALL))
 
     def test_not_added_when_inject_is_off_or_there_is_no_sheet(self):
@@ -239,6 +276,13 @@ class CommandTest(Fresh):
         self.assertIn(cheatsheet.text_for(SMALL), text)
         self.assertIn("haiku: about", text)
         self.assertIn(str(config.home() / "cheatsheets"), text)
+
+    def test_show_agent(self):
+        with mock.patch("builtins.print") as shown:
+            self.assertEqual(cli._cheatsheet(["show", "agent"]), 0)
+        text = "\n".join(str(c.args[0]) for c in shown.call_args_list)
+        self.assertIn(cheatsheet.text_for(LARGE, True), text)
+        self.assertIn("agent, Haiku: about", text)
 
 
 if __name__ == "__main__":

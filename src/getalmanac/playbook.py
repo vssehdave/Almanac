@@ -111,7 +111,7 @@ def clean(data) -> dict:
     out = {"name": data.get("name"), "title": _text(data, "title", 1, 120), "when": _text(data, "when", 1, 300),
            "triggers": triggers, "project": _text(data, "project", 0, 200, required=False),
            "steps": _list(data, "steps", MAX_STEPS, 400, required=True),
-           "skills": _list(data, "skills", 20, 80), "agents": _list(data, "agents", 20, 80),
+           "phases": _list(data, "phases", 20, 40), "skills": _list(data, "skills", 20, 80), "agents": _list(data, "agents", 20, 80),
            "script": script, "args": [{"name": a["name"], "help": a.get("help", "")} for a in args],
            "auto": auto, "status": status, "hash": _text(data, "hash", 0, 64, required=False), "uses": uses,
            "created": _text(data, "created", 0, 32, required=False), "source": source}
