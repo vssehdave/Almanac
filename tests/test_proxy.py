@@ -194,6 +194,16 @@ class LauncherTest(unittest.TestCase):
         self.assertNotIn("ANTHROPIC_API_KEY", env)
         self.assertNotIn("ANTHROPIC_AUTH_TOKEN", env)
 
+    def test_claude_codes_own_compaction_is_switched_off_only_when_almanac_keeps_the_context(self):
+        def env(**compaction):
+            cfg = {"compaction": {"enabled": True, "own_the_context": True, **compaction}}
+            return launcher.child_env("http://127.0.0.1:1", parent={"PATH": "x"}, cfg=cfg)
+
+        self.assertEqual(env()["DISABLE_AUTO_COMPACT"], "1")
+        self.assertNotIn("DISABLE_AUTO_COMPACT", env(own_the_context=False))
+        self.assertNotIn("DISABLE_AUTO_COMPACT", env(enabled=False))
+        self.assertNotIn("DISABLE_AUTO_COMPACT", launcher.child_env("http://127.0.0.1:1", parent={"PATH": "x"}))
+
     def test_the_bundle_is_passed_as_a_plugin_folder_unless_turned_off(self):
         on = launcher.with_bundle(["-p", "hi"], {"bundle": {"enabled": True}})
         self.assertEqual(on[0], "--plugin-dir")

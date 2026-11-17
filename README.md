@@ -203,7 +203,7 @@ When a conversation passes `compaction.trigger_tokens` (150,000 by default) and
 you send a new message, everything before that message is replaced by:
 
 - the session-start context, unchanged,
-- an outline of every earlier exchange, and
+- an outline of the earlier exchanges, by status, and
 - the most recent exchanges in full.
 
 That replacement is stored and sent unchanged on every later request, so
@@ -211,12 +211,47 @@ Anthropic's prompt cache keeps hitting. It is rebuilt only after the
 conversation has grown a good deal again, and thrown away if you rewind or edit
 the covered messages.
 
-The outline of earlier exchanges is built from the stored summaries: the
-model-written ones when they exist, the rule-written ones otherwise. It is
-plainer than what `/compact` produces, so each exchange's transcript is also
-kept in the local memory and Claude can read any of them back by number. Compaction
-happens only when you send a message. During a long tool loop Claude Code's own
-compaction still applies. If your model has a larger window, raise the trigger:
+Each stored exchange has a status: `open` (the newest one, or one that ended on
+a question), `done`, `decision` (you stated a rule or a choice: "from now on",
+"always", "never", "instead of" and similar), `superseded` (your next message said
+it went wrong) or `noise` (only "ok" or "go ahead", or a command echo). Plain
+rules set it when the exchange is stored and again for the last exchanges
+whenever a new one arrives; the model that writes the summary may refine it at no
+extra call, but never turns a rule-made `decision` or `superseded` into something
+else. `almanac status` and `almanac memory recent` print the counts.
+
+The outline is in sections, within the same size budget: standing decisions
+first (oldest first, the last to be dropped), then open work with the longer
+summary, then done exchanges, newest first, until the room runs out, with a line
+saying how many more are not listed and that `memory_search` finds them.
+Superseded and noise exchanges are not listed, only counted. Each exchange's
+transcript is also kept in the local memory and Claude can read any of them back
+by number. The summaries are plainer than what `/compact` produces. The prefix
+is built when you send a message, from the statuses at that moment; a status that
+changes later affects only the next one.
+
+**Inside one long turn.** A turn can run hundreds of tool calls with no message
+from you, so there is nothing to rebuild. When a request in the middle of a turn
+reaches `compaction.window_share` (0.85) of the model's window, the old tool
+results of that turn are replaced by a one-line stub: all but the newest
+`compaction.keep_results` (12), leaving out results that are errors or under 2,000
+characters. The stub keeps the result's block and its id, so every call still has
+its answer, and says how long the result was. Tool calls, thinking, and
+everything before your last message are never touched. The stubbed set is stored
+and only grows during the turn, so every later request stubs the same results
+the same way and the cache keeps hitting; if one pass is not enough the next one
+stubs more, down to the newest 4. **A stubbed result cannot be restored:** if
+Claude needs it, it has to run the tool again. The set is cleared when the
+prefix is rebuilt, and `window_share` set to 0 turns this off. If the upstream
+refuses a body with stubs, the original goes out and the conversation is left
+alone from then on, as with a refused compaction. Stubs take back the room of the
+results only: a turn whose own tool calls and replies fill the window still will.
+
+Almanac now keeps the context, so it also sets `DISABLE_AUTO_COMPACT=1` for
+Claude Code when it starts it (`compaction.own_the_context`, on by default, and
+only while `compaction.enabled` is on). Claude Code's own compaction is then
+off; to have it back, run `almanac config set compaction.own_the_context false`.
+If your model has a larger window, raise the trigger:
 
 ```bash
 almanac config set compaction.trigger_tokens 600000
@@ -861,6 +896,9 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `compaction.enabled` | `true` | Compact long conversations |
 | `compaction.trigger_tokens` | `150000` | Size that starts a compaction |
 | `compaction.target_tokens` | `40000` | Most the summary may take |
+| `compaction.window_share` | `0.85` | Inside one long turn, old tool results are stubbed once a request reaches this share of the model's window (`0` is off) |
+| `compaction.keep_results` | `12` | Tool results of the current turn that are never stubbed (the newest) |
+| `compaction.own_the_context` | `true` | Also switch off Claude Code's own auto-compaction (`DISABLE_AUTO_COMPACT=1`) while compaction is on |
 | `routing.mode` | `"off"` | `"off"`, `"subagents"` or `"all"`: which requests get a chosen model |
 | `routing.models` | Haiku, Sonnet, Opus 5.5 | The model for `small`, `medium` and `large` |
 | `routing.ceiling` | `"large"` | The highest tier routing may pick (a pin ignores it) |

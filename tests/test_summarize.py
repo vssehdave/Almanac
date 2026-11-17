@@ -192,6 +192,29 @@ class SummaryTest(Case):
         self.ask("Question 5 about the retry helper")
         self.assertEqual(len(self.calls), 3)  # each of these questions is its own conversation
 
+    def test_the_models_status_refines_the_rule_and_a_decision_is_never_downgraded(self):
+        def verdict(status):
+            return message(json.dumps({"title": TITLE, "summary": SUMMARY, "status": status}))
+
+        self.verdict = verdict("done")  # the rules call the newest exchange open
+        self.ask("Add a retry helper to the fetch module")
+        self.assertEqual(self.leaves()[0]["status"], "done")
+        self.verdict = verdict("urgent")  # not a status: the rule's stays
+        self.ask("A second retry helper question")
+        self.assertEqual(self.leaves()[1]["status"], "open")
+        self.verdict = verdict("noise")
+        self.ask("From now on keep retries at five in the fetch module")
+        self.assertEqual(self.leaves()[2]["status"], "decision")
+        self.assertEqual(self.leaves()[2]["mstatus"], "noise")  # the model's word is kept, the rule's wins
+        self.assertEqual(summarize._parse(json.loads(message('{"title": "a", "summary": "b"}')[2])), ("a", "b", ""))
+
+    def test_the_models_status_survives_the_next_exchange(self):
+        self.verdict = message(json.dumps({"title": TITLE, "summary": SUMMARY, "status": "open"}))
+        self.ask("Add a retry helper to the fetch module")
+        self.verdict = GOOD
+        self.ask("Add a retry helper to the fetch module", earlier=1)  # the first exchange is no longer the newest
+        self.assertEqual([r["status"] for r in self.leaves()], ["open", "open"])
+
     def test_nothing_is_sent_when_the_model_is_not_set_or_the_request_is_not_the_main_thread(self):
         self.start(**{"memory.summary_model": ""})
         self.ask("Add a retry helper to the fetch module")
@@ -223,6 +246,22 @@ class MigrationTest(unittest.TestCase):
         memory.set_summary(2, "New title", "A summary about gizmos.")
         self.assertEqual(memory.search("gizmos", project="p")[0]["title"], "New title")
         self.assertEqual(memory.summaries("l"), {0: ("New title", "A summary about gizmos.")})
+
+    def test_a_database_from_before_statuses_is_upgraded(self):
+        path = os.path.join(tempfile.mkdtemp(prefix="almanac-mig-"), "old.db")
+        old = sqlite3.connect(path)
+        old.executescript(memory_mod.SCHEMA.replace(",\n    status text not null default 'done', mstatus text not null default ''", ""))
+        old.execute("insert into convo (id, lane, session, project, started, updated, turns) values (1, 'l', 's', 'p', 0, 0, 1)")
+        old.execute("insert into node (id, convo, project, kind, seq, ts, title, text) values (2, 1, 'p', 'leaf', 0, 0, 't', 'Asked: x')")
+        old.commit()
+        old.close()
+        self.assertNotIn("status", [r[1] for r in sqlite3.connect(path).execute("pragma table_info(node)")])
+        store = Store(path)
+        self.addCleanup(store.close)
+        memory = Memory(store)
+        Memory(store)
+        self.assertEqual(memory.statuses("l"), {0: "done"})
+        self.assertEqual(memory.status_counts()["done"], 1)
 
 
 class CompactionTest(tc.LayerCase):

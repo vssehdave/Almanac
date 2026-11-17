@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- **A status on every exchange, and a compaction outline by status.** Each
+  stored exchange is tagged `open`, `done`, `decision`, `superseded` or `noise`
+  by plain rules (the summary model may refine it, never downgrading a rule-made
+  decision or superseded). The outline built at a compaction is now in sections:
+  standing decisions first, open work, then done exchanges newest first until
+  the room runs out. Superseded and noise are only counted. `almanac status` and
+  `almanac memory recent` print the counts.
+- **Relief inside one long turn.** In the middle of a turn, once a request
+  reaches `compaction.window_share` (0.85) of the model's window, old tool
+  results of that turn (all but the newest `compaction.keep_results`, 12) are
+  replaced by a one-line stub that keeps the block and its id. The stubbed set
+  only grows within a turn, so the cache keeps hitting; it is cleared at the
+  next rebuild. A stubbed result cannot be restored: the tool has to be run
+  again. `window_share` `0` is off.
+- **The real window is learned from a size refusal.** The window table can be
+  wrong for a conversation (one model id has a 200k and a 1M form). When the
+  upstream answers "prompt is too long: N tokens > M maximum", M is kept for
+  that conversation and the same request is relieved against it and sent
+  again, so the turn goes on.
+- **Claude Code's own auto-compaction is switched off** while Almanac compacts
+  (`compaction.own_the_context`, on by default): `DISABLE_AUTO_COMPACT=1` is set
+  for the child. Set it to `false` to have Claude Code's own back.
 - **Playbooks from your past sessions.** `almanac playbook mine` finds tasks
   you repeat in Claude Code's session files with no model, and `almanac
   playbook compile` has one headless Sonnet session write the best one up as a
