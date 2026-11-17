@@ -25,12 +25,17 @@ def _plain(block):
     return {k: v for k, v in block.items() if k != "cache_control"} if isinstance(block, dict) else block
 
 
+BILLING = "x-anthropic-billing-header:"
+
+
 def blocks(body) -> list:
     """(label, sha256, tokens) per block in prompt order: tools, system, first two messages."""
     out = [_entry(f"tool: {t.get('name')}", _plain(t)) for t in body.get("tools") or []
            if isinstance(t, dict) and not t.get("defer_loading")]
     system = body.get("system")
     for n, block in enumerate([{"type": "text", "text": system}] if isinstance(system, str) else system or []):
+        if isinstance(block, dict) and str(block.get("text", "")).startswith(BILLING):
+            continue  # changes per conversation, but the API does not count it for the prompt cache (measured 2026-11-17)
         out.append(_entry(f"system {n}", _plain(block)))
     for m, msg in enumerate((body.get("messages") or [])[:2]):
         content = msg.get("content") if isinstance(msg, dict) else None

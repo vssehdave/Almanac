@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **The prefix report skips Claude Code's billing line.** It changes in every
+  conversation, but a real measurement showed the cache still read past it,
+  so naming it as the break hid the real one.
 - **Where the cache prefix breaks.** On the first request of each new main-thread conversation,
   Almanac now compares the prompt's blocks (tools, system blocks, the first two
   messages) with the project's previous first request, by hash, and logs the first
