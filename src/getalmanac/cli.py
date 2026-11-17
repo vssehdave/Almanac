@@ -38,7 +38,7 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac skill accept ITEM    stop the launch warning for this item at its current contents (`unaccept` undoes it)
   almanac pack list            the pack: third-party skills and plugins, each pinned to a commit
   almanac pack install [NAME]  install the pack's skills through the scan; plugins and programs are only shown
-  almanac playbook list|show|approve|remove|path   recorded ways of doing repeated tasks, and their scripts
+  almanac playbook list|show|approve [--auto]|remove|path   recorded ways of doing repeated tasks, and their scripts
   almanac playbook mine        find tasks you repeat in past sessions, no model (--days 30, --min 3)
   almanac playbook compile     have one Claude Code session write the best repeat up as a playbook (--top N, --dry-run)
   almanac projects             projects seen; `projects merge FROM INTO`, `projects rename NAME NEW`
@@ -547,7 +547,10 @@ def _playbook(rest):
     writing.add_argument("--dry-run", action="store_true")
     sub.add_parser("work")  # the background run started at launch
     for name in ("show", "approve", "remove"):
-        sub.add_parser(name).add_argument("name")
+        one = sub.add_parser(name)
+        one.add_argument("name")
+        if name == "approve":
+            one.add_argument("--auto", action="store_true", help="also let the proxy run the script before the model sees a matching request")
     args = parser.parse_args(rest)
     if args.cmd in ("mine", "compile", "work"):
         from . import mine
@@ -563,14 +566,14 @@ def _playbook(rest):
         return 0
     if args.cmd == "list":
         for pb in playbook.listing():
-            print(f"{pb['name']:<28} {pb['status']:<9} {pb['uses']:>4}  {pb['title']}")
+            print(f"{pb['name']:<28} {pb['status'] + (', auto' if pb['auto'] else ''):<14} {pb['uses']:>4}  {pb['title']}")
         return 0
     pb = playbook.load(args.name) if playbook.valid_name(args.name) else None
     if pb is None:
         print(f"almanac: no usable playbook called {args.name!r}; see `almanac playbook list`", file=sys.stderr)
         return 2
     if args.cmd == "show":
-        print(f"{pb['name']}  ({pb['status']}, used {pb['uses']} times, from {pb['source']}, {pb['created']})\n{pb['title']}\n"
+        print(f"{pb['name']}  ({pb['status']}{', automatic' if pb['auto'] else ''}, used {pb['uses']} times, from {pb['source']}, {pb['created']})\n{pb['title']}\n"
               f"When: {pb['when']}\nTriggers: {', '.join(pb['triggers'])}\nProject: {pb['project'] or 'any'}")
         print("Steps:\n" + "\n".join(f"  {i}. {s}" for i, s in enumerate(pb["steps"], 1)))
         print(f"Skills: {', '.join(pb['skills'])}\nAgents: {', '.join(pb['agents'])}")
@@ -584,10 +587,17 @@ def _playbook(rest):
     if not pb["script"]:
         print(f"{args.name} has no script, so there is nothing to approve.")
         return 0
-    digest, text = playbook.approve(args.name)
+    if args.auto and pb["args"]:
+        print(f"almanac: {args.name} takes arguments, so --auto is refused: a script that needs inputs cannot be run "
+              "from the words of a request.", file=sys.stderr)
+        return 2
+    digest, text = playbook.approve(args.name, args.auto)
     lines = text.splitlines()
     _print("\n".join(lines[:40]) + (f"\n... ({len(lines) - 40} more lines)" if len(lines) > 40 else ""))
     print(f"\nApproved {args.name}. sha256 {digest}\nIf the script changes, it goes back to draft until you approve it again.")
+    if args.auto:
+        print("Automatic: Almanac runs this script before Claude sees a matching request, in the conversation's folder, "
+              f"for up to {playbook.AUTO_TIMEOUT} seconds. Approve again without --auto to stop that.")
     return 0
 
 

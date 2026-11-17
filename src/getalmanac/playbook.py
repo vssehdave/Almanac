@@ -29,6 +29,9 @@ NOTE_LIMIT = 1500
 MIN_REQUEST = 12  # a shorter request is never matched
 RUN_TIMEOUT = 120  # seconds
 RUN_OUTPUT = 20000  # characters kept of each of stdout and stderr
+AUTO_TIMEOUT = 60  # seconds an automatic script may run before the request is sent
+AUTO_OUTPUT = 3000  # characters of stdout and stderr together that go into the request
+AUTO_NOTE_LIMIT = 5000
 SOURCES = ("claude", "miner", "owner")
 STATUSES = ("draft", "approved")
 
@@ -83,9 +86,9 @@ def clean(data) -> dict:
         if not isinstance(arg, dict) or not isinstance(arg.get("name"), str) or not 0 < len(arg["name"]) <= 40 \
                 or not isinstance(arg.get("help", ""), str) or len(arg.get("help", "")) > 200:
             raise ValueError("each arg is {name, help}, with a name of at most 40 characters and help of at most 200")
-    uses, script = data.get("uses", 0), data.get("script", False)
-    if type(uses) is not int or uses < 0 or type(script) is not bool:
-        raise ValueError("uses must be a whole number and script true or false")
+    uses, script, auto = data.get("uses", 0), data.get("script", False), data.get("auto", False)
+    if type(uses) is not int or uses < 0 or type(script) is not bool or type(auto) is not bool:
+        raise ValueError("uses must be a whole number and script and auto true or false")
     status, source = data.get("status", "draft"), data.get("source", "claude")
     if status not in STATUSES or source not in SOURCES:
         raise ValueError(f"status is one of {STATUSES} and source one of {SOURCES}")
@@ -94,7 +97,7 @@ def clean(data) -> dict:
            "steps": _list(data, "steps", MAX_STEPS, 400, required=True),
            "skills": _list(data, "skills", 20, 80), "agents": _list(data, "agents", 20, 80),
            "script": script, "args": [{"name": a["name"], "help": a.get("help", "")} for a in args],
-           "status": status, "hash": _text(data, "hash", 0, 64, required=False), "uses": uses,
+           "auto": auto, "status": status, "hash": _text(data, "hash", 0, 64, required=False), "uses": uses,
            "created": _text(data, "created", 0, 32, required=False), "source": source}
     if not valid_name(out["name"]):
         raise ValueError("bad name")
@@ -160,8 +163,9 @@ def _write(pb):
 def save(data, script=None):
     """Validate and store a playbook. Returns the stored dict.
 
-    status, hash, uses and created are not taken from the caller: no script means nothing to
-    approve, and a script is approved only while its text is the one the owner approved.
+    status, hash, auto, uses and created are not taken from the caller: no script means nothing to
+    approve, a script is approved only while its text is the one the owner approved, and only
+    `almanac playbook approve --auto` makes it run by itself (kept here only while that approval holds).
     """
     if not isinstance(data, dict) or not valid_name(data.get("name")):
         raise ValueError("a playbook needs a valid name")
@@ -170,7 +174,7 @@ def save(data, script=None):
     if script is not None and (not isinstance(script, str) or len(script.encode("utf-8")) > SCRIPT_LIMIT):
         raise ValueError(f"script must be text of at most {SCRIPT_LIMIT} bytes")
     wants = script is not None or (data.get("script") is not False and old is not None and old["script"])
-    pb = clean(dict(data, script=bool(wants), status="draft", hash="", uses=old["uses"] if old else 0,
+    pb = clean(dict(data, script=bool(wants), status="draft", hash="", auto=False, uses=old["uses"] if old else 0,
                     created=old["created"] if old else time.strftime("%Y-%m-%d")))
     if script is not None:
         pb["script"] = True
@@ -182,17 +186,20 @@ def save(data, script=None):
         pb["status"] = "approved"
     elif old and old["status"] == "approved" and old["hash"] and old["hash"] == script_hash(name):
         pb["status"], pb["hash"] = "approved", old["hash"]
+        pb["auto"] = old["auto"] and not pb["args"]
     _write(pb)
     return pb
 
 
-def approve(name):
-    """Record the hash of run.py as it is now. Returns (hash, text of run.py)."""
+def approve(name, auto=False):
+    """Record the hash of run.py as it is now; `auto` also lets the proxy run it. Returns (hash, text of run.py)."""
     pb = load(name)
     if pb is None or not pb["script"]:
         raise ValueError(f"no playbook called {name!r} with a script")
+    if auto and pb["args"]:
+        raise ValueError(f"{name} takes arguments, and a script that needs inputs cannot run from the words of a request")
     raw = _read(script_path(name), SCRIPT_LIMIT)
-    pb["status"], pb["hash"] = "approved", hashlib.sha256(raw).hexdigest()
+    pb["status"], pb["hash"], pb["auto"] = "approved", hashlib.sha256(raw).hexdigest(), bool(auto)
     _write(pb)
     return pb["hash"], raw.decode("utf-8", "replace")
 
@@ -205,8 +212,12 @@ def remove(name) -> bool:
     return True
 
 
-def run(name, args, cwd=None, timeout=None) -> str:
-    """Run an approved script. Returns the report for Claude; raises ValueError when it must not run."""
+class NotRun(Exception):
+    """The script is not approved any more; the message is what Claude is told."""
+
+
+def _execute(name, args, cwd=None, timeout=None) -> tuple:
+    """Run an approved script. Returns (head, stdout, stderr, exit code or None on a timeout)."""
     pb = load(name) if valid_name(name) else None
     if pb is None or not pb["script"]:
         raise ValueError(f"no playbook called {name!r} has a script")
@@ -214,16 +225,25 @@ def run(name, args, cwd=None, timeout=None) -> str:
         raise ValueError("args must be a list of strings")
     if not runnable(pb):
         why = "its script changed after approval" if pb["hash"] else "its script is a draft"
-        return (f"Not run: {why}. The owner approves it with `almanac playbook approve {name}`. "
-                f"Meanwhile run it yourself with Bash: python \"{script_path(name)}\" --help")
+        raise NotRun(f"Not run: {why}. The owner approves it with `almanac playbook approve {name}`. "
+                     f"Meanwhile run it yourself with Bash: python \"{script_path(name)}\" --help")
     cwd = cwd if cwd and Path(cwd).is_dir() else None
     try:  # shortcut: the hash is checked just before the start, not held across it; fine for a folder only the owner writes to
         done = subprocess.run([sys.executable, "-I", str(script_path(name)), *args], shell=False, cwd=cwd, stdin=subprocess.DEVNULL,
                               capture_output=True, timeout=timeout or RUN_TIMEOUT)
     except subprocess.TimeoutExpired as exc:
         out, err = (x.decode("utf-8", "replace") if isinstance(x, bytes) else (x or "") for x in (exc.stdout, exc.stderr))
-        return _report(f"timed out after {timeout or RUN_TIMEOUT} seconds and was stopped", out, err)
-    return _report(f"exit code {done.returncode}", done.stdout.decode("utf-8", "replace"), done.stderr.decode("utf-8", "replace"))
+        return f"timed out after {timeout or RUN_TIMEOUT} seconds and was stopped", out, err, None
+    return f"exit code {done.returncode}", done.stdout.decode("utf-8", "replace"), done.stderr.decode("utf-8", "replace"), done.returncode
+
+
+def run(name, args, cwd=None, timeout=None) -> str:
+    """Run an approved script. Returns the report for Claude; raises ValueError when it must not run."""
+    try:
+        head, out, err, _ = _execute(name, args, cwd, timeout)
+    except NotRun as why:
+        return str(why)
+    return _report(head, out, err)
 
 
 def _report(head, out, err) -> str:
@@ -264,6 +284,50 @@ def full(pb) -> str:
     return "\n".join(lines + ([_script_line(pb).rstrip()] if pb["script"] else []))
 
 
+def _step_lines(pb, room) -> str:
+    steps = []
+    for i, step in enumerate(pb["steps"], 1):
+        line = f"{i}. {step[:240]}\n"
+        if len(line) > room:
+            steps.append("...\n")
+            break
+        steps.append(line)
+        room -= len(line)
+    return "".join(steps)
+
+
+TAG = re.compile(r"<\s*/?\s*system-reminder[^>]*>", re.I)
+
+
+def _untag(text) -> str:
+    """Script output goes into a request: it must not be able to open or close a reminder."""
+    while TAG.search(text):
+        text = TAG.sub("", text)
+    return text
+
+
+def ran_note(pb, head, out, err) -> str:
+    """The reminder for a script Almanac already ran: its result, and the steps to fall back on. At most AUTO_NOTE_LIMIT characters."""
+    out, err = out.replace("\r\n", "\n"), err.replace("\r\n", "\n")
+    keep_err = min(len(err), AUTO_OUTPUT // 3)
+    keep_out = min(len(out), AUTO_OUTPUT - keep_err)
+    keep_err = min(len(err), AUTO_OUTPUT - keep_out)
+
+    def cut(text, keep):
+        return _untag(text[:keep]) + (f"\n[cut: {len(text) - keep} more characters]" if len(text) > keep else "")
+
+    top = (f'<system-reminder>\nAlmanac has already run the script of playbook "{pb["name"]}" ({pb["title"]}) for this request. '
+           f"Do not run it again and do not redo its steps by hand.\nResult: {head}\n--- stdout ---\n{cut(out, keep_out)}\n"
+           f"--- stderr ---\n{cut(err, keep_err)}\n")
+    tail = ("Use this result to answer the request. If the exit code is not 0 or the script timed out, say so to the owner "
+            "and carry on with these steps by hand:\n")
+    end = "</system-reminder>"
+    text = top + tail + _step_lines(pb, AUTO_NOTE_LIMIT - len(top) - len(tail) - len(end) - 8) + end
+    if len(text) > AUTO_NOTE_LIMIT:
+        text = text[:AUTO_NOTE_LIMIT - len(end) - 2].rstrip() + "…\n" + end
+    return text
+
+
 def note(pb) -> str:
     """The reminder added to the request, at most NOTE_LIMIT characters."""
     uses = pb["uses"]
@@ -278,15 +342,7 @@ def note(pb) -> str:
     tail = ("Follow it unless this request differs. If you change the approach or finish a task that will come up again, "
             "record it with `playbook_save`.\n</system-reminder>")
     fixed = head + "".join(extra) + tail
-    room, steps = NOTE_LIMIT - len(fixed) - 8, []
-    for i, step in enumerate(pb["steps"], 1):
-        line = f"{i}. {step[:240]}\n"
-        if len(line) > room:
-            steps.append("...\n")
-            break
-        steps.append(line)
-        room -= len(line)
-    text = head + "".join(steps) + "".join(extra) + tail
+    text = head + _step_lines(pb, NOTE_LIMIT - len(fixed) - 8) + "".join(extra) + tail
     if len(text) > NOTE_LIMIT:  # a very long title or when: keep the closing tag and cut inside
         text = text[:NOTE_LIMIT - len(tail) - 2].rstrip() + "…\n" + tail
     return text
@@ -346,7 +402,7 @@ class PlaybookLayer:
                     _insert_before_last(messages[mine[turn]], old)
         if text:
             _insert_before_last(messages[mine[-1]], text)
-            ctx.stats["playbook"] = {"chars": len(text)}
+            ctx.stats.setdefault("playbook", {})["chars"] = len(text)
 
     @staticmethod
     def _first(ctx, low) -> str:
@@ -354,4 +410,12 @@ class PlaybookLayer:
         if not best:
             return ""
         done = bump(best[0]["name"]) or best[0]
+        if (ctx.cfg.get("playbooks") or {}).get("auto_run") and done["auto"] and not done["args"] and runnable(done) \
+                and ctx.cwd and Path(ctx.cwd).is_dir():
+            try:  # holds the store's lock for at most AUTO_TIMEOUT seconds, once per typed turn
+                head, out, err, code = _execute(done["name"], [], ctx.cwd, AUTO_TIMEOUT)
+            except Exception:  # a script that cannot run leaves the ordinary note
+                return note(done)
+            ctx.stats["playbook"] = {"ran": done["name"], **({"exit": code} if code is not None else {"timeout": True})}
+            return ran_note(done, head, out, err)
         return note(done)
