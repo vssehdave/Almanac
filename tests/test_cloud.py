@@ -263,7 +263,7 @@ class HandoffTest(CloudCase):
         self.layer.observe(self.ctx, body, reply("Working on it.", stop=stop))
 
     def pushed(self, name=None):
-        ref = "almanac/handoff"
+        ref = "cloud/handoff"
         if name is None:
             return git(self.bare, "rev-parse", "--verify", "-q", ref) if self.has(ref) else ""
         return git(self.bare, "show", f"{ref}:{name}")
@@ -292,7 +292,7 @@ class HandoffTest(CloudCase):
             with open(os.path.join(self.alpha, ".git", "HEAD"), "rb") as handle:
                 head = handle.read()
             # newer git (2.56 in CI) records the pushed branch as origin's remote-tracking ref even when pushing by address
-            refs = [r for r in git(self.alpha, "for-each-ref").splitlines() if not r.endswith("refs/remotes/origin/almanac/handoff")]
+            refs = [r for r in git(self.alpha, "for-each-ref").splitlines() if not r.endswith("refs/remotes/origin/cloud/handoff")]
             return data, head, git(self.alpha, "rev-parse", "HEAD"), git(self.alpha, "branch", "--list"), \
                 refs, git(self.alpha, "status"), git(self.alpha, "status", "--short")
 
@@ -301,10 +301,10 @@ class HandoffTest(CloudCase):
         self.layer.beat(time.time() + 601)
         self.assertEqual(look(), before)
         head = git(self.alpha, "rev-parse", "HEAD")
-        files = git(self.bare, "ls-tree", "-r", "--name-only", "almanac/handoff").splitlines()
+        files = git(self.bare, "ls-tree", "-r", "--name-only", "cloud/handoff").splitlines()
         self.assertEqual(sorted(files), [".gitignore", "ALMANAC_HANDOFF.md", "almanac-handoff.json", "src/app.py"])  # untracked new.txt stays home
         self.assertEqual(self.pushed("src/app.py"), "print('two')")  # the work tree, not the index
-        self.assertEqual(git(self.bare, "rev-parse", "almanac/handoff^"), head)
+        self.assertEqual(git(self.bare, "rev-parse", "cloud/handoff^"), head)
         meta = self.state()
         self.assertEqual((meta["state"], meta["base_branch"], meta["base_commit"], meta["session"]), ("working", "work", head, "s1"))
         text = self.pushed("ALMANAC_HANDOFF.md")
@@ -342,8 +342,8 @@ class HandoffTest(CloudCase):
         self.turn([human("Wire the payment client"), call, out], "tool_use")
         self.layer.beat(time.time() + 601)
         refs = git(self.bare, "for-each-ref", "--format=%(refname)").split()
-        self.assertEqual(refs, ["refs/heads/almanac/handoff"])
-        files = git(self.bare, "ls-tree", "-r", "--name-only", "almanac/handoff").split()
+        self.assertEqual(refs, ["refs/heads/cloud/handoff"])
+        files = git(self.bare, "ls-tree", "-r", "--name-only", "cloud/handoff").split()
         self.assertNotIn(".env", files)
         self.assertEqual(self.pushed("config.py"), "x = 1")  # held at its HEAD version
         self.assertEqual(self.pushed("deploy.pem"), "placeholder")
@@ -351,7 +351,7 @@ class HandoffTest(CloudCase):
         text = self.pushed("ALMANAC_HANDOFF.md")
         self.assertIn("Left out of this branch", text)
         self.assertIn("config.py, deploy.pem", text)
-        self.assertIn("almanac hand-off: working [skip ci]", git(self.bare, "log", "-1", "--format=%s", "almanac/handoff"))
+        self.assertIn("almanac hand-off: working [skip ci]", git(self.bare, "log", "-1", "--format=%s", "cloud/handoff"))
         revs = git(self.bare, "rev-list", "--all").split()
         for needle in (stripe, ghp, hf, "Zq9x8c7v6b5n4m", "0f0f0f0f0f", "MIIEpAIBAAKCAQEA"):
             found = subprocess.run(["git", "--git-dir", self.bare, "grep", "-F", needle, *revs], capture_output=True, text=True)
@@ -381,7 +381,7 @@ class HandoffTest(CloudCase):
         layer.transform(body, self.ctx)
         layer.observe(self.ctx, body, reply("done", stop="end_turn"))  # a turn end wakes the thread
         for _ in range(100):
-            if self.has("almanac/handoff"):
+            if self.has("cloud/handoff"):
                 break
             time.sleep(0.1)
         self.assertEqual(self.state()["state"], "idle")
@@ -477,7 +477,7 @@ class HandoffTest(CloudCase):
         self.assertEqual(self.pushed(), "")  # outcome only counts: git runs on the heartbeat thread
         self.layer.beat(time.time() + 5)  # well inside the heartbeat interval
         self.assertEqual(self.state()["state"], "stalled")
-        self.assertIn("task", git(self.bare, "show", "almanac/handoff:ALMANAC_HANDOFF.md"))
+        self.assertIn("task", git(self.bare, "show", "cloud/handoff:ALMANAC_HANDOFF.md"))
         first = self.pushed()
         self.failures(3, 502)
         self.layer.beat(time.time() + 5000)
@@ -606,20 +606,20 @@ class HandoffTest(CloudCase):
         text = cloud.status(self.alpha, cfg, self.memory.store)
         self.assertIn(", working, commit " + sha, text)
         self.assertIn("takeover    none on origin", text)
-        git(self.bare, "branch", f"claude/almanac-takeover-{sha}", "almanac/handoff")
-        git(self.bare, "branch", "claude/other", "almanac/handoff")
+        git(self.bare, "branch", f"cloud/almanac-takeover-{sha}", "cloud/handoff")
+        git(self.bare, "branch", "cloud/other", "cloud/handoff")
         text = cloud.status(self.alpha, cfg, self.memory.store)
-        self.assertIn(f"claude/almanac-takeover-{sha} on origin: pull the work back", text)
-        self.assertNotIn("claude/other", text)
+        self.assertIn(f"cloud/almanac-takeover-{sha} on origin: pull the work back", text)
+        self.assertNotIn("cloud/other", text)
         self.assertIn("  auto        on", text)
 
     def test_the_watchdog_prompt_holds_every_stop_condition(self):
         text = cloud.watchdog(10)
-        for part in ("git fetch origin almanac/handoff`. If it fails (the branch does not exist), stop.",
+        for part in ("git fetch origin cloud/handoff`. If it fails (the branch does not exist), stop.",
                      'If its "state" is "idle", or its "base_branch" is', "If the number is below 1800",
                      'If its "state" is "stalled"', "skip the rest of this", "go on to step 4",
-                     "`git ls-remote origin refs/heads/claude/almanac-takeover-SHA`. If it prints anything, stop",
-                     "git checkout -b claude/almanac-takeover-SHA FETCH_HEAD", "is a record of earlier work",
+                     "`git ls-remote origin refs/heads/cloud/almanac-takeover-SHA`. If it prints anything, stop",
+                     "git checkout -b cloud/almanac-takeover-SHA FETCH_HEAD", "is a record of earlier work",
                      "draft pull request", "Never delete a branch, never force-push", "never push to the base branch"):
             self.assertIn(part, text)
         out = io.StringIO()

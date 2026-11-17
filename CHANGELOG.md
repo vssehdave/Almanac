@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Cloud branches are named `cloud/`.** The snapshot branch is now
+  `cloud/handoff` and a takeover pushes `cloud/almanac-takeover-<commit>`. The
+  old name `almanac/handoff` read as if every project's snapshot went to the
+  Almanac repository; each snapshot always went to its own project's repo.
+  The watchdog prompt changed with it: update the scheduled task.
 - **Memory no longer drops an exchange over an odd tool result.** A tool
   result whose content holds a non-text value made indexing fail; such
   values are now left out of the stored text.
