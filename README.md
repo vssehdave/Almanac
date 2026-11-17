@@ -370,11 +370,14 @@ own `usage`. The request log also records the model that really answered.
 
 ### 5. Working rules for each model
 
-Every conversation thread, main or sub-agent, gets a short set of working
-rules added to the end of its system prompt. The text depends on the model the
-request is sent with, after routing: Opus gets `opus.md` and then `common.md`,
-Sonnet gets `sonnet.md` and then `common.md`, Haiku gets `haiku.md` alone. Any
-other model gets nothing. Requests without tools (titles, quota checks) and
+Every conversation thread gets a short set of working rules added to the end
+of its system prompt. The text depends on the model the request is sent with,
+after routing. The main thread and its forks get the model's full sheet: Opus
+gets `opus.md` and then `common.md`, Sonnet gets `sonnet.md` and then
+`common.md`, Haiku gets `haiku.md` alone (a fork shares its parent's cached
+prefix, so it gets the same text). A sub-agent does one job and never hands
+over, merges or briefs anyone, so it gets only `agent.md` (about 200 words),
+plus the skills rules unless the model is Haiku. Any other model gets nothing. Requests without tools (titles, quota checks) and
 Almanac's own background calls are left alone.
 
 The text is read once per run and added in the same place every time, so the
@@ -384,12 +387,13 @@ the original model, the retry carries that model's rules.
 
 ```bash
 almanac cheatsheet show haiku    # the exact text added, and its size in tokens
+almanac cheatsheet show agent    # what a sub-agent gets instead
 almanac cheatsheet path          # where your own copies go
 almanac config set cheatsheet.mode off
 ```
 
 To change the text, put a file with the same name (`opus.md`, `sonnet.md`,
-`haiku.md` or `common.md`) in the folder `almanac cheatsheet path` prints. It
+`haiku.md`, `common.md` or `agent.md`) in the folder `almanac cheatsheet path` prints. It
 replaces the packaged one from the next run.
 
 ## Bundled skills and agents
@@ -943,7 +947,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac semantic on \| off` | Use the model when it is there, or stay keyword-based |
 | `almanac route [status]` | Routing mode, pin, unavailable tiers and the last 10 decisions |
 | `almanac route pin small\|medium\|large\|off` | Keep this project on one tier, or lift the pin |
-| `almanac cheatsheet show [opus\|sonnet\|haiku]` | The working rules added for that model, and their size |
+| `almanac cheatsheet show [opus\|sonnet\|haiku\|fable\|agent]` | The working rules added for that model (`agent`: what a sub-agent gets), and their size |
 | `almanac cheatsheet path` | Where your own copies of the rules go |
 | `almanac skill scan PATH\|URL` | Scan a skill or plugin (exit 0 SAFE, 1 CAUTION, 2 DO_NOT_INSTALL, 3 not scanned) |
 | `almanac skill add URL\|PATH` | Fetch into quarantine, scan, install the skills only if SAFE (`--skill`, `--ref`, `--accept-caution`, `--replace`) |

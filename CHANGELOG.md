@@ -11,6 +11,15 @@
   `playbook.json`; older files load as before), and a way of working that a
   stored playbook of any source already covers is not mined or compiled
   again, so the same work no longer gets several drafts.
+- **Short working rules for sub-agents.** A sub-agent thread used to get the
+  model's whole cheatsheet, most of it the lead's method (handovers, briefing
+  agents, merging, deadlines). It now gets a new `agent.md` (do the one job in
+  the brief, check before saying done, stop after two failed attempts, report
+  result first) plus `skills.md` unless the model is Haiku. The main thread and
+  forks keep the full sheet unchanged, so a fork still shares its parent's
+  cached prefix. For Opus a sub-agent's text drops from about 4,450 to about
+  1,320 tokens. `almanac cheatsheet show agent` prints it, and an `agent.md` in
+  `almanac cheatsheet path` replaces the packaged one.
 - **A usage and cache meter.** Each request in the log now records `cache`
   (how many `cache_control` breakpoints the client sent and the `ttl` of each,
   "5m" when none is given) and `idle` (seconds since the previous request of

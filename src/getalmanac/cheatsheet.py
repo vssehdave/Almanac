@@ -1,4 +1,6 @@
-"""Per-model working rules, appended to the system prompt of every conversation thread.
+"""Working rules, appended to the system prompt of every conversation thread.
+
+The main thread and its forks get the model's full sheet; a sub-agent gets the short `agent.md` instead.
 
 The text is chosen by the model the request will really be sent with, so this
 layer runs after routing. It is read once per process and appended in the same
@@ -12,7 +14,7 @@ from . import config
 from .routing import RoutingLayer
 
 FAMILIES = ("opus", "sonnet", "haiku", "fable")
-NAMES = (*FAMILIES, "common", "skills")
+NAMES = (*FAMILIES, "common", "skills", "agent")
 ALIASES = {"mythos": "fable"}  # the same model under another name
 INDEX = 12  # playbooks listed
 
@@ -35,11 +37,13 @@ def family(model: str) -> str:
     return next((f for f in FAMILIES if f in low), "") or next((v for k, v in ALIASES.items() if k in low), "")
 
 
-def text_for(model: str) -> str:
-    """What is appended for this model, or "" for a model with no cheatsheet."""
+def text_for(model: str, sub: bool = False) -> str:
+    """What is appended for this model, or "" for a model with no cheatsheet. `sub`: a sub-agent's short text."""
     name = family(model)
     if not name:
         return ""
+    if sub:  # one job, no handovers or merging: the short rules, and the skills unless the model is Haiku
+        return read("agent") if name == "haiku" else "\n\n".join([read("agent"), read("skills")])
     if name == "haiku":  # short on purpose: its own file is the whole text
         return read(name)
     parts = [read(name), read("skills")] if name == "fable" else [read(name), read("common"), read("skills")]
@@ -80,7 +84,8 @@ class CheatsheetLayer:
             return
         if not _thread(ctx, body):
             return
-        sheet = text_for(body["model"])
+        sub = RoutingLayer._kind(ctx, body) == "sub"  # a fork is not "sub": it keeps its parent's text
+        sheet = text_for(body["model"], sub)
         books = ctx.cfg.get("playbooks") or {}
         # the main thread and its forks only (a fork shares its parent's cached prefix); Haiku's sheet is short on purpose
         main = RoutingLayer._kind(ctx, body) == "main" or ctx.agent_type.lower() == "fork"
