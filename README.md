@@ -98,6 +98,18 @@ whether or not the conversation will use them.
   and the `(Tools: ...)` part of a cut line is dropped. An agent whose
   description matches your message gets its full line back, as skills do. Every
   agent stays listed and can be used by name.
+- **System prefix** (off by default, `startup.system_prefix`). Claude Code sends
+  its session notes (MCP server instructions, advisor notes, the deferred tool
+  names, the agent types and the skill list) in a message that comes after what
+  you typed, so a new conversation can never read them from the prompt cache.
+  With this on, those sections are cut out of that message and placed as one
+  block at the end of the system prompt, ahead of your text, and the cache
+  breakpoint on the old last system block moves with them. The text is moved
+  as it is, in a fixed order, and only on the main thread. A skill or agent list
+  that shows an entry in full for your first message stays where it is. The cut
+  depends only on the request itself, so every request of a conversation is
+  rewritten the same way. When those sections change (a new MCP server or
+  skill, say), the next conversation writes them to the cache once.
 - **Tools.** Schemas of rarely used tools (`tools.cold`) are deferred. Their
   names are added to the list of deferred tools Claude Code already keeps, and
   the model loads one through its normal tool search when it needs it. A tool
@@ -971,6 +983,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `skills.stub_chars` | `90` | Characters kept for a collapsed skill |
 | `skills.always_full` | `[]` | Skills never collapsed |
 | `startup.agent_chars` | `60` | Characters kept for a listed agent type (`0` leaves the agent list alone) |
+| `startup.system_prefix` | `false` | Move the stable session sections to the end of the system prompt so new conversations read them from cache |
 | `skills.scan_on_launch` | `true` | Scan new or changed skills and plugins in the background at each start, and warn about flagged ones |
 | `tools.enabled` | `true` | Defer cold tool schemas |
 | `tools.cold` | six tools | Tools deferred unless called for |

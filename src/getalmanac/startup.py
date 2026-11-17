@@ -134,6 +134,7 @@ class _ListingLayer:
             return sorted(keep & set(catalog))
 
         full = set(_frozen(ctx, self.KEY, decide))
+        first_full = len(full)  # fixed by the first typed text; the count below also grows with later turns
         lines = [f"- {name}: {desc if name in full else self.shorten(desc, chars)}" for name, desc in entries]
         text = block["text"]
         listing = self.MARK + "\n" + self.NOTE + self.GAP + "\n".join(lines)
@@ -155,7 +156,7 @@ class _ListingLayer:
                     + "\n".join(f"- {n}: {catalog[n]}" for n in hits) + "\n</system-reminder>")
             _insert_before_last(messages[at], note)
             saved -= len(note)
-        ctx.stats[self.KEY] = {"listed": len(entries), "full": len(shown), "saved_chars": saved}
+        ctx.stats[self.KEY] = {"listed": len(entries), "full": len(shown), "first_full": first_full, "saved_chars": saved}
 
 
 class SkillsLayer(_ListingLayer):
