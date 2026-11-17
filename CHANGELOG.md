@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+- **A long turn is searchable while it runs.** A turn with hundreds of tool
+  calls used to be stored only when it ended. Now, after every 30,000
+  characters of new work in a turn, an open record of the turn so far is stored
+  and found by `memory_search` (marked as still running), and the finished
+  exchange replaces it. The write happens in the background worker after the
+  reply, never on the request, and no request body changes.
+
+- **Search covers tool output.** `memory_search` and the note for a new
+  conversation now also match the transcript of each exchange, tool output
+  included (up to 200,000 characters of an exchange, 20,000 of one result), so
+  an id, an error or a path that only appeared in a command's output can be
+  found, and the hit's snippet is the matching line. An exchange the title and
+  text search already finds ranks as before; exchanges only the transcript
+  matches are added after it by rank fusion. A store from an earlier version is
+  filled in the first time it is opened.
+
+- **Tool output kept whole, and stubs you can undo.** Before a long turn's old
+  tool results are replaced by a stub, and when an exchange is stored, the full
+  result is saved in the local memory (compressed, secrets removed). The stub
+  now says that `memory_read {"result": "<tool call id>"}` returns it, and a
+  result cut short in a transcript says the same. `memory_read` takes `result`
+  with `start` and `end` and returns at most 400 lines or 40,000 characters at a
+  time, as a quoted record. `almanac memory forget` deletes the saved results,
+  and the start-up prune drops the oldest once they pass 100 MB. A turn that is
+  already running when this is installed keeps its old stub wording, so its
+  cache is not broken. With `memory.enabled` off the stub is unchanged.
+  A result on one very long line is paged in 40,000-character chunks, nothing
+  is saved with `memory.enabled` off, `memory_search` replies carry the
+  quoted-record note, and `Cookie:` and `Set-Cookie:` values are removed before
+  anything is stored.
 - **A fork of a conversation sent unchanged is sent unchanged too.** When the
   upstream refused a conversation's rewritten form, its forks were still
   rewritten, so their tool list differed from the parent's.
