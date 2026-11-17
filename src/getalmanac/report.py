@@ -139,6 +139,9 @@ def summary(records, now=None) -> dict:
             "held": len(held), "held_s": sum(held)}
 
 
+MAX_AGENTS = 4
+AUDIT = re.compile(r"audit|plan|review", re.I)
+BUILD = re.compile(r"build|implement|write the code", re.I)
 TTL_SECONDS = {"5m": 300, "1h": 3600}
 # List-price ratios to plain input, not the plan's real accounting.
 WEIGHTS = {"input_tokens": 1, "cache_creation_input_tokens": 1.25, "cache_read_input_tokens": 0.1, "output_tokens": 5}
@@ -254,6 +257,51 @@ def render_routing(records) -> str:
     return "\n".join(lines)
 
 
+def agents(records) -> dict:
+    """The sub-agent threads of the latest main conversation, one entry per lane, in the order they started."""
+    msgs = [r for r in records if r.get("kind") == "messages" and r.get("session")]
+    main = [r for r in msgs if not r.get("agent")]
+    if not main:
+        return {"threads": [], "peak": 0, "building": []}
+    session = main[-1]["session"]
+    lanes = {}
+    for r in msgs:
+        if r["session"] == session and r.get("agent") and r.get("lane"):
+            lanes.setdefault(r["lane"], []).append(r)
+    threads = []
+    for rs in lanes.values():
+        rs.sort(key=lambda r: r.get("ts") or 0)
+        usage = [r.get("usage") or {} for r in rs]
+        threads.append({"agent": next((r["agent_type"] for r in rs if r.get("agent_type")), "") or "unknown",
+                        "id": rs[0]["agent"], "model": rs[0].get("answered") or rs[0].get("model") or "unknown", "requests": len(rs),
+                        "input": sum(_tokens(u) for u in usage), "output": sum(int(u.get("output_tokens") or 0) for u in usage),
+                        "task": next((r["task"] for r in rs if r.get("task")), ""), "start": rs[0].get("ts") or 0, "end": rs[-1].get("ts") or 0})
+    threads.sort(key=lambda t: t["start"])
+    now = peak = 0
+    for _, step in sorted([(t["start"], 1) for t in threads] + [(t["end"], -1) for t in threads], key=lambda e: (e[0], -e[1])):
+        now += step
+        peak = max(peak, now)
+    # shortcut: a build job is spotted by words in the first task text; a task worded differently is missed
+    building = [t["agent"] for t in threads if "opus" in t["model"].lower() and not AUDIT.search(t["agent"]) and BUILD.search(t["task"])]
+    return {"threads": threads, "peak": peak, "building": building}
+
+
+def render_agents(records) -> str:
+    """Lines for `almanac report`, or "" when the latest conversation ran no sub-agent."""
+    a = agents(records)
+    if not a["threads"]:
+        return ""
+    lines = ["", "Agents in the latest session:"]
+    for t in a["threads"]:
+        lines.append(f"  {t['agent'][:24]:<24} {t['model']:<24} {t['requests']:>3} req, in {t['input']:>9,}, out {t['output']:>7,}"
+                     + (f"  {t['task']}" if t["task"] else ""))
+    if a["peak"] > MAX_AGENTS:
+        lines.append(f"Warning: {a['peak']} sub-agent threads were active at the same time (limit {MAX_AGENTS}).")
+    if a["building"]:
+        lines.append("Warning: Opus used for building: " + ", ".join(dict.fromkeys(a["building"])))
+    return "\n".join(lines)
+
+
 def render(records) -> str:
     record = startup(records)
     if not record:
@@ -279,4 +327,4 @@ def render(records) -> str:
     if totals["held"]:
         lines.append(f"{totals['held']} request(s) waited out a network outage, {totals['held_s']:,} seconds in all.")
     lines.append("Per-part figures are the exact total split by size, so treat them as estimates.")
-    return "\n".join(lines) + render_routing(records)
+    return "\n".join(lines) + render_routing(records) + render_agents(records)

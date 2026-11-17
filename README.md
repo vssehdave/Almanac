@@ -380,6 +380,25 @@ carries the same under `meter`. The log records `cache` and `idle` per request.
 declined, raises after failures, and tokens per model, read from the replies'
 own `usage`. The request log also records the model that really answered.
 
+`almanac report` also lists the sub-agents of the latest conversation, so you
+can see which model did which task. It prints one line per sub-agent thread:
+its type, the model, requests, input plus cache tokens, output tokens, and the
+first 80 characters of its task:
+
+```
+Agents in the latest session:
+  Explore                  claude-haiku-5-5           4 req, in    52,310, out   1,204  Find where the retry helper is defined
+  general-purpose          claude-opus-4-7           12 req, in   410,880, out  18,433  Implement the retry change in sync.py
+Warning: Opus used for building: general-purpose
+```
+
+A warning follows when more than four sub-agent threads were active at the
+same time, or when an Opus sub-agent whose type is not an audit, plan or
+review one was given a task that says "build", "implement" or "write the
+code". For this the log records `agent_type` on each sub-agent request and
+`task` on the first request of a sub-agent thread: its first 80 characters
+with secrets taken out, never more.
+
 ### 5. Working rules for each model
 
 Every conversation thread gets a short set of working rules added to the end
