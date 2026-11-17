@@ -26,7 +26,7 @@ from . import config
 from . import request as rq
 from . import sse
 from . import upstream
-from .report import Log, sections
+from .report import Log, cache_marks, sections
 
 REQUEST_SKIP = {"host", "connection", "keep-alive", "transfer-encoding", "te", "upgrade",
                 "proxy-authorization", "proxy-connection", "content-length"}
@@ -96,6 +96,7 @@ class Proxy:
         self.ctx = upstream.context(cfg, self.env) if self.secure else None
         self.token = secrets.token_urlsafe(16)  # the first path segment every client request must carry
         self.key = secrets.token_urlsafe(32)  # proves this process to `almanac`; never sent in any request
+        self.last_seen = {}  # lane -> start time of its previous request
         self.fused = {}  # lane -> why its rewrites were switched off
         self.tls = None  # a tls.Session when running as an HTTPS proxy
         self.started, self.count = time.time(), 0
@@ -174,6 +175,16 @@ class Proxy:
             record["usage"] = {k: v for k, v in reply["usage"].items() if isinstance(v, int)}
             if reply.get("model"):
                 record["answered"] = reply["model"]  # the model that really replied
+        if orig and ctx.kind == "messages":
+            try:  # observation only: from the client's own body, and never allowed to fail the request
+                record["cache"] = cache_marks(orig)
+                before = self.last_seen.get(ctx.lane) if ctx.lane else None
+                if ctx.lane:
+                    self.last_seen[ctx.lane] = started
+                if before is not None:
+                    record["idle"] = round(max(0.0, started - before), 1)
+            except Exception:
+                record.pop("cache", None)
         record.update(ctx.stats)
         if orig and reply and len(orig["messages"]) <= 3 and orig.get("tools"):
             record["sections"] = sections(ctx.after or orig)
