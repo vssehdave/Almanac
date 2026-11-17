@@ -89,6 +89,7 @@ _SECRETS = [
     # The credential must hold a digit, so prose such as "basic error-handling" stays readable.
     (re.compile(r"(?i)\b(Bearer|Basic)\s+(?=[A-Za-z._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{12,}"), r"\1 [removed]"),
     (re.compile(r"(?i)(Authorization:[ \t]*[A-Za-z]+[ \t]+)[^\s\"']{8,}"), r"\1[removed]"),
+    (re.compile(r"(?i)\b((?:Set-)?Cookie:[ \t]*)[^\r\n\"'\\]+"), r"\1[removed]"),  # stops at a quote or a JSON-escaped break
     (re.compile(r"://[^/\s:@]+:[^/\s@]+@"), "://[removed]@"),
     # NAME=value where NAME ends in secret, token, pass(word), api, account or private key (GITHUB_TOKEN, DB_PASS,
     # apiKey), quoted or JSON-escaped (a tool call is stored as JSON: API_KEY=\"...\"),
@@ -196,12 +197,20 @@ def transcript(group, limit=DETAIL_LIMIT, result_chars=RESULT_CHARS, hint=False,
     return text
 
 
+def may_hold(text: str, terms) -> bool:
+    """Cheap test, no tokenizing: could `text` hold one of the query words? A stem is a prefix of its word (or
+    of it less one letter, "studies" -> "study"), so a term cut by one letter is found inside every word it stems."""
+    low = text.lower()
+    return any(t[:max(2, len(t) - 1)] in low for t in terms)
+
+
 def snippet(text: str, terms: set, limit=230) -> str:
     """The stretch of `text` that holds the most query words."""
     pieces = [" ".join(p.split()) for p in re.split(r"(?<=[.!?])\s+|\n+", text) if p.strip()]
     if not pieces:
         return ""
-    best = max(range(len(pieces)), key=lambda i: (len(terms & set(tokens(pieces[i]))), -i))
+    hot = [i for i in range(len(pieces)) if may_hold(pieces[i], terms)] or [0]  # only these are worth tokenizing
+    best = max(hot, key=lambda i: (len(terms & set(tokens(pieces[i]))), -i))
     out = pieces[best]
     if len(out) < limit // 2 and best + 1 < len(pieces):
         out += " " + pieces[best + 1]
@@ -521,7 +530,10 @@ class Memory:
             sql, args = sql + " and c.lane = ?", args + [lane]
         found = []
         for row in self.store.run(sql + " order by bm25(detail_fts) limit 20", args):
-            if row["id"] in known or len(terms & set(tokens(row["dtext"]))) < need:
+            if row["id"] in known:
+                continue
+            hot = "\n".join(line for line in row["dtext"].split("\n") if may_hold(line, terms))
+            if len(terms & set(tokens(hot))) < need:
                 continue
             hit = {k: row[k] for k in row.keys() if k != "dtext"}
             hit["snippet"] = snippet(row["dtext"], terms)

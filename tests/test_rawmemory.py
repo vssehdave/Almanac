@@ -9,6 +9,7 @@ from helpers import sse
 
 import test_compact as tc
 from getalmanac import compact, mcp
+from getalmanac import memory as memory_mod
 from getalmanac.memory import Memory
 from getalmanac.store import Store
 
@@ -75,6 +76,14 @@ class RawStubTest(tc.LayerCase):
         self.assertEqual(tc.results(sent)[0]["content"], compact.STUB.format(n=3003))
         self.assertNotIn("memory_read", json.dumps(tc.results(sent)[:18]))
 
+    def test_with_memory_turned_off_mid_turn_nothing_more_is_saved(self):
+        self.go(tc.long_turn(30, size=10000))
+        before = self.store.run("select count(*) n from raw")[0]["n"]
+        self.assertGreater(before, 0)
+        self.rig.cfg["memory"]["enabled"] = False
+        self.go(tc.long_turn(44, size=10000))
+        self.assertEqual(self.store.run("select count(*) n from raw")[0]["n"], before)
+
     def test_with_memory_off_the_stub_does_not_point_at_it(self):
         self.rig.cfg["memory"]["enabled"] = False
         sent = self.go(tc.long_turn(30))
@@ -104,6 +113,17 @@ class PagingTest(StoreCase):
         text = reading(self.memory, result="toolu_x")
         self.assertLess(len(text), 41000)
         self.assertIn("start=", text)
+
+    def test_a_result_on_one_very_long_line_can_be_paged_to_its_end(self):
+        self.memory.save_raw("lane", "toolu_x", "a" * 100000 + "END_MARKER")
+        text, start = "", 1
+        for _ in range(10):
+            page = reading(self.memory, result="toolu_x", start=start)
+            text += page
+            if "END_MARKER" in page:
+                break
+            start = int(page.split("start=")[1].split(".")[0])
+        self.assertIn("END_MARKER", text)
 
     def test_an_unknown_result_says_so(self):
         self.assertIn("No stored tool result", reading(self.memory, result="nope"))
@@ -161,6 +181,36 @@ class SearchTranscriptTest(StoreCase):
     def test_a_search_that_matches_the_answer_is_unchanged(self):
         self.memory.index("lane-1", "s1", "", with_result("short"), FINAL)
         self.assertEqual(len(self.memory.search("importer bad row")), 1)
+
+    def test_a_search_over_large_transcripts_tokenizes_only_the_lines_that_match(self):
+        filler = "\n".join(f"line {i} of ordinary build output with nothing special in it" for i in range(300))
+        for n in range(5):
+            calls = [with_result(filler + "\n" + "x " * 100)[0]]
+            for k in range(10):
+                calls += [{"role": "assistant", "content": [{"type": "tool_use", "id": f"t{n}_{k}", "name": "Bash", "input": {}}]},
+                          {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"t{n}_{k}",
+                                                        "content": filler + (f"\nfound zqneedle{n} here" if k == 3 else "")}]}]
+            self.memory.index(f"lane-{n}", "s", "", calls, FINAL)
+        counted = []
+        real = memory_mod.tokens
+        memory_mod.tokens = lambda text: counted.append(len(text)) or real(text)
+        self.addCleanup(setattr, memory_mod, "tokens", real)
+        hits = self.memory.search("zqneedle3")
+        self.assertEqual(len(hits), 1)
+        self.assertIn("zqneedle3", hits[0]["snippet"])
+        self.assertLess(sum(counted), 5000)  # the five transcripts hold more than 100,000 characters
+
+    def test_search_replies_are_marked_as_a_quoted_record(self):
+        self.memory.index("lane-1", "s1", "", with_result(self.big()), FINAL)
+        self.assertIn("quoted record", mcp.call(self.memory, "memory_search", {"query": "ERR_0xBEEF", "project": "all"}, "."))
+
+    def test_cookie_header_values_are_not_stored(self):
+        body = "HTTP/1.1 200 OK\nSet-Cookie: session=abc123; Path=/\nCookie: token_x=zzz999; other=1\n" + "x" * 2000
+        self.memory.index("lane-1", "s1", "", with_result(body), FINAL)
+        self.assertNotIn("abc123", reading(self.memory, result="toolu_big"))
+        self.assertNotIn("zzz999", reading(self.memory, result="toolu_big"))
+        self.assertNotIn("abc123", self.memory.detail(self.store.run("select node from detail")[0]["node"]))
+        self.assertEqual(memory_mod.redact('curl -H \\"Cookie: a=b1234\\" url'), 'curl -H \\"Cookie: [removed]\\" url')
 
     def test_forget_removes_it_from_search_and_storage(self):
         self.memory.index("lane-1", "s1", "", with_result(self.big()), FINAL)

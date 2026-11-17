@@ -28,6 +28,10 @@
   and the start-up prune drops the oldest once they pass 100 MB. A turn that is
   already running when this is installed keeps its old stub wording, so its
   cache is not broken. With `memory.enabled` off the stub is unchanged.
+  A result on one very long line is paged in 40,000-character chunks, nothing
+  is saved with `memory.enabled` off, `memory_search` replies carry the
+  quoted-record note, and `Cookie:` and `Set-Cookie:` values are removed before
+  anything is stored.
 
 - **Guidance for the memory tools.** The memory server now sends constant
   instructions with its handshake (summaries drop exact values, read the

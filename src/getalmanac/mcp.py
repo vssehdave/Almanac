@@ -73,7 +73,7 @@ def _day(ts) -> str:
 def render_hits(hits) -> str:
     if not hits:
         return "Nothing stored matches."
-    return "\n".join(f"[{h['id']}] {_day(h['ts'])} {h['title']}\n    {h['snippet']}" for h in hits)
+    return "\n".join(f"[{h['id']}] {_day(h['ts'])} {h['title']}\n    {h['snippet']}" for h in hits) + "\n" + QUOTED
 
 
 def render_node(memory, node) -> str:
@@ -102,7 +102,7 @@ def render_result(memory, call_id, start=1, end=None) -> str:
     text = memory.raw(call_id)
     if text is None:
         return "No stored tool result has that id. Only results Almanac stored are kept, and old ones are dropped."
-    lines = _BREAK.split(text)
+    lines = [line[i:i + READ_CHARS] for line in _BREAK.split(text) for i in range(0, max(len(line), 1), READ_CHARS)]  # a one-line result is paged in chunks
     start = max(1, start)
     if start > len(lines):
         return f"That tool result has only {len(lines)} lines."
