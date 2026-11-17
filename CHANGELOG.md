@@ -18,6 +18,12 @@
 - **The playbook check repeats while a session is open.** It ran only when
   `almanac` started Claude Code. A long session now checks again every 6
   hours, with no output.
+- **The Opus working rules are the full method now.** `opus.md` was a short
+  list of slips. It now says how the lead model works a task from start to
+  finish: start from the stored state, doubt its own measurements, make the
+  reversible decisions and say them, hand building to Sonnet and audits to a
+  second Opus with complete briefs, keep the session cheap, clean up, and
+  report the result first.
 - **`ALMANAC_DISABLE=all` now turns everything off.** It left the cheatsheet
   and playbooks on, so a run meant to be plain Claude Code still had text
   added to it.
