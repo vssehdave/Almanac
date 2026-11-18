@@ -397,6 +397,16 @@ class Status(ImportBase):
         topics = self.store.run("select ts from node where kind = 'topic'")
         self.assertTrue(all(r["ts"] <= epoch(second) + 1 for r in topics))
 
+    def test_only_the_last_exchange_of_an_imported_conversation_may_be_open(self):
+        t = (self.session().turn(stamp(2, 0), "a first thing", "Which do you want?")
+             .turn(stamp(2, 1), "b second thing", "Done. Shall I also remove the old one?"))
+        self.run_import(t.write())
+        self.assertEqual([l["status"] for l in self.leaves()], ["done", "open"])
+        first, last = [r["id"] for r in self.store.run("select id from node where kind = 'leaf' order by seq")]
+        self.memory.set_summary(first, "First", "Asked which.", status="open")  # the model calls it unfinished
+        self.memory.set_summary(last, "Second", "Done.", status="open")
+        self.assertEqual([l["status"] for l in self.leaves()], ["done", "open"])
+
     def test_a_model_summary_cannot_reopen_old_work(self):
         t = self.session().turn(stamp(21), "set up the thing", "Done.")
         self.run_import(t.write())
