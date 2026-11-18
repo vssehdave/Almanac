@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Automatic playbook approvals are signed.** `approve --auto` now signs its
+  `auto.json` entry with a random key kept in `auto.key`, so copying an
+  approved script's hash into `auto.json` no longer makes it run by itself.
+  Entries written by older versions are not signed: run
+  `almanac playbook approve NAME --auto` again for each automatic playbook.
+
 - **`almanac library forget` names what it deleted.** It prints the ids.
 - **Manage and look up the prompt library.** `almanac library list`,
   `show ID` (the entry, its fixes and the entries it replaced, with what

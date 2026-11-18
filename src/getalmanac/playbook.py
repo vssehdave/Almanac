@@ -7,9 +7,11 @@ against them with plain code and tells Claude which one applies. A script runs t
 `playbook_run` tool only after the owner approved the exact text with `almanac playbook approve`.
 """
 import hashlib
+import hmac
 import json
 import os
 import re
+import secrets
 import signal
 import shutil
 import subprocess
@@ -173,6 +175,22 @@ def auto_file() -> Path:
     return config.home() / "auto.json"
 
 
+def _auto_key(make=False):
+    """The CLI's own random key, kept beside auto.json. A model that can write files but not run code cannot sign an
+    entry with it, so copying an approved script's hash into auto.json no longer makes it automatic."""
+    path = config.home() / "auto.key"
+    key = _read(path, 1024)
+    if (not key or len(key) < 32) and make:
+        config.home().mkdir(parents=True, exist_ok=True)
+        key = secrets.token_bytes(32)
+        path.write_bytes(key)
+    return key if key and len(key) >= 32 else None
+
+
+def _auto_sign(name, digest, key) -> str:
+    return digest + ":" + hmac.new(key, f"{name}\0{digest}".encode("utf-8"), hashlib.sha256).hexdigest()
+
+
 def _auto_read() -> dict:
     try:
         raw = _read(auto_file(), JSON_LIMIT)
@@ -185,7 +203,7 @@ def _auto_read() -> dict:
 def _auto_set(name, digest=None):
     data = _auto_read()
     if digest:
-        data[name] = digest
+        data[name] = _auto_sign(name, digest, _auto_key(make=True))
     elif name in data:
         del data[name]
     else:
@@ -196,7 +214,10 @@ def _auto_set(name, digest=None):
 
 def automatic(pb) -> bool:
     """Would the proxy run this script by itself now: marked auto, no args, still approved, and the owner's entry names this exact script."""
-    return bool(pb["auto"] and not pb["args"] and runnable(pb) and _auto_read().get(pb["name"]) == pb["hash"])
+    if not (pb["auto"] and not pb["args"] and runnable(pb)):
+        return False
+    key = _auto_key()
+    return bool(key) and hmac.compare_digest(_auto_read().get(pb["name"], ""), _auto_sign(pb["name"], pb["hash"], key))
 
 
 def shown_status(pb) -> str:
