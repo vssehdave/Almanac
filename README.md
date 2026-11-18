@@ -211,6 +211,47 @@ summary) is marked as a quoted record, and lines of tool output are indented so
 they cannot pose as a `User:` turn. That lowers the risk of an injected
 instruction in stored text. It does not remove it.
 
+#### Importing past conversations
+
+Memory only holds conversations that went through the proxy. To add the older
+ones, point `almanac memory import` at Claude Code's saved transcripts:
+
+```
+almanac memory import --dry-run C--Users-me-code-myrepo     # a folder name under ~/.claude/projects
+almanac memory import ~/.claude/projects/some-folder --days 90
+almanac memory import path/to/session.jsonl
+```
+
+Each exchange is stored through the same code the proxy uses, so it is cleaned
+and redacted the same way, tagged with a status, and searchable. The project is
+decided **per exchange**, not from the folder the session started in: from the
+files its tool calls touch, the folders of `cd` and `git -C`, and a worktree's
+main repository (a deleted `Repo-feature` folder is matched to `Repo` by name).
+An exchange with no signal stays in the project of the one before it (at the start of a
+session, in the first project the session works on). Throwaway clones under the temp
+folder or `~/.claude` get no vote. A session
+that moves between projects is stored as one conversation per run of the same
+project (lane `import:<session>:<n>`).
+
+- Stored dates are the transcript's, so recall shows when the work happened.
+  Work older than 14 days is never tagged `open`, so it cannot appear under
+  "Open work". A `decision` still comes only from words you typed.
+- Importing again stores nothing new. A session that one stored conversation
+  already holds in full (by the proxy or an earlier import) is skipped; one that
+  shares only its first exchanges with another is imported,
+  as is one changed in the last hour (it may still be open) and, with `--days N`,
+  one with no message in the last N days. Subagent transcripts and sidechain lines
+  are not imported yet.
+- `--dry-run` runs the whole import on a copy of the store and prints, per project,
+  the conversations and exchanges it would add, the status counts and how many
+  summaries are pending. Nothing is written.
+- **Summaries.** The import itself makes no model calls and never reads your login.
+  Imported exchanges keep their rule-written title and status until you run
+  `almanac memory summarize`, which asks the summary model for each one (newest
+  first) with the login in `~/.claude`. It never reads `CLAUDE_CONFIG_DIR`, sends the
+  token only to api.anthropic.com, and stops on a 429. Work older than 14 days stays
+  closed whatever the model says.
+
 #### Search by meaning
 
 By default, memory search matches words. Ask for "the bill is off by a penny"
@@ -1138,6 +1179,8 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac memory search WORDS` | Search stored conversations (`--project NAME`, `--all`) |
 | `almanac memory show ID` | Read one stored exchange or topic |
 | `almanac memory recent` | The latest conversations, by project |
+| `almanac memory summarize` | Ask the summary model (`memory.summary_model`) for a title, summary and status for imported exchanges that have none, newest first. Uses the login in `~/.claude` only, sent to api.anthropic.com only. `--project NAME`, `--limit N` (default: what is left of `memory.summary_daily_calls` today; an explicit number may pass it), `--dry-run`. Stops when the API answers 401, 403, 429 or 529 |
+| `almanac memory import PATH...` | Store past Claude Code transcripts (a folder name under `~/.claude/projects`, a folder or a `.jsonl`), grouped by the project each exchange worked on. `--days N`, `--dry-run` |
 | `almanac memory forget` | Delete conversations and their saved choices (`--project NAME`, `--conversation ID`, `--all`). Keeps any changed in the last hour unless you add `--force` |
 | `almanac cloud packet` | Print the hand-off packet for a cloud session (`--conversation ID`). Sends nothing |
 | `almanac cloud send` | Show that packet, ask, then start a Claude Code cloud session from it (`--conversation ID`, `--yes`) |

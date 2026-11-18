@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **`almanac memory import` stores past Claude Code conversations.** It reads
+  the transcripts in `~/.claude/projects` and stores them through the same code
+  the proxy uses (cleaning, redaction, status tags, search). The project is
+  chosen for each exchange from the files its tool calls touch, `cd` and
+  `git -C` folders and worktrees (a deleted worktree is matched to its repository
+  by name), and a session that changes project becomes one conversation per
+  project. Stored dates are the transcript's, and an exchange older than 14 days
+  is never `open` (this also holds when a model summary later sets a status).
+  Importing again stores nothing new; `--dry-run` prints per-project counts, status
+  counts and pending summaries without writing. No model calls are made: imported
+  exchanges keep rule-written summaries, because the summary worker only serves the
+  live conversation and the command never reads a login.
+
 - **Security fix: follow-ups to the hand-off, typed-text and redaction fixes.**
   The takeover branch is now named by the first 12 characters of the hand-off
   signature, not the commit SHA, so an old signed snapshot pushed again (a new

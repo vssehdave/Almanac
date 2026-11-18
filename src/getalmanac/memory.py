@@ -24,7 +24,7 @@ from . import embed, semantic
 from . import request as rq
 from .match import STOP, tokens
 from .project import Projects, tool_paths
-from .status import OPEN_KEEP, STATUSES, combine, rule
+from .status import OPEN_KEEP, STATUSES, aged, combine, rule
 
 SCHEMA = """
 create table if not exists convo (
@@ -301,11 +301,16 @@ class Memory:
             library.setup(store)
         self.projects = Projects(store)
         self.kept = 0  # open conversations the last forget() left alone
+        self.stamps = None  # while importing: the time of each exchange, so stored dates are the transcript's
 
     # ---- writing -------------------------------------------------------------
 
+    def _at(self, seq=0) -> float:
+        """The time to store for exchange `seq`: its transcript time when importing, else now."""
+        return self.stamps[min(seq, len(self.stamps) - 1)] if self.stamps else time.time()
+
     def _convo(self, lane, session, project, title) -> dict:
-        now = time.time()
+        now = self._at(0)
         self.store.run("insert or ignore into convo (lane, session, project, title, started, updated) values (?, ?, ?, ?, ?, ?)",
                        (lane, session, project, title, now, now))
         return dict(self.store.run("select * from convo where lane = ?", (lane,))[0])
@@ -321,13 +326,13 @@ class Memory:
         with self.store.lock:
             cursor = self.store.db.execute(
                 "insert into node (convo, project, parent, kind, seq, ts, title, text, mark, vec) values (?,?,?,?,?,?,?,?,?,?)",
-                (convo, project, parent, kind, seq, time.time(), title, text, mark, embed.pack(vec)))
+                (convo, project, parent, kind, seq, self._at(seq), title, text, mark, embed.pack(vec)))
             self.store.db.execute("insert into node_fts (rowid, title, text) values (?, ?, ?)", (cursor.lastrowid, title, text))
             return cursor.lastrowid
 
     def _refresh_topic(self, topic_id):
         """Rebuild a topic's text and vector from the exchanges under it; drop it when empty."""
-        leaves = self.store.run("select title, text, vec, summary from node where parent = ? order by seq", (topic_id,))
+        leaves = self.store.run("select title, text, vec, summary, ts from node where parent = ? order by seq", (topic_id,))
         if not leaves:
             return self._drop_nodes([topic_id])
         lines = []
@@ -338,7 +343,7 @@ class Memory:
         vec = embed.mean([embed.unpack(leaf["vec"]) for leaf in leaves])
         title = leaves[0]["title"]
         self.store.run("update node set title = ?, text = ?, vec = ?, ts = ? where id = ?",
-                       (title, text, embed.pack(vec), time.time(), topic_id))
+                       (title, text, embed.pack(vec), max(leaf["ts"] for leaf in leaves) if self.stamps else time.time(), topic_id))
         self.store.run("delete from node_fts where rowid = ?", (topic_id,))
         self.store.run("insert into node_fts (rowid, title, text) values (?, ?, ?)", (topic_id, title, text))
 
@@ -346,13 +351,13 @@ class Memory:
         """Give an exchange a model-written title and summary. The summary joins its searchable text.
         A valid `status` from the model refines the rules' (see status.combine); anything else changes nothing."""
         with self.store.lock:
-            rows = self.store.run("select parent, text, status from node where id = ? and kind = 'leaf' and summary = ''", (node_id,))
+            rows = self.store.run("select parent, text, status, ts from node where id = ? and kind = 'leaf' and summary = ''", (node_id,))
             if not rows:  # gone (the conversation was rewound) or already done
                 return
             text = "Summary: " + summary + "\n\n" + rows[0]["text"]
             by_model = status if status in STATUSES else ""
             self.store.run("update node set title = ?, text = ?, summary = ?, mstatus = ?, status = ?, dvec = null, dname = '' "
-                           "where id = ?", (title, text, summary, by_model, combine(rows[0]["status"], by_model), node_id))  # the vector is made again from the new text
+                           "where id = ?", (title, text, summary, by_model, aged(combine(rows[0]["status"], by_model), rows[0]["ts"]), node_id))  # the vector is made again from the new text
             self.store.run("delete from node_fts where rowid = ?", (node_id,))
             self.store.run("insert into node_fts (rowid, title, text) values (?, ?, ?)", (node_id, title, text))
             self._refresh_topic(rows[0]["parent"])
@@ -360,10 +365,10 @@ class Memory:
     def _retag(self, convo_id, turns, group, first, done):
         """Apply the status rules to exchanges `first` up to `done`: a new exchange can change the one before it."""
         have = {r["seq"]: r for r in self.store.run(
-            "select seq, status, mstatus from node where convo = ? and kind = 'leaf' and seq >= ? and seq < ?", (convo_id, first, done))}
+            "select seq, status, mstatus, ts from node where convo = ? and kind = 'leaf' and seq >= ? and seq < ?", (convo_id, first, done))}
         for seq, row in have.items():
             following = rq.human_text(group(seq + 1)[0]) if seq + 1 < len(turns) else None
-            status = combine(rule(group(seq), following, newest=seq == len(turns) - 1), row["mstatus"])
+            status = aged(combine(rule(group(seq), following, newest=seq == len(turns) - 1), row["mstatus"]), row["ts"])
             if status != row["status"]:
                 self.store.run("update node set status = ? where convo = ? and kind = 'leaf' and seq = ?", (status, convo_id, seq))
 
@@ -437,7 +442,7 @@ class Memory:
         self.store.run("insert into detail_fts (rowid, text) values (?, ?)", (leaf, texts["search"]))
         for call_id, text in texts["raw"]:
             try:  # keeping a result whole is a bonus: a failure here must not lose the exchange
-                self.save_raw(convo["lane"], call_id, text, cleaned=True)
+                self.save_raw(convo["lane"], call_id, text, cleaned=True, ts=self._at(seq) if self.stamps else None)
             except Exception:
                 pass
         return leaf, topic
@@ -445,14 +450,14 @@ class Memory:
     def has_raw(self, lane, tool_use_id) -> bool:
         return bool(self.store.run("select 1 from raw where lane = ? and tool_use_id = ?", (lane, tool_use_id)))
 
-    def save_raw(self, lane, tool_use_id, text, cleaned=False):
+    def save_raw(self, lane, tool_use_id, text, cleaned=False, ts=None):
         """Keep one tool result whole (compressed), so a stub or a cut transcript can be read back.
         `cleaned` says `text` came from result_text, so it need not be cleaned again."""
         text = text if cleaned else clean(text)
         if RAW_LIMIT and len(text) > RAW_LIMIT:
             text = text[:RAW_LIMIT] + f"\n... ({len(text) - RAW_LIMIT} more characters not kept)"
         self.store.run("insert or replace into raw (lane, tool_use_id, size, ts, data) values (?, ?, ?, ?, ?)",
-                       (lane, tool_use_id, len(text), time.time(), zlib.compress(text.encode("utf-8", "replace"))))
+                       (lane, tool_use_id, len(text), ts or time.time(), zlib.compress(text.encode("utf-8", "replace"))))
 
     def raw(self, tool_use_id):
         """The saved text of the newest tool result with this call id, or None."""
@@ -489,12 +494,22 @@ class Memory:
             self.store.put(f"partial:{lane}", {"seq": seq, "size": size})
             return True
 
-    def index(self, lane, session, project, messages, reply=None, finished=False) -> int:
+    def index(self, lane, session, project, messages, reply=None, finished=False, assign=None, stamps=None) -> int:
         """Store the finished exchanges of a conversation. Returns how many were written.
 
         The last exchange counts as finished when `reply` ended the turn, or when the
         caller says so (the messages stop just before a new human turn).
+        `assign(group, previous project)` replaces the project rule and `stamps` (one time per human turn) the
+        clock: both are for importing a transcript written earlier (see importer.py).
         """
+        with self.store.lock:
+            self.stamps = stamps
+            try:
+                return self._index(lane, session, project, messages, reply, finished, assign)
+            finally:
+                self.stamps = None
+
+    def _index(self, lane, session, project, messages, reply, finished, assign) -> int:
         turns = rq.human_turns(messages)
         if not turns:
             return 0
@@ -530,7 +545,7 @@ class Memory:
                 if seq >= done:
                     break
                 record = exchange(group(seq))
-                last_project = self.projects.for_turn(group(seq), last_project)
+                last_project = (assign or self.projects.for_turn)(group(seq), last_project)
                 old = self.store.run("select id, mark, parent from node where convo = ? and kind = 'leaf' and seq = ?",
                                      (convo["id"], seq))
                 if old and old[0]["mark"] == record["mark"]:
@@ -555,7 +570,7 @@ class Memory:
                 "order by status = 'decision' desc, seq limit 4", (convo["id"],))]
             self.store.run("update convo set turns = ?, updated = ?, project = ?, last_user = ?, last_reply = ?, "
                            "summary = case when sumturns = 0 then ? else summary end where id = ?",
-                           (len(turns) if finished else len(turns) - 1, time.time(),
+                           (len(turns) if finished else len(turns) - 1, self._at(len(turns) - 1),
                             main[0]["project"] if main else project, last[0], last[1], "; ".join(titles)[:300], convo["id"]))
             return written
 
