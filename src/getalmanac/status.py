@@ -13,10 +13,12 @@ summarize.py): its value replaces the rule's, except that a rule-made `decision`
 or `superseded` is never downgraded.
 """
 import re
+import time
 
 from . import request as rq
 
 STATUSES = ("open", "done", "decision", "superseded", "noise")
+OLD_DAYS = 14  # work this old is never listed as open: nobody is still waiting on it
 OPEN_KEEP = 15  # an exchange this far behind the newest is no longer listed as open: nobody closes them by hand
 # The one place the wording of a standing rule lives. Matched on the text the person wrote by hand, lower-cased.
 DECISION = re.compile(
@@ -58,3 +60,8 @@ def combine(by_rule: str, by_model: str = "") -> str:
     if by_rule in ("decision", "superseded") or by_model not in STATUSES or by_model == "decision":
         return by_rule
     return by_model
+
+
+def aged(status: str, ts: float) -> str:
+    """`open` becomes `done` for an exchange older than OLD_DAYS. A transcript imported late must not read as live work."""
+    return "done" if status == "open" and time.time() - ts > OLD_DAYS * 86400 else status
