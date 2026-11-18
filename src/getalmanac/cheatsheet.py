@@ -14,7 +14,11 @@ from . import config
 from .routing import RoutingLayer
 
 FAMILIES = ("opus", "sonnet", "haiku", "fable")
-NAMES = (*FAMILIES, "common", "skills", "agent")
+NAMES = (*FAMILIES, "common", "skills", "agent", "lean")
+LEVELS = {  # what the level adds to the lean rules; "full" is the rules as written
+    "lite": "Level: lite. Build what was asked, and name the smaller option in one line so the person can choose it.",
+    "ultra": "Level: ultra. Also question the request: before building, say which part the need does not justify.",
+}
 ALIASES = {"mythos": "fable"}  # the same model under another name
 INDEX = 12  # playbooks listed
 
@@ -50,6 +54,18 @@ def text_for(model: str, sub: bool = False) -> str:
     return "\n\n".join(parts)
 
 
+def lean_text(cfg) -> str:
+    """Almanac's minimal-change rules, or "" when off. The same bytes on every request of a run: the packaged file (or
+    the user's copy) is read once and the level and text come from settings, which are read once at start."""
+    start = cfg["startup"]
+    if not start.get("lean_rules"):
+        return ""
+    mine = (start.get("lean_rules_text") or "").strip()
+    if mine:
+        return mine
+    return "\n\n".join(p for p in (read("lean"), LEVELS.get(start.get("lean_level") or "full", "")) if p)
+
+
 @functools.lru_cache(maxsize=None)
 def index() -> str:
     """The recorded playbooks that apply everywhere, one line each by name, or "" when there are none.
@@ -80,17 +96,20 @@ def _thread(ctx, body) -> bool:
 
 class CheatsheetLayer:
     def transform(self, body, ctx):
-        if ctx.cfg["cheatsheet"]["mode"] != "on" or ctx.kind != "messages" or not isinstance(body.get("model"), str):
+        if ctx.kind != "messages" or not isinstance(body.get("model"), str):
             return
         if not _thread(ctx, body):
             return
         sub = RoutingLayer._kind(ctx, body) == "sub"  # a fork is not "sub": it keeps its parent's text
-        sheet = text_for(body["model"], sub)
+        sheet = text_for(body["model"], sub) if ctx.cfg["cheatsheet"]["mode"] == "on" else ""
+        lean = lean_text(ctx.cfg)
         books = ctx.cfg.get("playbooks") or {}
         # the main thread and its forks only (a fork shares its parent's cached prefix); Haiku's sheet is short on purpose
         main = RoutingLayer._kind(ctx, body) == "main" or ctx.agent_type.lower() == "fork"
         if sheet and main and family(body["model"]) != "haiku" and books.get("enabled") and books.get("inject") and index():
             sheet += "\n\n" + index()
+        if lean:  # every thread, whatever the model: the lean rules come first, the model's own sheet after them
+            sheet = lean + "\n\n" + sheet if sheet else lean
         system = body.get("system")
         if not sheet or not system:
             return

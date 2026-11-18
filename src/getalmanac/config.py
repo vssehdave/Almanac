@@ -41,6 +41,9 @@ DEFAULTS = {
     },
     "startup": {
         "agent_chars": 60,  # characters of description kept for a listed agent type; 0 leaves the agent listing alone
+        "lean_rules": True,  # Almanac's own minimal-change rules, added to the main thread and every sub-agent (cheatsheet.py)
+        "lean_level": "full",  # lite: build what was asked and name the smaller option; full; ultra: also question the request
+        "lean_rules_text": "",  # your own wording instead of the packaged rules ("" keeps them)
         "system_prefix": False,  # move the stable startup sections to the end of the system prompt so a new conversation can read them from cache (sysprefix.py)
     },
     "tools": {
@@ -210,6 +213,7 @@ def load() -> dict:
             cfg["startup"]["agent_chars"] = 0
             cfg["startup"]["system_prefix"] = False
             cfg["cheatsheet"]["mode"] = "off"  # "all" means no change to the request at all
+            cfg["startup"]["lean_rules"] = False
             cfg["profile"]["enabled"] = False
             cfg["playbooks"]["enabled"] = False
             cfg["library"]["inject"] = False
