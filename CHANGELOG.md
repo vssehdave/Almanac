@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Security fix: cleaning stored text takes linear time.** The pattern that
+  strips `<system-reminder` tags backtracked quadratically (a `<` followed by
+  20,000 spaces took 10 seconds), and so did the private-key pattern on a pile
+  of unclosed `BEGIN` lines. Both ran on every tool result, in the background
+  worker and inline during compaction under the store lock.
 - **Cloud branches are named `cloud/`.** The snapshot branch is now
   `cloud/handoff` and a takeover pushes `cloud/almanac-takeover-<commit>`. The
   old name `almanac/handoff` read as if every project's snapshot went to the

@@ -70,9 +70,10 @@ DENSE_MIN = 0.3  # least cosine for an exchange to count as near a query by mean
 DENSE_TOP = 30  # most near exchanges that go into a search
 RRF_K = 60  # reciprocal rank fusion: a hit at rank r adds 1 / (RRF_K + r)
 _TAG = re.compile(r"</?[a-zA-Z][\w-]{0,40}>")
-_REMINDER = re.compile(r"(?i)<\s*/?\s*system-reminder\s*>?")  # the spellings _TAG misses; only the tag name goes, so a stray one cannot eat prose
+_REMINDER = re.compile(r"(?i)<\s*(?:/\s*)?system-reminder\s*>?")  # the spellings _TAG misses; only the tag name goes, so a stray one cannot eat prose
 _SECRETS = [
-    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S), "[private key removed]"),
+    # the body may not hold another BEGIN, so a pile of unclosed ones is scanned once, not once each
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?!-----BEGIN ).)*?-----END [A-Z ]*PRIVATE KEY-----", re.S), "[private key removed]"),
     # a key cut short (head -5, a truncated tool result) has no END line: take the rest of its body
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[A-Za-z0-9+/=\s]|\\n)*"), "[private key removed]"),
     (re.compile(r"\b(?:sk|pk|rk)-[A-Za-z0-9_\-]{20,}"), "[key removed]"),
