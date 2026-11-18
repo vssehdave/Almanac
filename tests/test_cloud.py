@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import io
 import json
 import os
@@ -644,8 +646,47 @@ class HandoffTest(CloudCase):
         env = {k: v for k, v in os.environ.items() if k != "ALMANAC_HANDOFF_KEY"}
         if key is not None:
             env["ALMANAC_HANDOFF_KEY"] = key
-        done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+        git(self.alpha, "fetch", "-q", self.bare, "cloud/handoff")  # the check reads FETCH_HEAD, as the watchdog's clone does
+        done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, cwd=self.alpha)
         return done.stdout.strip() == "True"
+
+    def forged(self, key, **change):
+        """The pushed hand-off json with fields changed and signed with `key`, the way an attacker who has that key would."""
+        meta = {k: v for k, v in self.state().items() if k != "sig"}
+        meta.update(change)
+        data = json.dumps(meta, sort_keys=True, separators=(",", ":")).encode() + b"\n" + self.pushed("ALMANAC_HANDOFF.md").encode("utf-8")
+        return json.dumps(dict(meta, sig=hmac.new(key.encode(), data, hashlib.sha256).hexdigest()))
+
+    def test_an_empty_key_never_verifies_or_signs(self):
+        with mock.patch.object(cloud, "_keyring", return_value=None):
+            self.turn([human("Make it print two")], "tool_use")
+            self.layer.beat(time.time() + 601)
+            key = cloud.handoff_key()
+        text = self.pushed("ALMANAC_HANDOFF.md")
+        self.assertTrue(self.verify(self.forged(key), text, key))
+        self.assertFalse(self.verify(self.forged(""), text, ""))  # a forger who signs with the empty key
+        self.assertFalse(self.verify(self.forged(""), text, None))
+        with self.assertRaises(ValueError):
+            cloud.sign(self.state(), text, "")
+
+    def test_the_signed_tree_and_time_are_checked(self):
+        with mock.patch.object(cloud, "_keyring", return_value=None):
+            self.turn([human("Make it print two")], "tool_use")
+            self.layer.beat(time.time() + 601)
+            key = cloud.handoff_key()
+        text = self.pushed("ALMANAC_HANDOFF.md")
+        base = git(self.bare, "rev-parse", "cloud/handoff^{tree}")
+        self.assertNotEqual(self.state().get("tree"), base)  # signed hash leaves out the two hand-off files
+        self.assertTrue(self.verify(self.forged(key), text, key))
+        self.assertFalse(self.verify(self.forged(key, tree="0" * 40), text, key))
+        soon = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 120))
+        later = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 3600))
+        self.assertTrue(self.verify(self.forged(key, time=soon), text, key))  # small clock skew is fine
+        self.assertFalse(self.verify(self.forged(key, time=later), text, key))
+        age = subprocess.run([sys.executable, "-c", cloud.AGE.format(json=os.path.join(self.alpha, "h.json").replace(os.sep, "/"))],
+                             capture_output=True, text=True)
+        self.assertEqual(age.returncode, 1)  # no file: it fails rather than printing an age
+        self.assertNotIn("%ct", cloud.watchdog(10))
 
     def test_the_snapshot_is_signed_and_a_changed_task_fails_the_printed_check(self):
         with mock.patch.object(cloud, "_keyring", return_value=None):
