@@ -10,9 +10,8 @@ tool calls touch, the folders of `cd` and `git -C`, a deleted worktree's name), 
 runs of the same project; each run is stored as its own conversation (lane `import:<session>:<n>`).
 
 Not done here, and why:
-  * Model summaries. They need the login of a live request, and this command never reads one. The
-    proxy's summary worker only serves the conversation it is on, so imported exchanges keep their
-    rule-written text (and rule-made statuses) until a session is resumed through the proxy.
+  * Model summaries. This command makes no model call and never reads a login; imported exchanges keep
+    their rule-written text until `almanac memory summarize` (summarize.refine) writes them.
   * Subagent transcripts (`<session>/subagents/`) and lines marked `isSidechain`.
   * Rewound branches: a transcript is read in file order.
 """
@@ -345,6 +344,6 @@ def render(report, dry_run=False) -> str:
     skipped = ", ".join(f"{v} {k}" for k, v in report["skipped"].items() if v)
     if skipped:
         lines.append(f"sessions skipped: {skipped}")
-    lines.append(f"summaries pending: {report['pending']} exchange(s) have no model summary; imported ones keep their "
-                 "rule-written text, since the proxy's worker only summarizes the conversation it is serving")
+    lines.append(f"summaries pending: {report['pending']} exchange(s) have no model summary; "
+                 "imported ones keep their rule-written text until `almanac memory summarize`")
     return "\n".join(lines)

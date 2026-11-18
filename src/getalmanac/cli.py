@@ -21,7 +21,8 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac memory search WORDS  search stored conversations (--project NAME, --all)
   almanac memory show ID       read one stored exchange or topic in full
   almanac memory recent        the latest conversations, by project
-  almanac memory import PATH...  store past Claude Code transcripts (a ~/.claude/projects folder name, folder or .jsonl; --days N, --dry-run)
+  almanac memory summarize     model summaries for imported exchanges (--project NAME, --limit N, --dry-run)
+  almanac memory import PATH... store past Claude Code transcripts (a ~/.claude/projects folder name, folder or .jsonl; --days N, --dry-run)
   almanac memory forget        delete stored conversations (--project NAME | --conversation ID | --all; --force for open ones)
   almanac cloud packet         print the hand-off packet for a Claude Code cloud session (--conversation ID)
   almanac cloud send           show that packet, ask, then run `claude --cloud` with it (--conversation ID, --yes)
@@ -236,6 +237,10 @@ def _memory(rest):
     load.add_argument("paths", nargs="+", metavar="FOLDER_OR_FILE")
     load.add_argument("--days", type=int, help="only sessions with a message in the last N days")
     load.add_argument("--dry-run", action="store_true", help="store nothing; print what would be stored")
+    refine = sub.add_parser("summarize")
+    refine.add_argument("--project")
+    refine.add_argument("--limit", type=int, help="most calls (default: what is left of memory.summary_daily_calls today)")
+    refine.add_argument("--dry-run", action="store_true", help="make no calls; print how many exchanges would be summarized")
     forget = sub.add_parser("forget")
     group = forget.add_mutually_exclusive_group(required=True)
     group.add_argument("--project")
@@ -266,6 +271,9 @@ def _memory(rest):
             print(f"almanac: {error}", file=sys.stderr)
             return 2
         _print(importer.render(report, args.dry_run))
+    elif args.cmd == "summarize":
+        summarize.refine(memory, config.load(), project=project_key(args.project) if args.project else None,
+                         limit=args.limit, dry_run=args.dry_run)
     elif args.cmd == "recent":
         _print(mcp.render_projects(memory))
         print(f"exchanges by status: {_status_counts(memory)}")

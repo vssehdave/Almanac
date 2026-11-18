@@ -12,6 +12,7 @@ import json
 import re
 import threading
 import time
+from pathlib import Path
 
 from . import accounts
 from .memory import MemoryLayer, clean
@@ -263,3 +264,103 @@ class SummaryLayer:
         # status, empty, parse or error: never the prompt or the headers
         ctx.proxy.log.write({"ts": round(time.time(), 3), "kind": "summary", "status": seen.get("status", 0), "why": why})
         return message is not None
+
+
+# ---- `almanac memory summarize`: the same summary call for imported exchanges, made from the command line ----
+
+IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."  # the first system block a subscription login may be used with
+BETA = "claude-code-20250219,oauth-2025-04-20"  # shortcut: not checked against the live API here; change if it answers 400/401
+API_VERSION = "2023-06-01"
+
+
+class _Log:
+    def __init__(self):
+        self.last = {}
+
+    def write(self, entry):
+        self.last = entry
+
+
+class _Upstream:
+    """The one place a login's token may go: api.anthropic.com over HTTPS. Stands where the proxy stands for call()."""
+    secure, base = True, ""
+    host, port = accounts.FALLBACK_TO
+
+    def __init__(self):
+        self.log = _Log()
+
+    def connect(self):
+        return http.client.HTTPSConnection(self.host, self.port, timeout=TIMEOUT)
+
+
+class _Ask:
+    """What call() and SummaryLayer._ask need, with the personal login's token in place of a live request's headers."""
+
+    def __init__(self, store, upstream, token):
+        self.store, self.proxy = store, upstream
+        self.headers = {"authorization": "Bearer " + token, "anthropic-version": API_VERSION, "anthropic-beta": BETA}
+
+
+def refine(memory, cfg, project=None, limit=None, dry_run=False) -> dict:
+    """Give imported exchanges (lane `import:%`) with no model summary one, newest first, using the login in ~/.claude
+    (the personal one: never CLAUDE_CONFIG_DIR). `limit` defaults to what is left of today's summary_daily_calls and
+    may exceed it when given. Stops, keeping the exchange's try, when the API answers 401/403/429/529 or a pause is set."""
+    store, model = memory.store, cfg["memory"]["summary_model"]
+    report = {"pending": 0, "summarized": 0, "failed": 0, "stopped": ""}
+    if not model:
+        report["stopped"] = "memory.summary_model is empty"
+        return report
+    sql = ("select n.id from node n join convo c on c.id = n.convo where n.kind = 'leaf' and c.lane like 'import:%' "
+           "and n.summary = '' and n.tries < ?" + (" and n.project = ?" if project else "") + " order by n.ts desc, n.id desc")
+    ids = [r["id"] for r in store.run(sql, (MAX_TRIES, project) if project else (MAX_TRIES,))]
+    if limit is None:
+        limit = max(0, cfg["memory"]["summary_daily_calls"] - today(store)["calls"])
+    ids = ids[:limit]
+    report["pending"] = len(ids)
+    print(f"{len(ids)} imported exchange(s) to summarize with {model}")
+    if dry_run or not ids:
+        return report
+    if paused_until(store):
+        report["stopped"] = "paused until " + time.strftime("%H:%M", time.localtime(paused_until(store)))
+    folder = Path.home() / ".claude"
+    tok = accounts.token(folder)
+    if not report["stopped"] and not tok:
+        report["stopped"] = f"no valid login in {folder} (run `claude` and log in there)"
+    upstream = _Upstream()
+    if not report["stopped"] and not accounts.allowed(upstream):
+        report["stopped"] = "the upstream is not api.anthropic.com"
+    if not report["stopped"] and accounts.cooling_until(tok):
+        report["stopped"] = "this login is out of usage for now"
+    if report["stopped"]:
+        print("stopped: " + report["stopped"])
+        return report
+    layer, ctx = SummaryLayer(memory), _Ask(store, upstream, tok)
+    orig = {"system": IDENTITY}
+    for n, node_id in enumerate(ids, 1):
+        used = today(store)
+        store.run("update node set tries = tries + 1 where id = ?", (node_id,))
+        used["calls"] += 1
+        store.put("summary:day", used)
+        upstream.log.last = {}
+        had = store.run("select summary from node where id = ?", (node_id,))[0]["summary"]
+        ok = layer._ask(ctx, orig, node_id, model, used)
+        if store.run("select summary from node where id = ?", (node_id,))[0]["summary"] != had:
+            report["summarized"] += 1
+        else:
+            report["failed"] += 1
+        status = upstream.log.last.get("status", 0)
+        if status in PAUSE_ON:  # the login or the allowance, not this exchange: give the try back and stop
+            store.run("update node set tries = tries - 1 where id = ?", (node_id,))
+            report["failed"] -= 1
+            report["stopped"] = f"the API answered {status}; paused for {PAUSE_SECONDS // 60} minutes (try again later)"
+            break
+        if n % 10 == 0:
+            print(f"  {n}/{len(ids)}: {report['summarized']} summarized, {report['failed']} failed")
+        if not ok:
+            time.sleep(1)
+    memory.embed_pending()
+    if report["stopped"]:
+        print("stopped: " + report["stopped"])
+    left = store.run("select count(*) n from node where kind = 'leaf' and summary = ''")[0]["n"]
+    print(f"{report['summarized']} summarized, {report['failed']} failed; {left} exchange(s) in the store have no model summary")
+    return report
