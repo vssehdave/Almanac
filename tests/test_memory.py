@@ -413,6 +413,28 @@ class SubagentTest(Case):
         self.rig.records()
         self.assertEqual(self.store.run("select count(*) n from node where kind = 'leaf'")[0]["n"], 0)
 
+    def test_a_subagent_ending_on_subagenthandback_is_stored_with_the_report_as_its_answer(self):
+        report = "The retry helper lives in net.py, line 12. Token sk-abcdefghijklmnopqrstuvwxyz123456 was in its config."
+        self.rig.upstream.respond = lambda req: (200, {"content-type": "text/event-stream"}, sse("Done looking.", tool=("SubagentHandback", {"message": report})))
+        self.sub(self.body())
+        self.rig.records()
+        child = self.store.run("select * from convo where parent = ?", (self.parent,))
+        self.assertEqual(len(child), 1)
+        leaves = self.store.run("select status, text from node where convo = ? and kind = 'leaf'", (child[0]["id"],))
+        self.assertEqual(len(leaves), 1)
+        self.assertEqual(leaves[0]["status"], "done")
+        self.assertIn("Answer: The retry helper lives in net.py, line 12.", leaves[0]["text"])
+        self.assertNotIn("sk-abcdefghijklmnopqrstuvwxyz123456", leaves[0]["text"])  # redacted like any stored text
+
+    def test_a_subagent_calling_other_tools_beside_the_handback_is_still_working(self):
+        self.rig.upstream.respond = lambda req: (200, {"content-type": "text/event-stream"}, sse("Checking.", tool=("Bash", {"command": "ls"})))
+        self.sub(self.body())
+        self.rig.records()
+        self.assertEqual(self.store.run("select count(*) n from node where kind = 'leaf'")[0]["n"], 0)
+        reply_mixed = {"content": [{"type": "tool_use", "id": "a", "name": "SubagentHandback", "input": {"message": "x"}},
+                                   {"type": "tool_use", "id": "b", "name": "Bash", "input": {}}], "stop_reason": "tool_use"}
+        self.assertIsNone(MemoryLayer._handback(reply_mixed))
+
     def test_a_main_thread_exchange_is_unaffected(self):
         self.rig.messages(self.body("Why do requests retry twice?"))
         self.assertEqual(self.note_of(self.rig.sent()), [])

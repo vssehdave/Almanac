@@ -11,6 +11,8 @@
   parent; it never shows as open work and is not listed as a conversation.
   `memory_search` gains a validated `conversation` filter, and `query` is
   optional with it (the conversation's exchanges are listed).
+  A sub-agent that ends by calling `SubagentHandback` is stored too, with its
+  report as the answer.
 
 - **Routing: a failure ladder, an agent model floor, effort-aware pricing.** A
   thread whose tool calls keep failing climbs one rung of its starting model's

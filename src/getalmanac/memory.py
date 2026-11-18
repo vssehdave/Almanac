@@ -998,6 +998,16 @@ class MemoryLayer:
         return bool(ctx.agent) and RoutingLayer._kind(ctx, body) == "sub" and rq.has_client_tools(body) \
             and bool(rq.human_turns(body.get("messages") or []))
 
+    @staticmethod
+    def _handback(reply):
+        """The final reply of a sub-agent that ends by calling SubagentHandback (a plugin's tool: no request follows it),
+        with its report as the answer; None for any other reply, including one that also calls another tool."""
+        calls = [b for b in reply.get("content") or [] if isinstance(b, dict) and b.get("type") == "tool_use"]
+        if not calls or any(b.get("name") != "SubagentHandback" for b in calls):
+            return None
+        text = "\n".join(str((b.get("input") or {}).get("message") or "") for b in calls if isinstance(b.get("input"), dict)).strip()
+        return {"content": [{"type": "text", "text": text}], "stop_reason": "end_turn"} if text else None
+
     def _parent(self, ctx) -> dict:
         """The conversation a sub-agent belongs to, {"id", "project"} or {}: its session's main conversation when
         the lane first appeared, and kept (the note it was sent names it)."""
@@ -1039,7 +1049,9 @@ class MemoryLayer:
             return
         if self._sub_thread(orig, ctx):
             parent = self._parent(ctx)
-            if parent and reply.get("stop_reason") != "tool_use":  # filed when it has answered; nothing is stored while it works
+            handed = self._handback(reply)
+            if parent and (handed or reply.get("stop_reason") != "tool_use"):  # filed when it has answered; nothing is stored while it works
+                reply = handed or reply
                 self.memory.index(ctx.lane, ctx.session, parent["project"], orig["messages"], reply, parent=parent["id"])
                 self.memory.embed_pending()
             return

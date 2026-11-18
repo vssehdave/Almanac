@@ -182,7 +182,9 @@ the memory tools are on and the parent is stored. When a sub-agent finishes
 the parent (`convo.parent`): `memory_search` with that `conversation` includes it,
 but it is not listed among the project's conversations and its status is never
 `open`, so it does not add to the parent's open work. A sub-agent's thread is
-stored only when it ends, with no partial record and no model summary.
+stored only when it ends, with no partial record and no model summary. A sub-agent
+that ends by calling `SubagentHandback` (a plugin's hand-back tool, after which no
+request follows) counts as ended: its report is stored as the answer.
 
 Each conversation also gets a summary and a note of how it ended (the last thing
 you asked and the start of the reply). When a conversation has had no request
