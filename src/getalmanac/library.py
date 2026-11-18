@@ -19,7 +19,7 @@ from . import request as rq
 from .match import STOP, tokens
 from .memory import QUOTED, _first_line, clean, exchange
 from .routing import handwritten
-from .status import rule
+from .status import _ends_on_question
 
 SCHEMA = """
 create table if not exists library (
@@ -186,7 +186,8 @@ def record(memory, lane, group, seq, min_tools, now=None) -> int:
         if call["name"] in ("Read", *EDITS) and _path(call) and _short(_path(call)) not in files:
             files.append(_short(_path(call)))
     answer = _first_line(exchange(group)["answer"], 160)
-    outcome = clean(f"{rule(group)}: {answer}" if answer else rule(group))
+    ended = "open" if _ends_on_question(group) else "done"  # how the work ended; a rule in the prompt is no outcome
+    outcome = clean(f"{ended}: {answer}" if answer else ended)
     now = now or time.time()
     fixes = _fixes(calls)
     row = (leaf[0]["convo"], seq, leaf[0]["project"], prompt, json.dumps(route, ensure_ascii=False),
