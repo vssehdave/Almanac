@@ -19,7 +19,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import config
+from . import config, library
 from . import request as rq
 from .memory import MemoryLayer
 from .routing import CONTINUE, _digest, handwritten, person_text, person_turns
@@ -470,6 +470,7 @@ def bump(name):
 
 class PlaybookLayer:
     """Tell Claude which playbook applies to the newest typed request of the main conversation thread.
+    When none does, a prompt-library entry for a task like it is offered instead (never both).
 
     The note is frozen per (lane, turn, digest of the typed text), an empty one included, so every
     later request of the conversation carries the same bytes whatever happens to the playbook.
@@ -480,17 +481,19 @@ class PlaybookLayer:
         return f"playbook:{ctx.lane}:{turn}:{_digest(text)}"
 
     def transform(self, body, ctx):
-        cfg = ctx.cfg.get("playbooks") or {}
-        if not (cfg.get("enabled") and cfg.get("inject")) or ctx.store is None or ctx.kind != "messages":
+        cfg, lib = ctx.cfg.get("playbooks") or {}, ctx.cfg.get("library") or {}
+        books = bool(cfg.get("enabled") and cfg.get("inject"))
+        entries = lib.get("enabled", True) and lib.get("inject", True)
+        if not (books or entries) or ctx.store is None or ctx.kind != "messages":
             return
         if not MemoryLayer._main_thread(body, ctx):
             return
         try:
-            self._apply(body, ctx)
+            self._apply(body, ctx, books, entries)
         except Exception:  # fail open: a bad playbook folder must never block a turn
             return
 
-    def _apply(self, body, ctx):
+    def _apply(self, body, ctx, books=True, entries=False):
         messages, orig = body["messages"], (ctx.orig or body)["messages"]
         seen, mine = person_turns(orig), person_turns(messages)
         if not seen:
@@ -507,10 +510,10 @@ class PlaybookLayer:
             if len(low) < MIN_REQUEST or CONTINUE.match(low):
                 text = ""  # decided by the words alone, so nothing is stored
             else:
-                text = self._auto(ctx, low, akey)
+                text = self._auto(ctx, low, akey) if books else None
                 if text is None:
-                    text = ctx.store.frozen(key, lambda: self._first(ctx, low, key))
-        nudge = ctx.store.frozen("playbooknudge" + key[len("playbook"):], lambda: self._nudge(ctx, orig, seen, last))
+                    text = ctx.store.frozen(key, lambda: self._first(ctx, low, key, books, entries))
+        nudge = ctx.store.frozen("playbooknudge" + key[len("playbook"):], lambda: self._nudge(ctx, orig, seen, last)) if books else ""
         # Earlier turns got their note when they were new: put it back, byte for byte, so the cached prefix holds.
         # When compaction changed the history the turns no longer line up, and there is nothing to put back.
         if len(mine) == len(seen):
@@ -604,10 +607,22 @@ class PlaybookLayer:
             return text
 
     @staticmethod
-    def _first(ctx, low, key) -> str:
-        best = find(low, ctx.project, limit=1)
-        if not best:
+    def _entry(ctx, low) -> str:
+        """The note for the prompt-library entry that best matches the typed text, or "" (decided once per turn, so counted once)."""
+        cfg = ctx.cfg.get("library") or {}
+        hit = library.find(ctx.store, low, ctx.project or "", cfg.get("threshold", library.THRESHOLD))
+        if not hit:
             return ""
+        entry, score = hit
+        entry["uses"] = library.bump(ctx.store, entry["id"])
+        ctx.stats["library"] = {"id": entry["id"], "score": score}
+        return library.note(entry, cfg.get("note_chars", library.NOTE_CHARS))
+
+    @classmethod
+    def _first(cls, ctx, low, key, books=True, entries=False) -> str:
+        best = find(low, ctx.project, limit=1) if books else []
+        if not best:
+            return cls._entry(ctx, low) if entries else ""
         done = bump(best[0]["name"]) or best[0]
         if runnable(done):  # offered, not run: remember it, so a skipped offer can be called back
             ctx.store.put("playbookoffer" + key[len("playbook"):], done["name"])

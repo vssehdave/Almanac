@@ -7,7 +7,7 @@ import os
 import sys
 import time
 
-from . import __version__, config, playbook
+from . import __version__, config, library, playbook
 from .memory import _BREAK, QUOTED, READ_CHARS, READ_LINES, Memory, _quote, ended
 from .store import Store
 
@@ -77,6 +77,12 @@ TOOLS = [
          "query": {"type": "string", "description": "Words that must all appear in the message"},
          "project": {"type": "string", "description": "A project name or key, or \"all\". Default: this folder's project"},
          "limit": {"type": "integer", "minimum": 1, "maximum": 100}}}},
+    {"name": "library_find",
+     "description": "Find how a task like this was done before: up to 3 earlier entries of the prompt library, best first, each with "
+                    "what was asked, the route taken, the fixes found and the files. Use it when starting a task that may have been "
+                    "done already, and read the exchange named in an entry with memory_read.",
+     "inputSchema": {"type": "object", "required": ["query"], "properties": {
+         "query": {"type": "string", "description": "The request, or the words that describe it"}}}},
 ]
 
 
@@ -281,6 +287,8 @@ def call(memory, name, args, cwd) -> str:
         elif pb["status"] == "draft":
             text += f" It is a draft and is not offered until the owner approves it with `almanac playbook approve {pb['name']}`."
         return text
+    if name == "library_find":
+        return library.render_found(library.search(memory.store, str(args.get("query") or ""), memory.projects.see(cwd, touch=False) or "", limit=3))
     if name == "playbook_run":
         return playbook.run(str(args.get("name") or ""), args.get("args") or [], cwd)
     raise KeyError(name)

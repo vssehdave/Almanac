@@ -263,7 +263,7 @@ class Memory:
                     store.run(f"alter table convo add column {column} {ddl}")
         from . import library  # imports this module, so not at the top
         with store.lock:
-            store.db.executescript(library.SCHEMA)
+            library.setup(store)
         self.projects = Projects(store)
         self.kept = 0  # open conversations the last forget() left alone
 

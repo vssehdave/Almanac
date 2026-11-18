@@ -324,6 +324,16 @@ def prefix_line(records, now=None) -> str:
             f", {len(cold)} cold (over an hour apart or another account), {len(warm) - sum(places.values())} identical.")
 
 
+def library_line(records, now=None) -> str:
+    """One line on the prompt library, last 24 hours: entries the writer wrote and notes shown to the model."""
+    now = now or time.time()
+    day = [r for r in records if isinstance(r.get("ts"), (int, float)) and r["ts"] > now - 86400]
+    written = sum(r["written"] for r in day if r.get("kind") == "library" and isinstance(r.get("written"), int))
+    shown = sum(1 for r in day if isinstance(r.get("library"), dict))
+    return (f"Prompt library, last 24 hours: {written} entr{'y' if written == 1 else 'ies'} written, "
+            f"{shown} note{'' if shown == 1 else 's'} shown.")
+
+
 def render(records) -> str:
     record = startup(records)
     if not record:
@@ -350,5 +360,6 @@ def render(records) -> str:
         lines.append(f"{totals['held']} request(s) waited out a network outage, {totals['held_s']:,} seconds in all.")
     if prefix_line(records):
         lines.append(prefix_line(records))
+    lines.append(library_line(records))
     lines.append("Per-part figures are the exact total split by size, so treat them as estimates.")
     return "\n".join(lines) + render_routing(records) + render_agents(records)

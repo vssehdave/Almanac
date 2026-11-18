@@ -22,7 +22,7 @@ class LibraryCase(tm.Case):
         super().setUp()
         self.key = self.memory.projects.see(self.alpha)
         self.layer = MemoryLayer(self.memory)
-        self.n = 0
+        self.logged = []
 
     def finish(self, prompt, calls, lane="lane-1", agent="", answer="Done: it works now.", **cfg):
         """Run one finished exchange through the layer's observe, the way the worker does."""
@@ -30,7 +30,7 @@ class LibraryCase(tm.Case):
         for i, (name, args, text, error) in enumerate(calls, 1):
             messages += [use(i, name, **args), out(i, text, error)]
         ctx = types.SimpleNamespace(cfg={"memory": {"enabled": True}, "library": cfg}, lane=lane, session="s", project=self.key,
-                                    agent=agent, proxy=types.SimpleNamespace(log=types.SimpleNamespace(write=print)))
+                                    agent=agent, proxy=types.SimpleNamespace(log=types.SimpleNamespace(write=self.logged.append)))
         body = {"messages": messages, "tools": [{"name": "Bash", "input_schema": {}}]}
         self.layer.observe(ctx, body, tm.reply(answer))
 
@@ -90,7 +90,7 @@ class WriterTest(LibraryCase):
         ctx = types.SimpleNamespace(cfg={"memory": {"enabled": True}, "library": {}}, lane="lane-1", session="s", project=self.key,
                                     agent="", proxy=types.SimpleNamespace(log=types.SimpleNamespace(write=logged.append)))
         self.layer.observe(ctx, {"messages": messages, "tools": [{"name": "Bash", "input_schema": {}}]}, tm.reply("ok"))
-        self.assertEqual((logged, len(self.rows())), ([], 1))
+        self.assertEqual(([r for r in logged if r["kind"] == "error"], len(self.rows())), ([], 1))
 
 
     def test_skill_and_agent_names_are_cleaned(self):

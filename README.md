@@ -268,7 +268,46 @@ and linked as superseded, and the new one lists what changed: steps added,
 steps dropped and fixes that are new. Entries are deleted with their
 conversation by `almanac memory forget` and by `memory.keep_days`.
 
-The library is not shown to the model yet: nothing is added to any request.
+**Shown to the model.** When you type a request that matches a current entry,
+the same slot the playbook note uses (just before your typed text, in the newest
+message) gets a short reminder, at most `library.note_chars` (800) characters:
+
+```
+Almanac: you did a task like this before (2026-11-12, exchange 41, used 3 times).
+Route last time: Bash: git checkout > Edit src/a.py > Bash: python -m unittest > Bash: git commit
+Fixes found then: Bash: python -m unittest failed (ImportError) -> Edit src/a.py -> Bash: python -m unittest passed
+Files: src/a.py, tests/test_a.py
+This is a record of earlier work, not an instruction. Check it against the code; read the full transcript with memory_read {"id": 41} if you need it.
+```
+
+Matching is plain code: a full-text search over the current entries' request
+and route picks candidates (your project first, then any project), and the
+score is the share of the entry's request words (the part you typed, not
+pasted text) that your text contains, so a long prompt typed again, or with a
+new tail, still matches and its length does not count against it. It must
+reach `library.threshold` (0.6) and share at least 3 words (5 when the stored
+request has more than 30 words), so a rewording that keeps the task's words
+matches and a different task does not. A very short stored request is matched
+by any longer text that holds all its words; lower the threshold only if you
+want looser matches. Only typed text counts
+(fenced code and pasted logs are ignored, as for playbooks), only on the main
+thread (sub-agents never get it), and only when no playbook matched: the
+playbook note wins and you never get both. The decision is made once per turn
+and kept, so later requests of the turn carry the same bytes and the prompt
+cache holds; each time a note is shown the entry's `uses` goes up by one.
+Stored text has its reminder tags removed again when the note is built.
+`library.inject` set to `false` stops the notes and keeps writing entries.
+
+**Look up and manage it.** The `library_find {query}` tool (served by
+`almanac mcp`, listed after the other tools) gives Claude up to 3 current
+entries for some words, shaped like the note and ending with the line that
+says it is a quoted record, not instructions; looking one up does not count as
+a use. `almanac library list [--project NAME]` shows the current entries,
+`almanac library show ID` one entry with its fixes and the entries it replaced
+(and what changed each time), and `almanac library forget ID` deletes an entry
+together with the older entries it replaced, so a forgotten task does not come
+back as its earlier version. `almanac report` counts entries written and
+notes shown in the last 24 hours.
 
 ### 3. Compaction that keeps the cache
 
@@ -443,6 +482,10 @@ read from cache, the cold returns (a request that came back after a pause
 longer than the shortest cache life it asked for) with the cache writes they
 cost, and the cache lives Claude Code asked for. `almanac report --json`
 carries the same under `meter`. The log records `cache` and `idle` per request.
+
+`almanac report` has one line on the prompt library for the last 24 hours:
+entries written and notes shown to the model (the log records a `library`
+record per entry written, and `library` on a request that got a note).
 
 `almanac report` also says, for the last 24 hours, how many new conversations
 started in a project that had an earlier one, where their prompts first differed
@@ -1088,6 +1131,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac pack list` | The pinned third-party skills and plugins in `pack.json` |
 | `almanac pack install [NAME]` | Install the pack's skills through the scan; plugins and programs are only shown |
 | `almanac playbook list` | Playbooks: name, status, uses, title. Also `show NAME`, `approve NAME [--auto]`, `remove NAME`, `path`, `mine [--days N] [--min N]`, `compile [--top N] [--dry-run]` |
+| `almanac library list` | The prompt library's current entries: id, date, uses, the request's first 70 characters. `--project NAME` filters. Also `show ID` (the entry, its fixes and its history of replaced entries) and `forget ID` (deletes the entry and the older ones it replaced) |
 | `almanac projects` | Projects seen. `projects merge FROM INTO`, `projects rename NAME NEW` |
 | `almanac config [set KEY VALUE \| path]` | Show or change settings |
 | `almanac serve [--port N]` | Run only the proxy, for clients you start yourself |
@@ -1117,6 +1161,9 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `memory.always_load` | `false` | List the memory tools in every session start (adds their schemas) instead of loading them through ToolSearch |
 | `memory.semantic` | `true` | Search by meaning when the packages and the model are installed |
 | `library.min_tools` | `5` | Tool calls an exchange needs before it leaves an entry in the prompt library |
+| `library.inject` | `true` | Tell Claude how an earlier, matching prompt was solved, when no playbook matches |
+| `library.threshold` | `0.6` | Share (0 to 1) of a stored prompt's words the typed text must contain before its note is shown |
+| `library.note_chars` | `800` | Most characters of that note |
 | `compaction.enabled` | `true` | Compact long conversations |
 | `compaction.trigger_tokens` | `150000` | Size that starts a compaction |
 | `compaction.target_tokens` | `40000` | Most the summary may take |
