@@ -643,8 +643,11 @@ that repository's code. Read the script before you approve it with `--auto`.
 
 Only you can set this, and the approval is kept apart from the playbook:
 `--auto` writes the script's hash into `~/.almanac/auto.json` (outside the
-playbooks folder), and a playbook runs by itself only when its `playbook.json`
-says `auto` and `auto.json` holds the hash of the script as it is now. A
+playbooks folder), signed with a random key the CLI keeps in
+`~/.almanac/auto.key`, and a playbook runs by itself only when its
+`playbook.json` says `auto` and `auto.json` holds a correctly signed hash of the
+script as it is now. A hash copied into `auto.json` by hand, or by a model that
+can write files, is not enough. A
 playbook Claude saves or updates is never automatic (a save also removes its
 `auto.json` entry), `approve NAME` without `--auto` and `remove` delete the
 entry, and a changed script goes back to draft and stops running. `--auto` is
