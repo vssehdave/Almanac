@@ -170,6 +170,20 @@ open record after every 30,000 characters of new work (in the background, after
 the reply), so what it found early on can be searched before the turn ends; the
 finished exchange replaces that record.
 
+A sub-agent's first message gets one line, the same on every one of its requests:
+it names the conversation it belongs to (the main conversation of the same
+session, as stored when the sub-agent's first request arrived) and says to run
+`memory_search` with `conversation` set to that number before re-deriving earlier
+findings. With no `query`, that call lists the conversation's exchanges; with
+one, it searches only that conversation. A fork gets nothing: it shares its
+parent's prefix. The line is added only when memory and `memory.recall` are on,
+the memory tools are on and the parent is stored. When a sub-agent finishes
+(its final reply), its exchange is stored as a conversation of its own linked to
+the parent (`convo.parent`): `memory_search` with that `conversation` includes it,
+but it is not listed among the project's conversations and its status is never
+`open`, so it does not add to the parent's open work. A sub-agent's thread is
+stored only when it ends, with no partial record and no model summary.
+
 Each conversation also gets a summary and a note of how it ended (the last thing
 you asked and the start of the reply). When a conversation has had no request
 for 10 minutes, or is still waiting when Almanac exits, one small-model call

@@ -30,7 +30,8 @@ class LibraryCase(tm.Case):
         for i, (name, args, text, error) in enumerate(calls, 1):
             messages += [use(i, name, **args), out(i, text, error)]
         ctx = types.SimpleNamespace(cfg={"memory": {"enabled": True}, "library": cfg}, lane=lane, session="s", project=self.key,
-                                    agent=agent, proxy=types.SimpleNamespace(log=types.SimpleNamespace(write=self.logged.append)))
+                                    agent=agent, agent_type="", klass="", store=self.store,
+                                    proxy=types.SimpleNamespace(log=types.SimpleNamespace(write=self.logged.append)))
         body = {"messages": messages, "tools": [{"name": "Bash", "input_schema": {}}]}
         self.layer.observe(ctx, body, tm.reply(answer))
 

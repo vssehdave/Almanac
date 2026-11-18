@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Memory: sub-agents know their parent conversation, and their work is
+  indexed.** A sub-agent's first message gets one frozen line naming the
+  conversation it belongs to and the call `memory_search {"conversation": id}`
+  (same bytes on every request of the sub-agent, so the cache holds; forks get
+  nothing). When a sub-agent ends, its exchange is stored through the usual
+  path (cleaning, redaction, status rules) as a conversation linked to its
+  parent; it never shows as open work and is not listed as a conversation.
+  `memory_search` gains a validated `conversation` filter, and `query` is
+  optional with it (the conversation's exchanges are listed).
+
 - **Routing: a failure ladder, an agent model floor, effort-aware pricing.** A
   thread whose tool calls keep failing climbs one rung of its starting model's
   ladder (`routing.ladders`): Haiku medium, Sonnet low, Sonnet medium; Sonnet

@@ -31,7 +31,7 @@ create table if not exists convo (
     id integer primary key, lane text unique not null, session text not null, project text not null,
     title text not null default '', started real not null, updated real not null, turns integer not null default 0,
     summary text not null default '', sumturns integer not null default 0,
-    last_user text not null default '', last_reply text not null default ''
+    last_user text not null default '', last_reply text not null default '', parent integer not null default 0
 );
 create table if not exists node (
     id integer primary key, convo integer not null, project text not null, parent integer,
@@ -293,7 +293,8 @@ class Memory:
                 pass
             have = {r["name"] for r in store.run("pragma table_info(convo)")}
             for column, ddl in (("summary", "text not null default ''"), ("sumturns", "integer not null default 0"),
-                                ("last_user", "text not null default ''"), ("last_reply", "text not null default ''")):
+                                ("last_user", "text not null default ''"), ("last_reply", "text not null default ''"),
+                                ("parent", "integer not null default 0")):  # parent: the conversation a sub-agent's work is filed under
                 if column not in have:  # a database written before conversation summaries
                     store.run(f"alter table convo add column {column} {ddl}")
         from . import library  # imports this module, so not at the top
@@ -309,10 +310,10 @@ class Memory:
         """The time to store for exchange `seq`: its transcript time when importing, else now."""
         return self.stamps[min(seq, len(self.stamps) - 1)] if self.stamps else time.time()
 
-    def _convo(self, lane, session, project, title) -> dict:
+    def _convo(self, lane, session, project, title, parent=0) -> dict:
         now = self._at(0)
-        self.store.run("insert or ignore into convo (lane, session, project, title, started, updated) values (?, ?, ?, ?, ?, ?)",
-                       (lane, session, project, title, now, now))
+        self.store.run("insert or ignore into convo (lane, session, project, title, started, updated, parent) values (?, ?, ?, ?, ?, ?, ?)",
+                       (lane, session, project, title, now, now, parent))
         return dict(self.store.run("select * from convo where lane = ?", (lane,))[0])
 
     def _drop_nodes(self, ids):
@@ -365,8 +366,10 @@ class Memory:
             self._refresh_topic(rows[0]["parent"])
 
     def _finished(self, convo_id, followed, status):
-        """An imported conversation is over: only its last exchange may stay open, so old work is never listed as to-do."""
-        if status == "open" and followed and self.store.run("select 1 from convo where id = ? and lane like 'import:%'", (convo_id,)):
+        """An imported conversation is over: only its last exchange may stay open, so old work is never listed as to-do.
+        A sub-agent's exchange is never open: it is the parent's finished research, not work waiting for the person."""
+        if status == "open" and self.store.run("select 1 from convo where id = ? and (parent != 0 or (? and lane like 'import:%'))",
+                                               (convo_id, 1 if followed else 0)):
             return "done"
         return status
 
@@ -503,22 +506,24 @@ class Memory:
             self.store.put(f"partial:{lane}", {"seq": seq, "size": size})
             return True
 
-    def index(self, lane, session, project, messages, reply=None, finished=False, assign=None, stamps=None) -> int:
+    def index(self, lane, session, project, messages, reply=None, finished=False, assign=None, stamps=None, parent=0) -> int:
         """Store the finished exchanges of a conversation. Returns how many were written.
 
         The last exchange counts as finished when `reply` ended the turn, or when the
         caller says so (the messages stop just before a new human turn).
         `assign(group, previous project)` replaces the project rule and `stamps` (one time per human turn) the
         clock: both are for importing a transcript written earlier (see importer.py).
+        `parent` is a conversation's id when this lane is a sub-agent's: it is stored as a conversation of its own,
+        linked to that one, left out of the lists of conversations and never open.
         """
         with self.store.lock:
             self.stamps = stamps
             try:
-                return self._index(lane, session, project, messages, reply, finished, assign)
+                return self._index(lane, session, project, messages, reply, finished, assign, parent)
             finally:
                 self.stamps = None
 
-    def _index(self, lane, session, project, messages, reply, finished, assign) -> int:
+    def _index(self, lane, session, project, messages, reply, finished, assign, parent=0) -> int:
         turns = rq.human_turns(messages)
         if not turns:
             return 0
@@ -536,7 +541,7 @@ class Memory:
         with self.store.lock:
             if carried and done and not self.store.run("select 1 from convo where lane = ?", (lane,)):
                 self._resumed(lane, session, group, done)
-            convo = self._convo(lane, session, project, _first_line(clean(rq.human_text(messages[turns[0]]))))
+            convo = self._convo(lane, session, project, _first_line(clean(rq.human_text(messages[turns[0]]))), parent)
             stale = [r["id"] for r in self.store.run(
                 "select id from node where convo = ? and kind = 'leaf' and seq >= ?", (convo["id"], len(turns)))]
             touched = {r["parent"] for r in self.store.run(
@@ -585,7 +590,7 @@ class Memory:
 
     # ---- reading -------------------------------------------------------------
 
-    def _near(self, query, project, exclude_lane, lane=None) -> list:
+    def _near(self, query, project, exclude_lane, lane=None, convo=None) -> list:
         """[(id, cosine)] of the exchanges nearest to `query` by meaning, nearest first; [] when that search is off."""
         model = semantic.active()
         if not model:
@@ -598,6 +603,8 @@ class Memory:
             sql, args = sql + " and c.lane != ?", args + [exclude_lane]
         if lane:
             sql, args = sql + " and c.lane = ?", args + [lane]
+        if convo:
+            sql, args = sql + " and (c.id = ? or c.parent = ?)", args + [convo, convo]
         # shortcut: reads every vector of the project for each search, fine to about 20,000 exchanges; past that, use a vector index
         rows = self.store.run(sql, args)
         if not rows:
@@ -609,7 +616,7 @@ class Memory:
         near = [(r["id"], round(score, 4)) for r, score in zip(rows, scores) if score >= DENSE_MIN]
         return sorted(near, key=lambda p: (-p[1], p[0]))[:DENSE_TOP]
 
-    def _deep(self, words, terms, need, project, exclude_lane, known, lane=None) -> list:
+    def _deep(self, words, terms, need, project, exclude_lane, known, lane=None, convo=None) -> list:
         """Exchanges the title-and-text search missed whose transcript (tool output included) holds the query, best first,
         each with the matching line as its snippet."""
         sql = ("select n.id, n.kind, n.title, n.text, n.ts, n.project, n.convo, c.title ctitle, detail_fts.text dtext "
@@ -622,6 +629,8 @@ class Memory:
             sql, args = sql + " and c.lane != ?", args + [exclude_lane]
         if lane:
             sql, args = sql + " and c.lane = ?", args + [lane]
+        if convo:
+            sql, args = sql + " and (c.id = ? or c.parent = ?)", args + [convo, convo]
         found = []
         for row in self.store.run(sql + " order by bm25(detail_fts) limit 20", args):
             if row["id"] in known:
@@ -634,16 +643,17 @@ class Memory:
             found.append(hit)
         return found
 
-    def search(self, query, project=None, exclude_lane=None, limit=8, kind="leaf", lane=None, deep=True) -> list:
+    def search(self, query, project=None, exclude_lane=None, limit=8, kind="leaf", lane=None, deep=True, convo=None) -> list:
         """Stored exchanges that match `query`, best first. Needs two of its words (one if it has one).
 
         With a model installed, exchanges near the query by meaning are added, and the two rankings are
         merged by reciprocal rank fusion. `deep=False` leaves out exchanges only their transcript (tool output,
         web pages) matches: what is printed unmarked into a conversation must not carry that text.
+        `convo` limits it to one conversation (by id) and the sub-agent work filed under it.
         """
         words = sorted({w for w in re.findall(r"[a-z0-9_]{2,}", query.lower()) if w not in STOP})[:24]
         terms = set(tokens(query))
-        near = self._near(query, project, exclude_lane, lane) if kind == "leaf" else []
+        near = self._near(query, project, exclude_lane, lane, convo) if kind == "leaf" else []
         if (not words or not terms) and not near:
             return []
         sql = ("select n.id, n.kind, n.title, n.text, n.ts, n.vec, n.project, n.convo, c.title ctitle, "
@@ -656,6 +666,8 @@ class Memory:
             sql, args = sql + " and c.lane != ?", args + [exclude_lane]
         if lane:
             sql, args = sql + " and c.lane = ?", args + [lane]
+        if convo:
+            sql, args = sql + " and (c.id = ? or c.parent = ?)", args + [convo, convo]
         vector, need, hits = embed.embed(query), min(2, len(terms)), []
         for row in self.store.run(sql + " order by rank limit 60", args) if words and terms else []:
             overlap = len(terms & set(tokens(row["title"] + " " + row["text"])))
@@ -666,7 +678,7 @@ class Memory:
         hits.sort(key=lambda h: (-h["score"], -h["ts"], h["id"]))
         for hit in hits:
             hit.pop("vec", None)
-        deep = self._deep(words, terms, need, project, exclude_lane, {hit["id"] for hit in hits}, lane) if deep and kind == "leaf" and words and terms else []
+        deep = self._deep(words, terms, need, project, exclude_lane, {hit["id"] for hit in hits}, lane, convo) if deep and kind == "leaf" and words and terms else []
         if not near and not deep:
             return hits[:limit]
         fused = {hit["id"]: 1 / (RRF_K + rank) for rank, hit in enumerate(hits, 1)}
@@ -693,8 +705,20 @@ class Memory:
         except Exception:
             return []
 
+    def within(self, convo_id, limit=20) -> list:
+        """The exchanges stored under one conversation, its sub-agents' work included, newest first, shaped like search hits."""
+        return [dict(r, snippet=snippet(r["text"], set())) for r in self.store.run(
+            "select n.id, n.title, n.text, n.ts from node n join convo c on c.id = n.convo "
+            "where n.kind = 'leaf' and (c.id = ? or c.parent = ?) order by n.ts desc, n.id desc limit ?", (convo_id, convo_id, limit))]
+
+    def parent_of(self, session):
+        """The conversation the main thread of this session is in (the newest one stored), or None."""
+        rows = self.store.run("select id, project from convo where session = ? and parent = 0 order by updated desc, id desc limit 1",
+                              (session,)) if session else []
+        return dict(rows[0]) if rows else None
+
     def recent(self, project=None, exclude_lane=None, limit=3, since=None, until=None) -> list:
-        sql, args = "select * from convo where turns > 0", []
+        sql, args = "select * from convo where turns > 0 and parent = 0", []
         if since:
             sql, args = sql + " and updated >= ?", args + [since]
         if until:
@@ -835,6 +859,8 @@ class Memory:
     def _remove(self, row):
         """One conversation, and every copy of its text: nodes, and the per-conversation rows in `state` and `used`."""
         from . import library
+        for child in self.store.run("select id, lane from convo where parent = ?", (row["id"],)):  # a sub-agent's work goes with its parent
+            self._remove(child)
         self._drop_nodes([r["id"] for r in self.store.run("select id from node where convo = ?", (row["id"],))])
         library.drop(self.store, [row["id"]])
         self.store.run("delete from convo where id = ?", (row["id"],))
@@ -965,25 +991,59 @@ class MemoryLayer:
     def _main_thread(body, ctx) -> bool:
         return not ctx.agent and rq.has_client_tools(body) and bool(rq.human_turns(body.get("messages") or []))
 
+    @staticmethod
+    def _sub_thread(body, ctx) -> bool:
+        """A sub-agent's own thread. A fork is not one: it shares its parent's prefix and is left alone."""
+        from .routing import RoutingLayer  # routing imports this module
+        return bool(ctx.agent) and RoutingLayer._kind(ctx, body) == "sub" and rq.has_client_tools(body) \
+            and bool(rq.human_turns(body.get("messages") or []))
+
+    def _parent(self, ctx) -> dict:
+        """The conversation a sub-agent belongs to, {"id", "project"} or {}: its session's main conversation when
+        the lane first appeared, and kept (the note it was sent names it)."""
+        return ctx.store.frozen(f"subparent:{ctx.lane}", lambda: self.memory.parent_of(ctx.session) or {})
+
+    @staticmethod
+    def _add(first, text):
+        block = {"type": "text", "text": text}
+        if isinstance(first.get("content"), str):
+            first["content"] = [block, {"type": "text", "text": first["content"]}]
+        else:
+            first["content"].insert(max(0, len(first["content"]) - 1), block)
+
     def transform(self, body, ctx):
         cfg = ctx.cfg["memory"]
-        if not (cfg["enabled"] and cfg["recall"]) or not self._main_thread(body, ctx):
+        if not (cfg["enabled"] and cfg["recall"]):
             return
-        messages = body["messages"]
+        messages = body.get("messages") or []
+        if self._sub_thread(body, ctx):
+            parent = self._parent(ctx)
+            if parent and cfg.get("tools", True):  # the note names a tool: no tool, no note
+                note = (f'<system-reminder>\nYou are a subagent of conversation {parent["id"]}; search its memory with memory_search '
+                        f'{{"conversation": {parent["id"]}}} before re-deriving earlier findings.\n</system-reminder>')
+                self._add(messages[rq.human_turns(messages)[0]], note)
+                ctx.stats["memory"] = {"subnote_chars": len(note)}
+            return
+        if not self._main_thread(body, ctx):
+            return
         first = messages[rq.human_turns(messages)[0]]
         note = ctx.store.frozen(f"recall:{ctx.lane}", lambda: self.memory.recall(
             ctx.project, rq.human_text(first), ctx.lane, cfg["recall_chars"], tools_hint=cfg.get("tools", True)))
         if not note:
             return
-        block = {"type": "text", "text": note}
-        if isinstance(first.get("content"), str):
-            first["content"] = [block, {"type": "text", "text": first["content"]}]
-        else:
-            first["content"].insert(max(0, len(first["content"]) - 1), block)
+        self._add(first, note)
         ctx.stats["memory"] = {"recall_chars": len(note)}
 
     def observe(self, ctx, orig, reply):
-        if not ctx.cfg["memory"]["enabled"] or not self._main_thread(orig, ctx):
+        if not ctx.cfg["memory"]["enabled"]:
+            return
+        if self._sub_thread(orig, ctx):
+            parent = self._parent(ctx)
+            if parent and reply.get("stop_reason") != "tool_use":  # filed when it has answered; nothing is stored while it works
+                self.memory.index(ctx.lane, ctx.session, parent["project"], orig["messages"], reply, parent=parent["id"])
+                self.memory.embed_pending()
+            return
+        if not self._main_thread(orig, ctx):
             return
         self.memory.index(ctx.lane, ctx.session, ctx.project, orig["messages"], reply)
         if reply.get("stop_reason") == "tool_use":  # a long turn: keep what it has done so far searchable
