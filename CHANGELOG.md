@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Manage and look up the prompt library.** `almanac library list`,
+  `show ID` (the entry, its fixes and the entries it replaced, with what
+  changed) and `forget ID` (deletes the entry and the older ones it replaced).
+  A new `library_find {query}` tool, added after the existing ones, returns up
+  to 3 current entries shaped like the note and ending with the quoted-record
+  sentence. `almanac report` gains one line: entries written and notes shown
+  in the last 24 hours, counted from a record the writer now logs per entry.
+
 - **The prompt library is shown to the model.** A typed request that matches
   a current entry (word overlap of at least `library.threshold`, 0.5, and 3
   shared words; fenced code and logs ignored) gets a short note in the

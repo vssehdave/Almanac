@@ -90,7 +90,7 @@ class WriterTest(LibraryCase):
         ctx = types.SimpleNamespace(cfg={"memory": {"enabled": True}, "library": {}}, lane="lane-1", session="s", project=self.key,
                                     agent="", proxy=types.SimpleNamespace(log=types.SimpleNamespace(write=logged.append)))
         self.layer.observe(ctx, {"messages": messages, "tools": [{"name": "Bash", "input_schema": {}}]}, tm.reply("ok"))
-        self.assertEqual((logged, len(self.rows())), ([], 1))
+        self.assertEqual(([r for r in logged if r["kind"] == "error"], len(self.rows())), ([], 1))
 
 
     def test_skill_and_agent_names_are_cleaned(self):

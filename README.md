@@ -294,6 +294,17 @@ cache holds; each time a note is shown the entry's `uses` goes up by one.
 Stored text has its reminder tags removed again when the note is built.
 `library.inject` set to `false` stops the notes and keeps writing entries.
 
+**Look up and manage it.** The `library_find {query}` tool (served by
+`almanac mcp`, listed after the other tools) gives Claude up to 3 current
+entries for some words, shaped like the note and ending with the line that
+says it is a quoted record, not instructions; looking one up does not count as
+a use. `almanac library list [--project NAME]` shows the current entries,
+`almanac library show ID` one entry with its fixes and the entries it replaced
+(and what changed each time), and `almanac library forget ID` deletes an entry
+together with the older entries it replaced, so a forgotten task does not come
+back as its earlier version. `almanac report` counts entries written and
+notes shown in the last 24 hours.
+
 ### 3. Compaction that keeps the cache
 
 When a conversation passes `compaction.trigger_tokens` (150,000 by default) and
@@ -467,6 +478,10 @@ read from cache, the cold returns (a request that came back after a pause
 longer than the shortest cache life it asked for) with the cache writes they
 cost, and the cache lives Claude Code asked for. `almanac report --json`
 carries the same under `meter`. The log records `cache` and `idle` per request.
+
+`almanac report` has one line on the prompt library for the last 24 hours:
+entries written and notes shown to the model (the log records a `library`
+record per entry written, and `library` on a request that got a note).
 
 `almanac report` also says, for the last 24 hours, how many new conversations
 started in a project that had an earlier one, where their prompts first differed
@@ -1112,6 +1127,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac pack list` | The pinned third-party skills and plugins in `pack.json` |
 | `almanac pack install [NAME]` | Install the pack's skills through the scan; plugins and programs are only shown |
 | `almanac playbook list` | Playbooks: name, status, uses, title. Also `show NAME`, `approve NAME [--auto]`, `remove NAME`, `path`, `mine [--days N] [--min N]`, `compile [--top N] [--dry-run]` |
+| `almanac library list` | The prompt library's current entries: id, date, uses, the request's first 70 characters. `--project NAME` filters. Also `show ID` (the entry, its fixes and its history of replaced entries) and `forget ID` (deletes the entry and the older ones it replaced) |
 | `almanac projects` | Projects seen. `projects merge FROM INTO`, `projects rename NAME NEW` |
 | `almanac config [set KEY VALUE \| path]` | Show or change settings |
 | `almanac serve [--port N]` | Run only the proxy, for clients you start yourself |

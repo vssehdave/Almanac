@@ -17,7 +17,7 @@ import time
 from . import mine
 from . import request as rq
 from .match import STOP, tokens
-from .memory import _first_line, clean, exchange
+from .memory import QUOTED, _first_line, clean, exchange
 from .status import rule
 
 SCHEMA = """
@@ -208,7 +208,10 @@ def observe(memory, ctx, messages, reply):
         if not turns or reply.get("stop_reason") == "tool_use":  # nothing finished yet
             return 0
         group = messages[turns[-1]:] + [{"role": "assistant", "content": reply["content"]}]
-        return record(memory, ctx.lane, group, len(turns) - 1, (ctx.cfg.get("library") or {}).get("min_tools", 5))
+        written = record(memory, ctx.lane, group, len(turns) - 1, (ctx.cfg.get("library") or {}).get("min_tools", 5))
+        if written:  # `almanac report` counts these; the lane keeps the record shaped like the request records
+            ctx.proxy.log.write({"ts": time.time(), "kind": "library", "lane": ctx.lane, "written": written})
+        return written
     except Exception as exc:  # a failed record must not cost the rest of the worker's jobs
         try:
             ctx.proxy.log.write({"ts": time.time(), "kind": "error", "where": "library", "error": f"{type(exc).__name__}: {exc}"[:300]})
@@ -351,3 +354,53 @@ def note(entry, limit=NOTE_CHARS) -> str:
     if len(text) > limit:  # a limit too small for even the fixed parts: keep the closing tag
         text = text[:max(0, limit - len(CLOSE) - 2)].rstrip() + "…\n" + CLOSE
     return text
+
+
+def render_found(found) -> str:
+    """Entries from `search`, as the `library_find` tool shows them: like the note, with what was asked, and the quoted sentence."""
+    if not found:
+        return "No earlier entry matches."
+    return "\n\n".join("\n".join([f"Asked: {_piece(entry['prompt'], 200)}", *lines(entry, NOTE_CHARS)]) for _, entry in found) + "\n\n" + QUOTED
+
+
+def listing(store, project=None) -> list:
+    """Current entries, oldest first, of one project or of all."""
+    return [dict(r) for r in store.run("select * from library where superseded_by = 0" + (" and project = ?" if project else "") + " order by id",
+                                       (project,) if project else ())]
+
+
+def _day(ts) -> str:
+    return time.strftime("%Y-%m-%d", time.localtime(ts))
+
+
+def _describe(entry, indent="") -> list:
+    out = [f"Asked: {_piece(entry['prompt'])}", f"Route: {' > '.join(_list(entry['route'])) or 'none'}"]
+    for label, key in (("Fixes", "fixes"), ("Changes since the earlier entry", "changes")):
+        if _list(entry[key]):
+            out += [f"{label}:"] + [f"  - {_piece(item)}" for item in _list(entry[key])]
+    out += [f"Files: {', '.join(_list(entry['files'])) or 'none'}", f"Outcome: {_piece(entry['outcome'])}"]
+    return [indent + line for line in out]
+
+
+def show(memory, entry_id):
+    """One entry in full with its history (the entries it replaced, newest first), as text; None when there is no such entry."""
+    store = memory.store
+    rows = store.run("select * from library where id = ?", (entry_id,))
+    if not rows:
+        return None
+    entry, older, seen, todo = dict(rows[0]), [], {entry_id}, [entry_id]
+    while todo:
+        for row in store.run("select * from library where superseded_by = ? order by id desc", (todo.pop(),)):
+            if row["id"] not in seen:
+                seen.add(row["id"])
+                older.append(dict(row))
+                todo.append(row["id"])
+
+    def head(row):
+        return (f"Entry {row['id']} (project {memory.projects.name(row['project'])}, {_day(row['created'])}, used {row['uses']} "
+                f"time{'' if row['uses'] == 1 else 's'}, exchange {row['seq'] + 1} of conversation #{row['convo']})"
+                + (f", replaced by entry {row['superseded_by']}" if row["superseded_by"] else ""))
+
+    out = [head(entry), *_describe(entry), "History:"]
+    out += [x for row in older for x in ["  " + head(row), *_describe(row, "    ")]] if older else ["  none: no earlier entry was replaced"]
+    return "\n".join(out)
