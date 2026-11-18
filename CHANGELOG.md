@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **`almanac library forget` names what it deleted.** It prints the ids.
 - **Manage and look up the prompt library.** `almanac library list`,
   `show ID` (the entry, its fixes and the entries it replaced, with what
   changed) and `forget ID` (deletes the entry and the older ones it replaced).
@@ -11,8 +12,9 @@
   in the last 24 hours, counted from a record the writer now logs per entry.
 
 - **The prompt library is shown to the model.** A typed request that matches
-  a current entry (word overlap of at least `library.threshold`, 0.5, and 3
-  shared words; fenced code and logs ignored) gets a short note in the
+  a current entry (at least `library.threshold`, 0.6, of the entry's request
+  words in the typed text, and 3 shared words, 5 for a long request; fenced
+  code and logs ignored) gets a short note in the
   playbook's slot: the date, how often it was used, the route last time, the
   fixes found then and the files, worded as a record to check, with the id for
   `memory_read`. Main thread only, never with a playbook note, decided once per

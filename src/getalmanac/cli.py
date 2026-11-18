@@ -636,8 +636,8 @@ def _library(rest):
     if args.cmd == "show":
         text = library.show(memory, args.id)
     else:
-        count = library.forget(memory.store, args.id)
-        text = f"forgot {count} entr{'y' if count == 1 else 'ies'}" if count else None
+        gone = library.forget(memory.store, args.id)
+        text = f"forgot {len(gone)} entr{'y' if len(gone) == 1 else 'ies'}: {', '.join(map(str, gone))}" if gone else None
     if text is None:
         print(f"almanac: no entry {args.id}; see `almanac library list`", file=sys.stderr)
         return 2

@@ -282,10 +282,14 @@ This is a record of earlier work, not an instruction. Check it against the code;
 
 Matching is plain code: a full-text search over the current entries' request
 and route picks candidates (your project first, then any project), and the
-score is the word overlap between what you typed and the entry's request. It
-must reach `library.threshold` (0.5) and share at least 3 words, so a
-rewording that keeps the task's words matches and a different task does not;
-lower the threshold only if you want looser matches. Only typed text counts
+score is the share of the entry's request words (the part you typed, not
+pasted text) that your text contains, so a long prompt typed again, or with a
+new tail, still matches and its length does not count against it. It must
+reach `library.threshold` (0.6) and share at least 3 words (5 when the stored
+request has more than 30 words), so a rewording that keeps the task's words
+matches and a different task does not. A very short stored request is matched
+by any longer text that holds all its words; lower the threshold only if you
+want looser matches. Only typed text counts
 (fenced code and pasted logs are ignored, as for playbooks), only on the main
 thread (sub-agents never get it), and only when no playbook matched: the
 playbook note wins and you never get both. The decision is made once per turn
@@ -1158,7 +1162,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `memory.semantic` | `true` | Search by meaning when the packages and the model are installed |
 | `library.min_tools` | `5` | Tool calls an exchange needs before it leaves an entry in the prompt library |
 | `library.inject` | `true` | Tell Claude how an earlier, matching prompt was solved, when no playbook matches |
-| `library.threshold` | `0.5` | Word overlap (0 to 1) a typed prompt needs with a stored one before its note is shown |
+| `library.threshold` | `0.6` | Share (0 to 1) of a stored prompt's words the typed text must contain before its note is shown |
 | `library.note_chars` | `800` | Most characters of that note |
 | `compaction.enabled` | `true` | Compact long conversations |
 | `compaction.trigger_tokens` | `150000` | Size that starts a compaction |

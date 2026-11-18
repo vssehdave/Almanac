@@ -86,14 +86,14 @@ class ListShowForgetTest(CliCase):
         old, new = self.twice()
         self.finish("Write the readme introduction completely", self.calls(), lane="lane-c")
         code, out, _ = self.run_cli("forget", str(new["id"]))
-        self.assertEqual((code, out.strip()), (0, "forgot 2 entries"))
+        self.assertEqual((code, out.strip()), (0, f"forgot 2 entries: {new['id']}, {old['id']}"))
         self.assertEqual([r["prompt"] for r in self.rows()], ["Write the readme introduction completely"])
         self.assertEqual(self.store.run("select count(*) n from library_fts")[0]["n"], 1)
         self.assertEqual(library.find(self.store, PROMPT, self.key), None)
 
     def test_forgetting_an_old_version_keeps_the_current_entry(self):
         old, new = self.twice()
-        self.assertEqual(self.run_cli("forget", str(old["id"]))[1].strip(), "forgot 1 entry")
+        self.assertEqual(self.run_cli("forget", str(old["id"]))[1].strip(), f"forgot 1 entry: {old['id']}")
         (row,) = self.rows()
         self.assertEqual((row["id"], row["superseded_by"]), (new["id"], 0))
         self.assertEqual(library.find(self.store, PROMPT, self.key)[0]["id"], new["id"])

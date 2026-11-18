@@ -73,7 +73,7 @@ class NoteTest(NoteCase):
         shown = [r.get("library") for r in rig.records()]
         self.assertEqual(shown[1:], [None, None])
         self.assertEqual(shown[0]["id"], self.rows()[0]["id"])
-        self.assertGreaterEqual(shown[0]["score"], 0.5)
+        self.assertGreaterEqual(shown[0]["score"], 0.6)
 
     def test_absent_on_a_sub_agent(self):
         self.solved()
@@ -108,7 +108,7 @@ class NoteTest(NoteCase):
         self.solved()
         rig = self.rig()
         self.assertEqual(len(notes(self.send(rig, human(TYPED)))), 1)  # the control
-        for text in (OTHER, "the proxy is slow today", "ok thanks", PROMPT + " then redesign pagination, caching, dashboards and credentials"):
+        for text in (OTHER, "the proxy is slow today", "ok thanks"):
             self.assertEqual(notes(self.send(rig, human(text))), [], text)
         self.assertEqual(self.rows()[0]["uses"], 1)
 
@@ -134,14 +134,51 @@ class NoteTest(NoteCase):
             self.assertTrue(text.endswith("</system-reminder>"), cap)
 
     def test_the_threshold_decides(self):
-        self.solved()
-        near = "make the proxy test pass and rework the whole settings page"  # three words in common, many others
+        self.solved("Fix the failing parser test in the proxy module after the cache refactor")
+        near = "fix the parser test in the proxy and update the docs"  # 4 of the stored prompt's 8 words: 0.5
         self.assertEqual(notes(self.send(self.rig(), human(near))), [])
-        self.assertEqual(len(notes(self.send(self.rig(**{"library.threshold": 0.2}), human(near)))), 1)
+        self.assertEqual(len(notes(self.send(self.rig(**{"library.threshold": 0.4}), human(near)))), 1)
 
     def test_with_playbooks_off_the_library_still_speaks(self):
         self.solved()
         self.assertEqual(len(notes(self.send(self.rig(**{"playbooks.enabled": False}), human(TYPED)))), 1)
+
+
+def words(count, start=0, tail=""):
+    """`count` distinct made-up words (two letters, then `tail`), none a stop word or changed by stemming."""
+    pool = [a + b + tail for a in "bcdfghjklmnpqrtvwxz" for b in "bcdfghjklmnpqrtvwxz"]
+    return " ".join(pool[start:start + count])
+
+
+class LongPromptTest(NoteCase):
+    def test_a_long_prompt_typed_again_gets_the_note(self):
+        self.solved(words(200))
+        self.assertEqual(len(notes(self.send(self.rig(), human(words(200))))), 1)
+
+    def test_the_same_long_prompt_with_a_different_tail_still_gets_it(self):
+        self.solved(words(60))
+        self.assertEqual(len(notes(self.send(self.rig(), human(words(60) + " " + words(150, 200))))), 1)  # 60 words, then 140 more
+        self.assertEqual(notes(self.send(self.rig(), human(words(150, 200)))), [])  # the control: the tail alone is another task
+
+    def test_a_long_prompt_longer_than_the_stored_cut_is_found_by_a_direct_search(self):
+        long = words(203, tail="qqqqq")  # 8 characters a word: the stored copy keeps the first 75 of them
+        self.solved(long)
+        self.assertLess(len(self.rows()[0]["prompt"].split()), 100)
+        found = library.find(self.store, long, self.key, library.THRESHOLD)
+        self.assertEqual(found[0]["id"], self.rows()[0]["id"])
+
+    def test_text_pasted_into_the_stored_prompt_does_not_count_against_it(self):
+        self.solved(words(30) + "\n```\n" + words(60, 100) + "\n```")
+        self.assertEqual(len(notes(self.send(self.rig(), human(words(30))))), 1)
+
+    def test_a_short_stored_prompt_that_shares_two_words_does_not_match(self):
+        self.solved(OTHER)
+        self.assertEqual(len(notes(self.send(self.rig(), human(OTHER)))), 1)  # the control
+        self.assertEqual(notes(self.send(self.rig(), human("please rewrite the readme for the website thoroughly"))), [])
+
+    def test_an_unclosed_tag_does_not_eat_the_text_after_it(self):
+        self.assertTrue(library._piece("a</SYSTEM_REMINDER b").endswith(" b"))
+        self.assertEqual(library._piece("a</system-reminder b"), "a b")
 
 
 class FindTest(NoteCase):

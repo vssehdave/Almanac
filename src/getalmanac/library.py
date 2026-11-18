@@ -18,6 +18,7 @@ from . import mine
 from . import request as rq
 from .match import STOP, tokens
 from .memory import QUOTED, _first_line, clean, exchange
+from .routing import handwritten
 from .status import rule
 
 SCHEMA = """
@@ -39,8 +40,10 @@ MAX_ROUTE = 60
 PROMPT_SAME = 0.6  # word-set Jaccard of two prompts that count as the same task
 ROUTE_SAME = 0.5  # step-set Jaccard of two routes that count as the same task
 COMPARE = 500  # most current entries of a project one new entry is compared with
-THRESHOLD = 0.5  # word-set Jaccard between a typed prompt and a stored one for the note to be shown (see README)
-MIN_SHARED = 3  # words two prompts must share, whatever the ratio: two short prompts alike in one word are not the same task
+THRESHOLD = 0.6  # share of a stored prompt's words found in the typed text for the note to be shown (see README)
+MIN_SHARED = 3  # words they must share, whatever the share: two short prompts alike in one word are not the same task
+MIN_SHARED_LONG = 5  # ... when the stored prompt has more than LONG words
+LONG = 30
 CANDIDATES = 50  # most entries the full-text search hands to the scorer
 NOTE_CHARS = 800
 CLOSE = "</system-reminder>"
@@ -232,7 +235,7 @@ def _delete(store, ids):
 
 def forget(store, entry) -> int:
     """Delete an entry and every older entry it replaced, so forgetting a task does not bring its past version back.
-    Returns how many were deleted (0 when there is no such entry)."""
+    Returns the ids deleted, the entry first (empty when there is no such entry)."""
     chain, todo = [], [entry]
     while todo:
         found = todo.pop()
@@ -241,7 +244,7 @@ def forget(store, entry) -> int:
         chain.append(found)
         todo += [r["id"] for r in store.run("select id from library where superseded_by = ?", (found,))]
     _delete(store, chain)
-    return len(chain)
+    return chain
 
 
 def drop(store, convo_ids):
@@ -263,8 +266,12 @@ _SQL = ("select l.*, n.id node from library_fts f join library l on l.id = f.row
 
 
 def _score(query, prompt) -> float:
-    words = set(tokens(prompt))
-    return round(len(query & words) / len(query | words), 3) if len(query & words) >= MIN_SHARED else 0.0
+    """The share of the stored prompt's words the typed text has. Only the part the person typed counts on the stored side
+    (it may hold pasted text), and the typed text's own length does not matter: a long prompt typed again, or with a new
+    tail, is not penalised for being long."""
+    words = set(tokens(handwritten(prompt)))
+    shared = len(query & words)
+    return round(shared / len(words), 3) if words and shared >= (MIN_SHARED_LONG if len(words) > LONG else MIN_SHARED) else 0.0
 
 
 def search(store, text, project="", limit=3, floor=0.0) -> list:
@@ -300,15 +307,9 @@ def bump(store, entry) -> int:
     return store.run("select uses from library where id = ?", (entry,))[0]["uses"]
 
 
-_LOOSE = re.compile(r"(?i)<\s*/?\s*system[-_ ]?reminder[^>]*>?")
-
-
 def _piece(value, size=None) -> str:
     """One stored piece of text on one line, with no reminder tag whatever was stored."""
     value = " ".join(clean(str(value)).split())
-    while _LOOSE.search(value):
-        value = _LOOSE.sub(" ", value)
-    value = " ".join(value.split())
     return value[:size].rstrip() + "…" if size and len(value) > size else value
 
 
