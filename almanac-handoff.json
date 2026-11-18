@@ -1,9 +1,0 @@
-{
-  "state": "stalled",
-  "time": "2026-11-18T06:36:13Z",
-  "tree": "dc370204d93589c2e7ff3236d21c6aa47c9153a9",
-  "base_branch": "test/takeover-base",
-  "base_commit": "4ab3d661e3aaba8b416de3ce98aba4c242cbeb29",
-  "session": "takeover-test",
-  "sig": "62dda5d13f7d998ad7d64e68b58b7af630680e91e9b0a7a2dfd1f500a08ceeb2"
-}
