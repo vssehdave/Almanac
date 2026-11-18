@@ -100,7 +100,7 @@ def _must(cwd, *args, env=None, timeout=20) -> str:
     done = subprocess.run(["git", "-C", cwd, *args], capture_output=True, encoding="utf-8", errors="replace",
                           timeout=timeout, stdin=subprocess.DEVNULL, env={**os.environ, **GIT_ENV, **(env or {})})
     if done.returncode:
-        raise RuntimeError(f"git {args[0]}: " + " ".join((done.stderr or done.stdout).split())[:200])
+        raise RuntimeError(f"git {args[0]}: " + redact(" ".join((done.stderr or done.stdout).split()))[:200])  # git echoes remote URLs, with their passwords
     return done.stdout.rstrip()
 
 
@@ -560,7 +560,7 @@ class HandoffLayer:
             self.memory.store.put(f"handoff:{top}", {"time": time.time(), "state": state, "commit": commit})
         except Exception as exc:  # no git, no remote, offline, refused: the session goes on regardless
             if self.log:
-                self.log.write({"ts": time.time(), "kind": "error", "where": "handoff", "error": f"{type(exc).__name__}: {exc}"[:300]})
+                self.log.write({"ts": time.time(), "kind": "error", "where": "handoff", "error": redact(f"{type(exc).__name__}: {exc}")[:300]})
 
 
 def watchdog(minutes) -> str:

@@ -14,7 +14,7 @@ import time
 from . import mine
 from . import request as rq
 from .match import tokens
-from .memory import _first_line, clean, exchange
+from .memory import _first_line, clean, exchange, redact
 from .status import rule
 
 SCHEMA = """
@@ -185,7 +185,7 @@ def observe(memory, ctx, messages, reply):
         return record(memory, ctx.lane, group, len(turns) - 1, (ctx.cfg.get("library") or {}).get("min_tools", 5))
     except Exception as exc:  # a failed record must not cost the rest of the worker's jobs
         try:
-            ctx.proxy.log.write({"ts": time.time(), "kind": "error", "where": "library", "error": f"{type(exc).__name__}: {exc}"[:300]})
+            ctx.proxy.log.write({"ts": time.time(), "kind": "error", "where": "library", "error": redact(f"{type(exc).__name__}: {exc}")[:300]})
         except Exception:
             pass
         return 0

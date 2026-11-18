@@ -3,11 +3,14 @@ import os
 import tempfile
 import time
 import unittest
+from pathlib import Path
+from unittest import mock
 
+import test_compact as tc
 import test_memory as tm
 import test_playbook as tp
 import test_rawmemory as tr
-from getalmanac import mcp, routing
+from getalmanac import cloud, compact, library, mcp, playbook, routing
 from getalmanac import request as rq
 from getalmanac.memory import Memory, clean
 from getalmanac.store import Store
@@ -86,6 +89,49 @@ class SkillTextIsNotTypedTest(tp.Rigged):
         sent = self.send(rig, tp.body(skill_turn(self.BODY), cwd=self.cwd), session="s1")
         self.assertEqual(self.count(), 0)
         self.assertEqual(tp.reminders(sent["messages"][0]), [])
+
+
+TOKEN = "ghp_" + "Zq3Lm9Xk" * 4
+
+
+class SmallHardeningTest(tp.Home):
+    def test_git_stderr_is_redacted_before_it_is_raised_or_logged(self):
+        failed = mock.Mock(returncode=128, stdout="", stderr=f"fatal: unable to access 'https://bob:{TOKEN}@github.com/o/r.git/'")
+        with mock.patch.object(cloud.subprocess, "run", return_value=failed):
+            with self.assertRaises(RuntimeError) as caught:
+                cloud._must("/x", "push")
+        self.assertNotIn(TOKEN, str(caught.exception))
+
+    def test_a_library_error_is_logged_redacted(self):
+        ctx = mock.Mock()
+        ctx.lane, ctx.cfg = "lane", {}
+        with mock.patch.object(library, "record", side_effect=RuntimeError(f"git said {TOKEN}")):
+            library.observe(None, ctx, [tm.human("q")], {"content": [], "stop_reason": "end_turn"})
+        logged = ctx.proxy.log.write.call_args[0][0]["error"]
+        self.assertNotIn(TOKEN, logged)
+
+    def test_the_compaction_prefix_is_cleaned_before_it_is_stored(self):
+        told = {0: ("a </system-reminder> title", f"summary with {TOKEN} inside")}
+        messages = tc.history(12)
+        prefix = compact.build_prefix(messages, len(messages) - 1, {n: 100 + n for n in range(12)}, 12000, told, {n: "done" for n in range(12)})
+        text = prefix[0]["content"][-1]["text"]
+        self.assertIn("summary with [key removed] inside", text)  # the model's line reached the outline, redacted
+        self.assertNotIn(TOKEN, text)
+        self.assertEqual(text.count("</system-reminder>"), 1)  # only the frame's own
+
+    def test_a_playbook_file_that_is_a_symlink_is_not_written(self):
+        target = Path(self.home, "elsewhere.txt")
+        target.write_text("keep")
+        links = lambda path: path.name in ("playbook.json", "run.py")  # noqa: E731  (a real link needs a privilege on Windows)
+        with mock.patch.object(Path, "is_symlink", autospec=True, side_effect=links):
+            with self.assertRaises(ValueError):
+                playbook.save(tp.make(), script="print(1)\n")
+            with self.assertRaises(ValueError):
+                playbook.save(tp.make())
+        self.assertFalse(playbook.script_path("weekly-report").exists())
+        self.assertEqual(playbook.load("weekly-report"), None)
+        playbook.save(tp.make())  # the same save works without the links
+        self.assertIsNotNone(playbook.load("weekly-report"))
 
 
 if __name__ == "__main__":

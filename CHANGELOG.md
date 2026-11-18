@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Security fix: smaller hardening items.** Git's error text (it can echo a
+  remote URL with its password) and library errors are redacted before they are
+  raised or logged; the compaction summary is cleaned (tags and secrets) before
+  it is stored; and a playbook file that is a symbolic link is no longer written
+  through.
 - **Security fix: the cloud watchdog checks a signature.** It used to act on
   any commit on `cloud/handoff`, so anyone who could push there could give the
   cloud task its instructions. `almanac-handoff.json` now carries an HMAC-SHA256
