@@ -11,7 +11,11 @@
   main thread's model is untouched but its effort now follows its model's
   ladder. A sub-agent is never routed below the model it starts on, whether
   its definition asked for it or it inherited it (a pin still wins);
-  `routing.route_inherited` (default false) lets an inherited model be routed down. **Default `routing.effort` is now medium, medium, low**
+  `routing.route_inherited` (default false) lets an inherited model be routed down.
+  Saying an earlier attempt failed takes the next rung of the ladder, not the
+  top tier. In `subagents` mode effort is written only on a raise and never
+  lowers the one Claude Code sent. A malformed `routing.ladders`, `effort` or
+  `effort_cost` in `config.json` falls back to the default. **Default `routing.effort` is now medium, medium, low**
   (was low, medium, kept), so Opus requests that carry an effort are sent at low.
   `routing.effort_cost` scales the reply cost, as an estimate, when a stay is
   compared with a move.

@@ -29,6 +29,7 @@ from .compact import estimate
 from .memory import clean
 
 TIERS = ("small", "medium", "large")
+EFFORTS = ("low", "medium", "high", "xhigh", "max")  # the levels the API takes, weakest first
 AGENT_TOOLS = ("Agent", "Task")  # the sub-agent tool: "Task" in older Claude Code versions
 GUIDANCE = ("\n\nAlmanac routing: split work by difficulty. Begin each sub-agent prompt with one line, "
             "'Difficulty: simple' (lookups, reading, summaries, small edits), 'Difficulty: standard' "
@@ -150,7 +151,7 @@ def strikes(messages, after: int) -> int:
         run = run + 1 if item else 0
         if item:
             seen[item] = seen.get(item, 0) + 1
-        if run >= after or max(seen.values(), default=0) >= after:
+        if run >= after or seen.get(item, 0) >= after:
             count, run, seen = count + 1, 0, {}
     return count
 
@@ -293,13 +294,14 @@ class RoutingLayer:
         pin = store.get(pin_key(ctx.project)) if ctx.project else None
         top = TIERS.index(cfg["ceiling"]) if cfg["ceiling"] in TIERS else len(TIERS) - 1
         if kind == "main" and cfg["mode"] != "all":  # the model stays as it is; only its effort moves along its own ladder
-            normal = cfg["effort"].get(tier_now, "")
-            raised = boosted(messages, turns, turn, cfg)
-            up, effort = climb(cfg, tier_now, 1 if raised else 0, top)
-            if up != tier_now:
-                effort = normal
-            dec.update(tier=tier_now, model=body["model"], effort=effort, asked=tier_now, why=f"effort raised: {raised}" if raised else "effort only")
-            if effort != normal:
+            raised = "" if pin in TIERS else ("the person said this went wrong" if failed(text) else "") or boosted(messages, turns, turn, cfg)
+            up, rung = climb(cfg, tier_now, 1 if raised else 0, top)
+            sent = (body.get("output_config") or {}).get("effort")
+            effort = ""  # written only on a raise, and never below what the client asks for (its own choice, say xhigh, stands)
+            if raised and up == tier_now and sent in EFFORTS and rung in EFFORTS and EFFORTS.index(rung) > EFFORTS.index(sent):
+                effort = rung
+            dec.update(tier=tier_now, model=body["model"], effort=effort, asked=tier_now, why=f"effort raised: {raised}" if effort else "effort only")
+            if effort:
                 dec["escalated"] = True
             return dec
         if pin in TIERS:
@@ -331,7 +333,7 @@ class RoutingLayer:
             steps = hits + (1 if failed_text or raised else 0)
             if steps:
                 up, rung = climb(cfg, TIERS[min(TIERS.index(cur), top)] if failed_text else tier, steps, top)
-                if TIERS.index(up) >= TIERS.index(tier) and (up, rung) != (tier, effort):
+                if failed_text or (TIERS.index(up) >= TIERS.index(tier) and (up, rung) != (tier, effort)):  # said to have failed: the next rung, outright
                     tier, effort, dec["escalated"] = up, rung, True
                     if not failed_text:
                         why = f"raised a rung: {raised or 'its own tool calls kept failing'}"

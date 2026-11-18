@@ -390,7 +390,7 @@ class EscalationTest(Case):
     def test_a_person_saying_it_is_still_broken_raises_the_turn(self):
         turns = [{"text": "list the files in src"}, {"text": "that's not right, explain again"}]
         sent = self.send(convo(turns), model=SMALL)
-        self.assertEqual(sent["model"], LARGE)  # said to have failed: large by the rules
+        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (MEDIUM, "low"))  # said to have failed: one rung up Haiku's ladder
         self.assertIn("failed", self.decisions()[-1]["why"])
 
     def test_the_raise_stops_at_the_top_tier(self):
@@ -706,6 +706,14 @@ class LadderTest(Case):
         self.climb("Difficulty: hard\nFind why the cache returns stale rows.", LARGE,
                    [(LARGE, "low"), (LARGE, "high"), (LARGE, "high"), (LARGE, "high")])
 
+    def test_a_task_that_says_it_failed_takes_the_next_rung_not_the_large_tier(self):
+        self.climb("that didn't work, try again\nread README.md and report its first line.", SMALL,
+                   [(MEDIUM, "low"), (MEDIUM, "medium"), (MEDIUM, "medium"), (MEDIUM, "medium")])
+
+    def test_a_person_saying_it_failed_takes_the_next_rung_on_the_main_thread(self):
+        sent = self.send(convo([{"text": "list the files in src"}, {"text": "that didn't work, try again"}]), model=SMALL)
+        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (MEDIUM, "low"))
+
     def test_a_fork_never_moves(self):
         self.assertEqual(self.sub("Add a retry to fetch() in net.py.", SMALL, 6, kind="fork"), (SMALL, "high"))
 
@@ -760,19 +768,60 @@ class AgentFloorTest(Case):
 class MainEffortOnlyTest(Case):
     mode = "subagents"
 
+    def ask(self, turns, model, effort):
+        raw = body(convo(turns), model)
+        raw["output_config"]["effort"] = effort
+        self.rig.messages(raw, extra=MAIN)
+        sent = self.rig.sent()
+        return sent["model"], sent["output_config"]["effort"]
+
     def test_the_model_stays_and_the_effort_climbs_then_falls_back(self):
         turns = [{"text": "design a plugin system", "errors": 3}]
         got = []
         for text in ("a", "b", "c", "d"):
             turns = turns + [{"text": text}]
-            sent = self.send(convo(turns), model=LARGE)
-            got.append((sent["model"], sent["output_config"]["effort"]))
+            got.append(self.ask(turns, LARGE, "low"))
         self.assertEqual(got, [(LARGE, "high")] * 3 + [(LARGE, "low")])
+
+    def test_the_client_effort_is_never_lowered_and_is_left_alone_when_nothing_failed(self):
+        turns = [{"text": "design a plugin system", "errors": 3}, {"text": "a"}]
+        self.assertEqual(self.ask(turns, LARGE, "xhigh"), (LARGE, "xhigh"))
+        self.assertEqual(self.ask(turns, LARGE, "high"), (LARGE, "high"))
+        self.assertEqual(self.ask([{"text": "design a plugin system"}], LARGE, "xhigh"), (LARGE, "xhigh"))
+        self.assertEqual(self.ask([{"text": "design a plugin system"}], LARGE, "medium"), (LARGE, "medium"))
+
+    def test_the_turn_where_the_person_says_it_went_wrong_is_raised_too(self):
+        turns = [{"text": "design a plugin system"}, {"text": "that's wrong, try again"}]
+        self.assertEqual(self.ask(turns, LARGE, "low"), (LARGE, "high"))
 
     def test_a_sonnet_main_thread_keeps_its_model_and_effort(self):
         turns = [{"text": "fix the bug in cli.py", "errors": 3}, {"text": "ok, b.py"}]
-        sent = self.send(convo(turns), model=MEDIUM)
-        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (MEDIUM, "medium"))
+        self.assertEqual(self.ask(turns, MEDIUM, "medium"), (MEDIUM, "medium"))  # its next rung is another model
+
+
+class ConfigCheckTest(unittest.TestCase):
+    def load(self, **routing):
+        from getalmanac import config
+        with mock.patch.object(config, "_file", return_value={"routing": routing}):
+            return config.load()["routing"], config.DEFAULTS["routing"]
+
+    def test_a_malformed_ladder_falls_back_to_the_default(self):
+        for bad in ({"small": [["huge", "low"]]}, {"small": ["medium"]}, ["x"], {"small": [["medium"]]},
+                    {"small": [["medium", "ultra"]]}, {"huge": [["medium", "low"]]}, {"small": "medium"}):
+            got, default = self.load(ladders=bad)
+            self.assertEqual(got["ladders"], default["ladders"], bad)
+
+    def test_a_valid_ladder_is_kept(self):
+        got, _ = self.load(ladders={"small": [["medium", "high"]]})
+        self.assertEqual(got["ladders"]["small"], [["medium", "high"]])
+
+    def test_a_malformed_effort_or_effort_cost_falls_back_to_the_default(self):
+        got, default = self.load(effort={"large": "ultra"}, effort_cost={"low": "x"})
+        self.assertEqual((got["effort"], got["effort_cost"]), (default["effort"], default["effort_cost"]))
+        got, default = self.load(effort=["low"], effort_cost=[1])
+        self.assertEqual((got["effort"], got["effort_cost"]), (default["effort"], default["effort_cost"]))
+        got, _ = self.load(effort={"large": ""})
+        self.assertEqual(got["effort"]["large"], "")
 
 
 class EffortPriceTest(Case):

@@ -165,8 +165,29 @@ def _file() -> dict:
         return {}
 
 
+def _routing_ok(cfg) -> dict:
+    """Put back the default of any routing table that is malformed: a typo must not break every request or send a bad effort."""
+    tiers, levels = ("small", "medium", "large"), ("low", "medium", "high", "xhigh", "max")
+    route = cfg.get("routing")
+    if not isinstance(route, dict):
+        cfg["routing"] = copy.deepcopy(DEFAULTS["routing"])
+        return cfg
+    ladders, effort, cost = route.get("ladders"), route.get("effort"), route.get("effort_cost")
+    good = {
+        "ladders": isinstance(ladders, dict) and all(
+            k in tiers and isinstance(v, list) and all(isinstance(r, list) and len(r) == 2 and r[0] in tiers and r[1] in levels for r in v)
+            for k, v in ladders.items()),
+        "effort": isinstance(effort, dict) and all(k in tiers and v in ("", *levels) for k, v in effort.items()),
+        "effort_cost": isinstance(cost, dict) and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in cost.values()),
+    }
+    for key, ok in good.items():
+        if not ok:
+            route[key] = copy.deepcopy(DEFAULTS["routing"][key])
+    return cfg
+
+
 def load() -> dict:
-    cfg = _merge(copy.deepcopy(DEFAULTS), _file())
+    cfg = _routing_ok(_merge(copy.deepcopy(DEFAULTS), _file()))
     if os.environ.get("ALMANAC_UPSTREAM"):
         cfg["upstream"] = os.environ["ALMANAC_UPSTREAM"]
     # ALMANAC_DISABLE=skills,agents,tools,memory,compaction turns layers off for one run

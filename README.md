@@ -483,10 +483,15 @@ The ladders are `routing.ladders` and each tier's first rung is `routing.effort`
 in a row (or one call failing that often) in the thread's own history, the person
 saying it went wrong, or a task that says an earlier attempt failed. On the main
 thread the rung is kept for `escalate_turns` turns, then the thread drops back. With
-`routing.mode` set to `subagents` the main thread's model is never changed, but its
-effort follows its own model's ladder (for Opus, low, then high for those turns).
-That is a change to effort the person may have chosen, made only where Claude Code
-already sends an effort. A pin ignores the ladder.
+`routing.mode` set to `subagents` the main thread's model is never changed, but
+after a failure its effort moves up its own model's ladder (for Opus, to high for
+those turns, the turn where the person says it went wrong included). Effort is
+written only on such a raise, only where Claude Code already sends one, and never
+below what it sent (an `xhigh` you chose stays). A Sonnet or Haiku main thread
+gets no effort climb in this mode, because its next rung is another model. A pin
+ignores the ladder. When the person says an earlier attempt failed (or a task
+says so), the thread takes the next rung of its model's ladder at once, for
+example Haiku to Sonnet low, not straight to Opus.
 
 **Sub-agents.** Almanac adds one fixed paragraph to Claude Code's `Agent` (or `Task`) tool.
 It asks the model to start each sub-agent prompt with `Difficulty: simple`,
@@ -498,7 +503,9 @@ asked for, or inherited from its parent: a sub-agent that starts on Opus stays o
 Opus for a simple task, and climbs from there. Set `routing.route_inherited` to
 `true` to let a sub-agent that only inherited its parent's model (same model as the
 parent) be routed down by difficulty; one defined on another model keeps its
-floor. `almanac route pin` beats this floor. Forks always stay on their
+floor. Almanac cannot tell an agent defined on the same model as its parent from
+one that inherited it, so with the setting on it counts both as inherited.
+`almanac route pin` beats this floor. Forks always stay on their
 parent's model. Without that line, a task that
 asks for no coding and no hard job keeps the model Claude Code chose for it,
 whatever the agent's type.
