@@ -972,6 +972,15 @@ connector), turn `cloud.auto` on and restart Almanac, run `almanac cloud on` in
 the repository, then in that repository run `/schedule` and create an hourly task with the prompt `almanac cloud
 watchdog` prints.
 
+Then put the secret that `almanac cloud watchdog` prints in that task's
+environment as `ALMANAC_HANDOFF_KEY`. Each snapshot's `almanac-handoff.json` is
+signed (HMAC-SHA256 over its fields and the packet text) with a key kept in the
+OS keyring when the `keyring` module is installed, else in `cloud.key` in the
+Almanac home. The watchdog prompt checks the signature first and stops when it
+does not match, so a commit that someone else pushed to `cloud/handoff` is
+never acted on. The packet holds rule-written titles and answers only, never
+model summaries.
+
 When a takeover happened, `almanac cloud status` names the branch. Pull the
 work back with `claude --teleport` or `git fetch origin <branch>`.
 

@@ -272,6 +272,9 @@ WATCHDOG_STEPS = """One-time setup, so a cloud task can take over when this mach
    This repository is {here}.
 4. In Claude Code, in this repository, run /schedule and create an hourly task with the prompt below
    (or create it at claude.ai/code/routines).
+5. Put the same secret in that task's environment, so it can check that a snapshot came from this machine:
+   ALMANAC_HANDOFF_KEY={key}
+   (keep it private: anyone with it can sign a snapshot the task will act on)
 
 The prompt for the scheduled task:
 
@@ -301,7 +304,7 @@ def _cloud(rest):
     listed = bool(key) and key in cfg["cloud"]["repos"]
     if args.cmd == "watchdog":
         here = "on" if listed else "off"
-        _print(WATCHDOG_STEPS.format(prompt=cloud.watchdog(cfg["cloud"]["heartbeat_minutes"]), here=here))
+        _print(WATCHDOG_STEPS.format(prompt=cloud.watchdog(cfg["cloud"]["heartbeat_minutes"]), here=here, key=cloud.handoff_key()))
         return 0
     if args.cmd == "status":
         _print(cloud.status(cwd, cfg, memory.store, listed))

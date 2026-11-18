@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Security fix: the cloud watchdog checks a signature.** It used to act on
+  any commit on `cloud/handoff`, so anyone who could push there could give the
+  cloud task its instructions. `almanac-handoff.json` now carries an HMAC-SHA256
+  over its fields and the packet text, made with a secret from the OS keyring
+  (if the `keyring` module is installed) or the file `cloud.key` in the Almanac
+  home. `almanac cloud watchdog` prints the line to put in the cloud task's
+  environment as `ALMANAC_HANDOFF_KEY`, and the watchdog prompt now verifies
+  the signature first and stops if it does not match: **set the variable and
+  update the scheduled task**. The packet also carries only rule-written
+  titles and answers, no model summaries, which are built from tool output.
 - **Security fix: more secrets are removed.** PGP private key blocks, PuTTY
   `.ppk` keys, `SecretAccessKey` values and `ASIA` keys, ODBC `Pwd=`, any
   `UPPER_CASE_KEY=` style assignment, quoted multi-word passwords, URL
