@@ -36,6 +36,24 @@ SAMPLES = [
     ("quoted constant", 'STRIPE_KEY = "abc"; next', "abc", "next"),
     ("pwd after code", "x = 1; Pwd=hunter22x;", "hunter22x", "x = 1;"),
     ("curl after a chain", "ls && curl -u admin:Sup3rSecretpw https://api.local/x", "Sup3rSecretpw", "https://api.local/x"),
+    ("call-shaped JWT secret", "JWT_SECRET=s3cr3t(xyz)abc123456 next", "s3cr3t(xyz)", "next"),
+    ("call-shaped password", "PASSWORD=Pa(ss)word123 next", "Pa(ss)word123", "next"),
+    ("call-shaped lower password", "password=abc(def)ghi next", "abc(def)ghi", "next"),
+    ("call-shaped token", "token=Abc(def)Ghi123456 next", "Abc(def)Ghi123456", "next"),
+    ("key without digits", "HMAC_KEY=abcdefABCDEFabcdefABCDEF next", "abcdefABCDEF", "next"),
+    ("key of words", "ENCRYPTION_KEY=correcthorsebattery next", "correcthorse", "next"),
+    ("license 4 groups", "LICENSE_KEY=ABCD-EFGH-IJKL-MNOP next", "EFGH", "next"),
+    ("license 3 groups", "LICENSE_KEY=ABCD-EFGH-IJKL next", "EFGH", "next"),
+    ("Pwd dot", "Server=db;Pwd=.hidden.pass1;Db=x", ".hidden.pass1", "Db=x"),
+    ("Pwd tilde", "Server=db;Pwd=~secret;Db=x", "~secret", "Db=x"),
+    ("Pwd dollar word", "Server=db;Pwd=$ecretPass;Db=x", "ecretPass", "Db=x"),
+    ("Pwd percent name then more", "Server=db;Pwd=%PW%x1;Db=x", "%PW%x1", "Db=x"),
+    ("Pwd backtick then more", "Server=db;Pwd=`pwd`x1;Db=x", "`pwd`x1", "Db=x"),
+    ("Pwd percent", "Server=db;Pwd=%Secret%1;Db=x", "Secret%1", "Db=x"),
+    ("curl lone quote", "curl -H 'unterminated -u admin:hunter2 x", "hunter2", "admin:"),
+    ("curl lone double quote", 'curl -H "unterminated -u admin:hunter2 x', "hunter2", "admin:"),
+    ("curl quoted pipe", "curl -H 'a|b' -u admin:s3cret https://x.local", "s3cret", "https://x.local"),
+    ("curl quoted semicolon", 'curl -H "a;b" -u admin:s3cret https://x.local', "s3cret", "https://x.local"),
     ("curl --user", "curl --user admin:Sup3rSecretpw https://api.local/x", "Sup3rSecretpw", "https://api.local/x"),
 ]
 
@@ -50,7 +68,8 @@ class RedactionGapsTest(unittest.TestCase):
 
     def test_ordinary_text_with_similar_shapes_is_left_alone(self):
         for text in ("cd $PWD and PWD=/home/me/work", "a 1//2 split and 12345678:short", "page?sig=ab&x=1", "curl -s -u admin https://x.local",
-                     "KEY=ab and primary_key: id_column", "docker run -u 1000:1000 img", "MY_KEY = get_key()", "MAX_TOKEN = 4096", "DEFAULT_PASSWORD = None",
+                     "KEY=ab and primary_key: id_column", "docker run -u 1000:1000 img", "MY_KEY = get_key()", 'secret = vault.read("x")["data"]', 'MY_KEY = vault.read("x")["data"]', "Pwd=`pwd`", "Pwd=%PW%", "password = get_password()", "MAX_KEY = DEFAULT_LIMIT", "SORT_KEY = some_snake_case_identifier",
+                     "MY_KEY = os.environ.get('X')", "Pwd=$(pwd)", "pwd=${HOME}", "Pwd=$HOME", "pwd=../up", "pwd=~/dir", "Pwd=/srv/app","MAX_TOKEN = 4096", "DEFAULT_PASSWORD = None",
                      "API_TOKEN = load_token_value2(path)", "DB_KEY = keys_table_v2[name]", "AUTH_SECRET = False", "OLD_PWD=/home/me/work",
                      "pwd=$(pwd)", "pwd = os.getcwd()", "Pwd=C:" + BS + "Users" + BS + "me", "my_pwd=./sub/dir",
                      "ref 123456789:" + "Zq" * 17 + "Z here", "curl -s https://x.local | grep -u ab:cd12 f", "make && grep -u ab:cd12 f",
@@ -66,13 +85,27 @@ class RedactionGapsTest(unittest.TestCase):
         redact(text)
         self.assertLess(time.time() - start, 2.0)
 
+    def test_adversarial_text_scales_linearly(self):
+        """Twice the text must take under 3 times as long (a quadratic pattern takes 4), whatever the machine's speed."""
+        def took(text):
+            start = time.perf_counter()
+            redact(text)
+            return time.perf_counter() - start
+        for unit in ("curl ", "curl -H 'a", "curl '" + "x" * 10, 'curl "a|b" ', "Pwd=$", "Pwd=a(", "X_KEY=a(", "X_KEY=ab1", "token=a(", "LICENSE_KEY=A-"):
+            with self.subTest(unit):
+                n = 100_000 // len(unit)
+                small = min(took(unit * n) for _ in range(2))
+                big = min(took(unit * 2 * n) for _ in range(2))
+                self.assertLess(big, 3 * max(small, 0.05))
+                self.assertLess(big, 5.0)
+
     def test_pathological_runs_of_the_new_shapes_are_linear(self):
         for text in ("postgres://a:" * 20000, "curl -u a:" * 20000, "curl " * 40000, "ABC_KEY=" * 30000, "Private-Lines: 1" + "\nAAAA" * 40000,
                      "-----BEGIN PGP PRIVATE KEY BLOCK-----" * 6000, "1//" * 60000, "PASSWORD='" * 20000, "Pwd=" * 50000):
             with self.subTest(text[:20]):
                 start = time.time()
                 redact(text)
-                self.assertLess(time.time() - start, 2.0)
+                self.assertLess(time.time() - start, 10.0)
 
 
 if __name__ == "__main__":

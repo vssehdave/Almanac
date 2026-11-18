@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- **Security fix: follow-ups to the hand-off, typed-text and redaction fixes.**
+  The takeover branch is now named by the first 12 characters of the hand-off
+  signature, not the commit SHA, so an old signed snapshot pushed again (a new
+  commit, the same signature) is seen as already taken over; **re-create the
+  scheduled task from `almanac cloud watchdog`**. The check removes the two
+  hand-off files from its temporary index with `update-index --force-remove`,
+  so a checkout that tracks its own `ALMANAC_HANDOFF.md` no longer makes it
+  fail. A custom or plugin slash command's body (the one text block after a
+  command block, unless it is the command's output) no longer counts as typed.
+  Redaction: a bare value counts as code only when the whole value is a call
+  or subscript (`get_key()`, `keys[name]`), so `JWT_SECRET=s3cr3t(xyz)abc123`
+  is removed again; a `*_KEY` value of 16+ characters with no digit that is
+  not an identifier, and dashed licence keys, are removed; `Pwd=` keeps only
+  `$(`, `${`, `$NAME`, `./`, `../`, `~/`, `/` and drive paths as code; and a
+  `|` or `;` inside a quoted `curl` argument no longer hides `-u user:pass`.
+  Limit of the replay fix: an older heartbeat that was never taken over still
+  passes, because its signed time is only checked against the clock, not
+  against earlier takeovers.
+
 - **Prompt library entries become playbook candidates.** `almanac playbook
   mine` now also lists a current library entry that was used at least twice
   and whose route is two or more commands and nothing else (`Bash:` steps; a
