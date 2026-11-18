@@ -9,6 +9,7 @@ under `superseded_by`; the newer one lists what changed. Rows go with their conv
 Current entries are searchable (an FTS5 table over prompt and route), and `note` renders the one that best
 matches a typed prompt as the short reminder the playbook layer adds to the request.
 """
+import hashlib
 import json
 import re
 import sqlite3
@@ -44,6 +45,7 @@ THRESHOLD = 0.6  # share of a stored prompt's words found in the typed text for 
 MIN_SHARED = 3  # words they must share, whatever the share: two short prompts alike in one word are not the same task
 MIN_SHARED_LONG = 5  # ... when the stored prompt has more than LONG words
 LONG = 30
+MIN_USES = 2  # a route shown this often is a habit and becomes a miner candidate (see `candidates`)
 CANDIDATES = 50  # most entries the full-text search hands to the scorer
 NOTE_CHARS = 800
 CLOSE = "</system-reminder>"
@@ -369,6 +371,28 @@ def listing(store, project=None) -> list:
     """Current entries, oldest first, of one project or of all."""
     return [dict(r) for r in store.run("select * from library where superseded_by = 0" + (" and project = ?" if project else "") + " order by id",
                                        (project,) if project else ())]
+
+
+def candidates(store, found=()) -> list:
+    """Miner candidates from the current entries used at least MIN_USES times whose route is all mechanical, most used first.
+
+    Entries of one route make one candidate. A route the transcript miner already found (`found`), one a stored playbook's
+    triggers already match, and one already compiled are left out: the existing compile step takes it from here.
+    """
+    seen = {tuple(c.get(key) or ()) for c in found for key in ("tools", "steps")}
+    done = mine._state()["compiled"]
+    made = {}
+    for e in sorted(listing(store), key=lambda e: (-e["uses"], e["id"])):
+        route = tuple(_list(e["route"]))
+        if e["uses"] < MIN_USES or route in seen or not mine.mechanical(route) or mine._matched([{"text": e["prompt"]}]):
+            continue
+        c = made.setdefault(route, {"id": hashlib.sha256(("library:" + ",".join(route)).encode("utf-8")).hexdigest()[:12], "count": 0,
+                                    "sessions": 1, "projects": [], "tokens": 0, "median_requests": len(route), "examples": [],
+                                    "tools": list(route), "skills": _list(e["skills"]), "agents": [], "kind": "library"})
+        c["count"] += e["uses"]
+        c["projects"] += [e["project"]] * (e["project"] not in c["projects"])
+        c["examples"] += [e["prompt"]] * (len(c["examples"]) < 3)
+    return [c for c in made.values() if c["id"] not in done]
 
 
 def _day(ts) -> str:

@@ -339,6 +339,11 @@ def _common(members, key="tools", most=12) -> list:
     return sorted(keep, key=lambda s: (statistics.median(first[s]), s))[:most]
 
 
+def mechanical(route) -> bool:
+    """True when every step is a command or a skill, which run.py can carry out: an edit, a read, an agent or any other tool needs judgment."""
+    return bool(route) and all(s.startswith(("Bash: ", "Skill: ")) for s in route)
+
+
 def phase(sig) -> str:
     return next((name for name, pattern in PHASES if pattern.search(sig)), "")
 
@@ -414,6 +419,16 @@ def find_candidates(turns, minimum=3) -> list:
 
 def mine(days=30, minimum=3, cfg=None, dirs=None, out=print, now=None) -> list:
     found = find_candidates(read_turns(days, cfg, dirs, now), minimum)
+    if (config.home() / "almanac.db").exists():  # the prompt library is one more source of candidates; none is made by looking
+        from . import library
+        from .store import Store
+
+        store = Store(config.home() / "almanac.db")
+        try:
+            library.setup(store)
+            found = (found + library.candidates(store, found))[:KEEP]
+        finally:
+            store.close()
     _save(candidates_path(), {"mined": int(time.time() if now is None else now), "days": days, "min": minimum, "candidates": found})
     if not found:
         out("no repeated multi-step requests found")
