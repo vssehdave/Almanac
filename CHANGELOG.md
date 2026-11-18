@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Prompt library entries become playbook candidates.** `almanac playbook
+  mine` now also lists a current library entry that was used at least twice
+  and whose route is two or more commands and nothing else (`Bash:` steps; a
+  skill, an edit, a read, an agent or any other tool means it needs judgment). Entries
+  with the same route make one candidate, and one is left out when the
+  transcript mining already found the same steps, a playbook's triggers
+  already match it, or it was already compiled. They go through the same
+  compile step as before and stay drafts until you approve them.
 - **Security fix: smaller hardening items.** Git's error text (it can echo a
   remote URL with its password) and library errors are redacted before they are
   raised or logged; the compaction summary is cleaned (tags and secrets) before
