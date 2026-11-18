@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **A clean profile for `almanac` sessions, and `almanac sandbox`.** `almanac` now
+  starts Claude Code with your settings minus `profile.off_plugins` (claude-mem,
+  Logbook, Pocketbook), the hooks matching `profile.off_hooks` (`getlogbook`) and the
+  user skills in `profile.off_skills` (`logbook`): `--setting-sources project,local`
+  plus a generated `--settings` file, with your skills, agents, commands and
+  `CLAUDE.md` put back through `--add-dir` and `--append-system-prompt-file`. A new
+  proxy layer strips the same plugins' skills, agents, MCP tools, server instructions
+  and hook text from any request as a second line. `almanac sandbox` runs plain
+  Claude Code in `~/.claude-sandbox` with only the plugins you name.
+- **Names-only skill listing.** `skills.stub_chars` 0 now lists `- name` with no
+  description and no trailing separator (it used to keep a short description
+  whole). The default is 60 characters, cut at a word.
+- **Lean changes are native.** The main thread and every sub-agent, on any
+  model, get Almanac's own minimal-change rules as the first part of the
+  cheatsheet text (`startup.lean_rules`, `lean_level`, `lean_rules_text`), the same
+  bytes on every request. The overlapping bullets were removed from `common.md`.
+  `profile.off_hook_text` cuts the mode banner hooks of a plugin that stays
+  installed, and a plugin added to `profile.off_plugins` now also drops its
+  user-settings hooks by name.
+
 - **Memory: sub-agents know their parent conversation, and their work is
   indexed.** A sub-agent's first message gets one frozen line naming the
   conversation it belongs to and the call `memory_search {"conversation": id}`

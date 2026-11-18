@@ -87,7 +87,8 @@ and `Content-Length` are set again for the upstream.
 Every session begins by sending every skill description and every tool schema,
 whether or not the conversation will use them.
 
-- **Skills.** Each description is cut to a short stub. A skill keeps its full
+- **Skills.** Each description is cut, at a word, to `skills.stub_chars` characters (60
+  by default; `0` lists names only, with no description and no separator). A skill keeps its full
   description in the list when you put it in `skills.always_full` or when two of
   the project's last ten conversations used it; that second set is read once per
   project per day, so every new conversation of the project gets the same list.
@@ -125,6 +126,58 @@ Matching is keyword-based (BM25) and runs locally. It does not understand
 synonyms: "make slides" finds a skill that says "slide deck", but a request
 phrased with none of a skill's words will not expand it. The stub is still
 there for the model to read.
+
+### A clean profile for `almanac`
+
+A session started with `almanac` loads your own Claude Code setup minus what
+`profile` switches off, so plugins and hooks you are still building cannot touch it.
+Defaults: plugins `claude-mem@thedotmack`, `logbook@logbook`, `pocketbook@pocketbook`
+(`profile.off_plugins`), user-settings hooks whose command contains `getlogbook`
+(`profile.off_hooks`, which also matches the name of anything in the two lists), and the user skill `logbook` (`profile.off_skills`).
+`off_plugins` and `off_skills` are the one list: to keep a plugin you are building out of every
+`almanac` session, add one line, `almanac config set profile.off_plugins '["claude-mem@thedotmack", "logbook@logbook", "pocketbook@pocketbook", "newone@mine"]'`.
+Its skills, agents, MCP tools, server instructions, hook text and user-settings hooks (by name) all go. Hooks
+you keep (an `rtk` hook, say) still run. `profile.enabled` turns the whole thing off.
+
+How it is done, because a settings layer on top cannot remove a hook (hook lists
+from every source are added together): `almanac` starts Claude Code with
+`--setting-sources project,local` and `--settings ~/.almanac/profile/settings.json`,
+a copy of `~/.claude/settings.json` with the off plugins set to `false` and the
+matching hooks left out. That drops the whole user source, so what it carries is put back:
+your skills (minus the off ones), agents and commands through `--add-dir
+~/.almanac/profile` (links to your folders, never copies you must keep in sync), and your
+`CLAUDE.md`, with its `@` imports and minus any section or marker that names an off
+plugin, through `--append-system-prompt-file` (`claudeMdExcludes` stops it being read
+twice). Login, the plugins that stay on, MCP servers and history are not settings
+sources and are untouched. Nothing in `~/.claude` is edited.
+
+What it does not do: hooks written into a repository's own `.claude/settings.json` or
+`settings.local.json` (`logbook setup` writes some) still run. `almanac` says so at
+launch when it sees one. A command line with its own `--settings`, `--setting-sources`,
+`--bare` or `--restricted` turns the profile off for that run, and says so.
+
+As a second line, the proxy cuts what still reaches a request, and hook text of any plugin that
+contains a marker from `profile.off_hook_text` (a mode banner and its rules, from a plugin that stays
+installed for its slash commands; its skill entries stay listed): skill and agent
+entries, `mcp__plugin_<name>_*` tools and `## plugin:<name>:` server instructions of the
+off plugins, and their hook-injected text. That also covers a plain `claude` pointed
+at `almanac serve`. The hook text has no closing mark, so it is cut up to the next
+section Claude Code writes after it.
+
+### Trying a plugin you are building
+
+```bash
+almanac sandbox --list                       # what would load, nothing starts
+almanac sandbox --plugin ~/code/Pocketbook/plugins/pocketbook
+almanac sandbox --plugin ~/code/Logbook -- -p "hello"   # Claude Code arguments after --
+```
+
+The sandbox is plain Claude Code (no proxy, none of your plugins, hooks or skills) with
+`CLAUDE_CONFIG_DIR=~/.claude-sandbox` (`ALMANAC_SANDBOX` picks another folder; it refuses
+`~/.claude` and `~/.claude-work`). It is made on first use: type `/login` there once. Only the
+folders named with `--plugin` are loaded, for that run. Run `logbook setup` or
+`pocketbook` inside a test repository from there; project-level hooks apply in the sandbox, which is
+where you want them. `almanac sandbox` never changes `~/.claude`.
 
 ### 2. Memory per project
 
@@ -634,6 +687,16 @@ code". For this the log records `agent_type` on each sub-agent request and
 with secrets taken out, never more.
 
 ### 5. Working rules for each model
+
+**Lean changes.** Every thread, on any model, first gets Almanac's own rules for a minimal
+change (`startup.lean_rules`, on by default): scope the job first, take the first option that fully
+works (skip it, reuse, the platform, an installed dependency, the least new code), add no
+abstraction or setting nobody asked for, finish every caller and test the change touches, test new
+logic, and end with a line on what was left out and any risk. They are added as the first part of the
+text below, so the sub-agent sheets carry them too, and the overlap was taken out of `common.md`.
+`startup.lean_level` picks `lite`, `full` or `ultra`; `startup.lean_rules_text` or your own `lean.md`
+replaces the wording. The text is the same bytes on every request, so it costs one cache write
+per session and nothing after.
 
 Every conversation thread gets a short set of working rules added to the end
 of its system prompt. The text depends on the model the request is sent with,
@@ -1262,6 +1325,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac library list` | The prompt library's current entries: id, date, uses, the request's first 70 characters. `--project NAME` filters. Also `show ID` (the entry, its fixes and its history of replaced entries) and `forget ID` (deletes the entry and the older ones it replaced) |
 | `almanac projects` | Projects seen. `projects merge FROM INTO`, `projects rename NAME NEW` |
 | `almanac config [set KEY VALUE \| path]` | Show or change settings |
+| `almanac sandbox [--plugin PATH ...] [--list] [-- ARGS]` | Plain Claude Code in `~/.claude-sandbox`, loading only those plugins |
 | `almanac serve [--port N]` | Run only the proxy, for clients you start yourself |
 | `almanac mcp` | The memory tools over stdio (Claude Code starts this itself) |
 
@@ -1272,7 +1336,15 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | Key | Default | Meaning |
 |---|---|---|
 | `skills.enabled` | `true` | Collapse skill descriptions |
-| `skills.stub_chars` | `90` | Characters kept for a collapsed skill |
+| `skills.stub_chars` | `60` | Characters of description kept for a collapsed skill, cut at a word (`0` lists names only) |
+| `profile.enabled` | `true` | Start Claude Code with the clean profile |
+| `profile.off_plugins` | `["claude-mem@thedotmack", "logbook@logbook", "pocketbook@pocketbook"]` | Plugins switched off in `almanac` sessions |
+| `profile.off_hooks` | `["getlogbook"]` | A user-settings hook whose command contains one of these, or the name of anything in `off_plugins` or `off_skills`, is left out |
+| `profile.off_hook_text` | `["MODE ACTIVE", "MODE CHANGED", "MODE OFF"]` | Hook text containing one of these is cut from requests (a mode banner of a plugin that stays installed) |
+| `startup.lean_rules` | `true` | Add Almanac's minimal-change rules to the main thread and every sub-agent |
+| `startup.lean_level` | `"full"` | `lite` (build what was asked, name the smaller option), `full`, or `ultra` (also question the request) |
+| `startup.lean_rules_text` | `""` | Your own wording instead of the packaged rules |
+| `profile.off_skills` | `["logbook"]` | User skills switched off |
 | `skills.always_full` | `[]` | Skills never collapsed |
 | `startup.agent_chars` | `60` | Characters kept for a listed agent type (`0` leaves the agent list alone) |
 | `startup.system_prefix` | `false` | Move the stable session sections to the end of the system prompt so new conversations read them from cache |
