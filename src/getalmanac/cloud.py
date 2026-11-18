@@ -64,7 +64,7 @@ VERIFY = ("import hmac,hashlib,json,os,subprocess as p,tempfile as f,time,calend
           "print(hmac.compare_digest(s,hmac.new(k.encode(),d,hashlib.sha256).hexdigest()) and m['tree']==t and n<=time.time()+" + str(SKEW) + ")")
 # The first 12 characters of the signature: the takeover branch is named by them, so the same signed files pushed again
 # (a new commit, the same signature) find the branch already there. A commit's SHA would change.
-SIG = ("import json;print(json.load(open('{json}'))['sig'][:12])")
+SIG = ("import json,re;s=json.load(open('{json}'))['sig'];assert re.fullmatch('[0-9a-f]{{64}}',s);print(s[:12])")
 # Seconds since the signed time (git's own commit time is not signed).
 AGE = ("import json,time,calendar;print(int(time.time()-calendar.timegm(time.strptime(json.load(open('{json}'))['time'],'" + TIME_FORMAT + "'))))")
 

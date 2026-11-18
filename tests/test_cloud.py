@@ -679,6 +679,12 @@ class HandoffTest(CloudCase):
             handle.write(self.pushed("almanac-handoff.json"))
         done = subprocess.run([sys.executable, "-c", cloud.SIG.format(json=path.replace(os.sep, "/"))], capture_output=True, text=True)
         self.assertEqual(done.stdout.strip(), sig[:12])
+        self.assertFalse({"$", "`", '"'} & set(cloud.SIG))  # it sits inside a double-quoted shell argument
+        for bad in ("zz" * 32, sig[:12], sig.upper(), sig + "0", "$(id)"):
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({"sig": bad}))
+            done = subprocess.run([sys.executable, "-c", cloud.SIG.format(json=path.replace(os.sep, "/"))], capture_output=True, text=True)
+            self.assertEqual((done.stdout, done.returncode != 0), ("", True), bad)
         # a re-pushed copy of the same signed files is a new commit with the same signature, so it gets the same branch name
         text = cloud.watchdog(10)
         self.assertIn("cloud/almanac-takeover-SIG", text)
