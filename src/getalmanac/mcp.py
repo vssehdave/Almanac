@@ -17,8 +17,9 @@ TOOLS = [
                     "(ids, errors, paths). Returns matching exchanges "
                     "(what was asked and how it ended) with an id for memory_read. Searches the current project "
                     "unless `project` names another one, or is \"all\".",
-     "inputSchema": {"type": "object", "required": ["query"], "properties": {
-         "query": {"type": "string", "description": "Words to look for"},
+     "inputSchema": {"type": "object", "properties": {
+         "query": {"type": "string", "description": "Words to look for. Optional with `conversation`: without it, that conversation's exchanges are listed"},
+         "conversation": {"type": "integer", "minimum": 1, "description": "Search only this conversation (its number from memory_list), sub-agent work included"},
          "project": {"type": "string", "description": "A project name or key, or \"all\". Default: this folder's project"},
          "limit": {"type": "integer", "minimum": 1, "maximum": 20}}}},
     {"name": "memory_read",
@@ -104,7 +105,8 @@ def _day(ts) -> str:
 def render_hits(hits) -> str:
     if not hits:
         return "Nothing stored matches."
-    return "\n".join(f"[{h['id']}] {_day(h['ts'])} {h['title']}\n    {h['snippet']}" for h in hits) + "\n" + QUOTED
+    tag = lambda h: f" (sub-agent of conversation {h['cparent']})" if h.get("cparent") else ""  # noqa: E731
+    return "\n".join(f"[{h['id']}] {_day(h['ts'])} {h['title']}{tag(h)}\n    {h['snippet']}" for h in hits) + "\n" + QUOTED
 
 
 def render_node(memory, node) -> str:
@@ -224,8 +226,16 @@ def render_result(memory, call_id, start=1, end=None) -> str:
 
 def call(memory, name, args, cwd) -> str:
     if name == "memory_search":
+        convo_id, query = args.get("conversation"), str(args.get("query") or "")
+        if convo_id is not None:
+            if isinstance(convo_id, bool) or not isinstance(convo_id, int) or not 1 <= convo_id < 2 ** 63:
+                raise ValueError("conversation must be a conversation number (a positive integer) from memory_list")
+            if not memory.store.run("select 1 from convo where id = ?", (convo_id,)):
+                return "No stored conversation has that number. memory_list shows them."
+        elif not query.strip():
+            return "memory_search needs a query (or a conversation number)."
         wanted = str(args.get("project") or "")
-        if wanted.lower() == "all":
+        if wanted.lower() == "all" or (convo_id is not None and not wanted):  # a conversation belongs to one project already
             project = None
         elif wanted:
             project = memory.projects.find(wanted)
@@ -233,8 +243,10 @@ def call(memory, name, args, cwd) -> str:
                 return f"No project is called {wanted!r}. memory_projects lists them."
         else:
             project = memory.projects.see(cwd, touch=False)
-        return render_hits(memory.search(str(args.get("query") or ""), project=project,
-                                         limit=max(1, min(20, int(args.get("limit") or 8)))))
+        limit = max(1, min(20, int(args.get("limit") or 8)))
+        if convo_id is not None and not query.strip():
+            return render_hits(memory.within(convo_id, limit))
+        return render_hits(memory.search(query, project=project, limit=limit, convo=convo_id))
     if name == "memory_read":
         if args.get("result"):
             return render_result(memory, str(args["result"]), int(args.get("start") or 1), int(args["end"]) if args.get("end") else None)
