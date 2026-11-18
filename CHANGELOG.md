@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Routing: a failure ladder, an agent model floor, effort-aware pricing.** A
+  thread whose tool calls keep failing climbs one rung of its starting model's
+  ladder (`routing.ladders`): Haiku medium, Sonnet low, Sonnet medium; Sonnet
+  medium, Opus low, Opus high; Opus low, Opus high. This holds for the main thread
+  and, new, for a sub-agent judged on its own history; forks stay on their
+  parent's model and `routing.ceiling` caps every ladder. In `subagents` mode the
+  main thread's model is untouched but its effort now follows its model's
+  ladder. A sub-agent is never routed below the model its own definition asked
+  for (a pin still wins). **Default `routing.effort` is now medium, medium, low**
+  (was low, medium, kept), so Opus requests that carry an effort are sent at low.
+  `routing.effort_cost` scales the reply cost, as an estimate, when a stay is
+  compared with a move.
 - **Security fix: follow-ups to the hand-off, typed-text and redaction fixes.**
   The takeover branch is now named by the first 12 characters of the hand-off
   signature, not the commit SHA, so an old signed snapshot pushed again (a new

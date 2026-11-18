@@ -8,7 +8,9 @@ Anthropic's prompt cache belongs to one model. A conversation sent to a differen
 model writes its whole prefix into that model's cache again, at the cache-write
 price, and the old model's cache goes cold. So on the main thread a move down is a
 priced decision (see `price`), and a move up is made whenever the turn needs it.
-Sub-agent threads start small and fresh, so they are routed freely.
+Sub-agent threads start small and fresh, so they are routed freely, though never below the model
+their own definition asked for. A thread that keeps failing climbs one rung of its starting
+tier's ladder (`routing.ladders`: a model, then an effort level) and never past the end of it.
 
 Every decision is made once per human turn and stored, so the whole tool loop of
 that turn, and any replay of it, uses the same model. The decision reads the
@@ -38,6 +40,7 @@ BAD_SECONDS = 3600  # how long a tier stays off after the upstream refused it
 DEFAULT_WINDOW = 200000  # for a model id this file does not know
 CLASSIFY_TIMEOUT = 2  # seconds: the call delays the live request, so it must be short
 LOG_KEEP = 50
+FAILED_WHY = "says an earlier attempt failed"
 SMALL_CHARS = 200  # a prompt longer than this is not small
 LONG_PREFIX = 100000  # tokens: above this the small model charges 5x
 # Text that Claude Code puts in a user message and the person did not type.
@@ -99,7 +102,7 @@ def classify(text: str, agent=False) -> tuple:
         return MARKED[marked.group(1).lower()], f"the task says 'Difficulty: {marked.group(1).lower()}'", False
     mine = handwritten(text)
     if failed(text):
-        return "large", "says an earlier attempt failed", False
+        return "large", FAILED_WHY, False
     for pattern, why in LARGE:
         if pattern.search(mine):
             return "large", why, False
@@ -140,15 +143,21 @@ def _errors(messages) -> list:
     return out
 
 
-def failing(messages, after: int) -> bool:
-    """True when this stretch of a conversation went wrong: `after` errors in a row, or one call failing `after` times."""
-    run, best, seen = 0, 0, {}
+def strikes(messages, after: int) -> int:
+    """How often this stretch went wrong: `after` errors in a row, or one call failing `after` times, counted afresh after each."""
+    run, count, seen = 0, 0, {}
     for item in _errors(messages):
         run = run + 1 if item else 0
-        best = max(best, run)
         if item:
             seen[item] = seen.get(item, 0) + 1
-    return best >= after or max(seen.values(), default=0) >= after
+        if run >= after or max(seen.values(), default=0) >= after:
+            count, run, seen = count + 1, 0, {}
+    return count
+
+
+def failing(messages, after: int) -> bool:
+    """True when this stretch of a conversation went wrong."""
+    return strikes(messages, after) > 0
 
 
 def boosted(messages, turns, turn: int, cfg) -> str:
@@ -164,17 +173,18 @@ def boosted(messages, turns, turn: int, cfg) -> str:
 
 # ---- Pricing a switch. -------------------------------------------------------------------------
 
-def price(cfg, tier: str, prefix: int, warm: bool, work: str) -> float:
+def price(cfg, tier: str, prefix: int, warm: bool, work: str, effort: str = "") -> float:
     """Relative cost of answering a turn of `work` size on `tier` with `prefix` tokens of history.
 
     The first request reads the prefix from the cache when it is warm and writes it when it is not;
     every later request in the tool loop reads it. Units are the editable ones in `routing.prices`.
+    `effort` scales the reply cost by `routing.effort_cost`, an estimate; "" leaves it as it is.
     """
     p, w = cfg["prices"][tier], cfg["work"][work]
     first = prefix * (p["cache_read"] if warm else p["cache_write"])
     later = (w["steps"] - 1) * prefix * p["cache_read"]
     scale = 5 if tier == "small" and prefix > LONG_PREFIX else 1  # the small model's long-prompt rate
-    return scale * (first + later + w["steps"] * (w["new_tokens"] * p["cache_write"] + w["out_tokens"] * p["output"]))
+    return scale * (first + later + w["steps"] * (w["new_tokens"] * p["cache_write"] + w["out_tokens"] * p["output"] * cfg["effort_cost"].get(effort, 1)))
 
 
 def window(cfg, model: str) -> int:
@@ -183,6 +193,15 @@ def window(cfg, model: str) -> int:
 
 def _tier_of(cfg, model: str) -> str:
     return next((t for t in TIERS if cfg["models"].get(t) == model), "")
+
+
+def climb(cfg, start: str, steps: int, top: int) -> tuple:
+    """(tier, effort) `steps` rungs up `start`'s ladder, held at the end of it and at the ceiling (tier index `top`)."""
+    ladder = [(start, cfg["effort"].get(start, ""))] + [tuple(r) for r in cfg["ladders"].get(start, [])]
+    i = min(steps, len(ladder) - 1)
+    while i and TIERS.index(ladder[i][0]) > top:
+        i -= 1
+    return ladder[i]
 
 
 def bad_tiers(store, now=None) -> dict:
@@ -215,8 +234,10 @@ class RoutingLayer:
         if body.get("speed"):  # a fast-mode request named its model on purpose, and other models may refuse the field
             return
         kind = self._kind(ctx, body)
-        if kind is None or (kind == "main" and cfg["mode"] != "all") or not isinstance(body.get("model"), str):
+        if kind is None or not isinstance(body.get("model"), str):
             return
+        if kind == "main" and ctx.store.get(f"route:main:{ctx.session}") != body["model"]:
+            ctx.store.put(f"route:main:{ctx.session}", body["model"])  # what a sub-agent's model is compared with, see _decide
         tier_now = _tier_of(cfg, body["model"])
         if not tier_now:  # the person chose some other model on purpose
             if ctx.store.get("route:outside") != body["model"]:
@@ -229,10 +250,12 @@ class RoutingLayer:
         turn = len(turns) - 1 if kind == "main" else 0
         text = person_text(messages[turns[turn]])
         key = f"route:{ctx.lane}:{turn}:{_digest(text)}" if kind == "main" else f"route:{ctx.lane}"
+        hits = strikes(messages, cfg["escalate_after"]) if kind == "sub" else 0  # a sub-agent's own failures: each run is a new decision
+        key += f":s{hits}" if hits else ""
         first = False
         dec = ctx.store.get(key)
         if dec is None:
-            fresh = self._decide(ctx, body, cfg, kind, tier_now, text, turns, turn, key)
+            fresh = self._decide(ctx, body, cfg, kind, tier_now, text, turns, turn, key, hits)
             dec = ctx.store.frozen(key, lambda: fresh)
             first = dec is fresh
             if first:
@@ -264,10 +287,21 @@ class RoutingLayer:
                 if GUIDANCE not in tool["description"]:
                     tool["description"] += GUIDANCE
 
-    def _decide(self, ctx, body, cfg, kind, tier_now, text, turns, turn, key) -> dict:
+    def _decide(self, ctx, body, cfg, kind, tier_now, text, turns, turn, key, hits=0) -> dict:
         store, messages = ctx.store, ctx.orig["messages"]
         dec = {"kind": kind, "key": key, "from": tier_now, "ts": round(time.time(), 1), "skip": "", "move": "none", "ms": 0}
         pin = store.get(pin_key(ctx.project)) if ctx.project else None
+        top = TIERS.index(cfg["ceiling"]) if cfg["ceiling"] in TIERS else len(TIERS) - 1
+        if kind == "main" and cfg["mode"] != "all":  # the model stays as it is; only its effort moves along its own ladder
+            normal = cfg["effort"].get(tier_now, "")
+            raised = boosted(messages, turns, turn, cfg)
+            up, effort = climb(cfg, tier_now, 1 if raised else 0, top)
+            if up != tier_now:
+                effort = normal
+            dec.update(tier=tier_now, model=body["model"], effort=effort, asked=tier_now, why=f"effort raised: {raised}" if raised else "effort only")
+            if effort != normal:
+                dec["escalated"] = True
+            return dec
         if pin in TIERS:
             tier, why, ambiguous = pin, "pinned by `almanac route pin`", False
         else:
@@ -284,20 +318,31 @@ class RoutingLayer:
         cur = prev["tier"] if prev and not prev.get("skip") else tier_now
         if tier == "inherit":
             tier = cur
-        if kind == "main" and pin not in TIERS:
-            raised = boosted(messages, turns, turn, cfg)
-            if raised and TIERS.index(tier) < len(TIERS) - 1:
-                tier, why, dec["escalated"] = TIERS[TIERS.index(tier) + 1], f"raised a tier: {raised}", True
-        top = TIERS.index(cfg["ceiling"]) if cfg["ceiling"] in TIERS else len(TIERS) - 1
+        failed_text = why == FAILED_WHY
+        if kind == "sub" and pin not in TIERS:  # the model the agent's definition asked for is a floor, unless it only inherited the parent's
+            parent = store.get(f"route:main:{ctx.session}")
+            if parent and parent != body["model"] and TIERS.index(tier) < TIERS.index(tier_now):
+                tier, why = tier_now, why + f"; kept at the {tier_now} model the agent asked for"
         if pin not in TIERS and TIERS.index(tier) > top:
             tier, why = TIERS[top], why + f" (held at the {cfg['ceiling']} ceiling)"
+        effort = cfg["effort"].get(tier, "")
+        if pin not in TIERS:  # a failure moves one rung up the ladder of the model the thread was on
+            raised = boosted(messages, turns, turn, cfg) if kind == "main" else ""
+            steps = hits + (1 if failed_text or raised else 0)
+            if steps:
+                up, rung = climb(cfg, TIERS[min(TIERS.index(cur), top)] if failed_text else tier, steps, top)
+                if TIERS.index(up) >= TIERS.index(tier) and (up, rung) != (tier, effort):
+                    tier, effort, dec["escalated"] = up, rung, True
+                    if not failed_text:
+                        why = f"raised a rung: {raised or 'its own tool calls kept failing'}"
         dec["asked"], dec["why"] = tier, why
         prefix = estimate(body, ctx, body["messages"])
         dec["prefix"] = prefix
         bad = bad_tiers(store)
+        sent = "effort" in (body.get("output_config") or {})  # an effort level only matters where the client sends one
         if kind == "main" and tier != cur and pin not in TIERS:
-            stay = price(cfg, cur, prefix, prev is not None, tier)  # the task is the same on either model
-            move = price(cfg, tier, prefix, False, tier)
+            stay = price(cfg, cur, prefix, prev is not None, tier, cfg["effort"].get(cur, "") if sent else "")  # the task is the same on either model
+            move = price(cfg, tier, prefix, False, tier, effort if sent else "")
             dec["stay"], dec["switch"] = round(stay), round(move)
             if TIERS.index(tier) < TIERS.index(cur) and not move < stay * (1 - cfg["margin"]):
                 dec["move"], dec["why"] = "declined", why + "; the switch would cost more than staying"
@@ -315,7 +360,8 @@ class RoutingLayer:
         if held:  # stay where the cache is: the previous model with its own effort, so nothing is rewritten
             tier = cur if cur not in bad and window(cfg, cfg["models"][cur]) >= prefix * 1.05 else tier_now
             dec["move"], dec["why"] = "held", f"{dec['why']}; {held}"
-        dec["tier"], dec["model"], dec["effort"] = tier, cfg["models"][tier], cfg["effort"].get(tier, "")
+        dec["tier"], dec["model"] = tier, cfg["models"][tier]
+        dec["effort"] = effort if tier == dec["asked"] else cfg["effort"].get(tier, "")  # a hold or a decline keeps the model's own effort
         return dec
 
     def _ask(self, ctx, cfg, text):

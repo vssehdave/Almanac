@@ -398,11 +398,12 @@ for each prompt and sets a fitting effort level:
 
 | Prompt | Model (setting) | Effort |
 |---|---|---|
-| Simple, basic: a lookup, a summary, a rename, a one-step command | `small`, Haiku | low |
+| Simple, basic: a lookup, a summary, a rename, a one-step command | `small`, Haiku | medium |
 | Coding: write, change, fix or test code | `medium`, Sonnet | medium |
-| Too complex, or it failed: design, an audit, a hard bug, work across many files, "that is still broken" | `large`, Opus | as Claude Code sends it, never lowered |
+| Too complex, or it failed: design, an audit, a hard bug, work across many files, "that is still broken" | `large`, Opus | low |
 
-Effort is set only on requests where Claude Code already sends one.
+Effort is set only on requests where Claude Code already sends one. Set a tier's
+effort to `""` (`routing.effort`) to keep whatever Claude Code sends for it.
 
 It is off until you turn it on:
 
@@ -420,17 +421,42 @@ traces and code blocks are not taken as a sign of a hard job or a failure). A tu
 such as a "why" question, a short follow-up or text that is not English, keeps
 the model you were on. A turn that says the last answer was wrong goes to
 `large`. Fast-mode requests (`speed`) are never routed. Three tool errors in a row, or one call failing three times,
-raise the next turn one tier, for three turns. With `routing.classifier` set to
+raise the next turn one rung of the failure ladder (below), for three turns. With `routing.classifier` set to
 `"model"`, the turns the rules are unsure about are settled by one small-model
 call. It adds a short wait (each network step gives up after 2 seconds) to that turn and uses a little of
 your allowance. It shares the daily cap on small-model calls with the summaries
 (`memory.summary_daily_calls`) and is not turned off by `memory.summary_model`.
 If the call fails, the rules decide.
 
+**The failure ladder.** A thread that goes wrong moves up one rung, a model and
+an effort level, never past the end of the ladder of the model it started on:
+
+| Started on | First rung | After a failure | After another |
+|---|---|---|---|
+| Haiku | Haiku, medium | Sonnet, low | Sonnet, medium (the top: a Haiku task never goes higher) |
+| Sonnet | Sonnet, medium | Opus, low | Opus, high |
+| Opus | Opus, low | Opus, high | stays at Opus, high |
+
+The ladders are `routing.ladders` and each tier's first rung is `routing.effort`;
+`routing.ceiling` still caps both. A failure is any of: `escalate_after` tool errors
+in a row (or one call failing that often) in the thread's own history, the person
+saying it went wrong, or a task that says an earlier attempt failed. On the main
+thread the rung is kept for `escalate_turns` turns, then the thread drops back. With
+`routing.mode` set to `subagents` the main thread's model is never changed, but its
+effort follows its own model's ladder (for Opus, low, then high for those turns).
+That is a change to effort the person may have chosen, made only where Claude Code
+already sends an effort. A pin ignores the ladder.
+
 **Sub-agents.** Almanac adds one fixed paragraph to Claude Code's `Agent` (or `Task`) tool.
 It asks the model to start each sub-agent prompt with `Difficulty: simple`,
 `standard` or `hard`. Almanac reads that line and picks the sub-agent's model.
-A sub-agent keeps its model for its whole life. Without that line, a task that
+A sub-agent keeps its model until its own tool calls start failing: each run of
+`escalate_after` failures in its own thread moves its next requests one rung up
+its ladder. Routing never takes a sub-agent below the model its own definition
+asked for: a sub-agent defined on Opus stays on Opus for a simple task. (A
+sub-agent on the same model as its parent has only inherited it, so it is still
+routed down. `almanac route pin` beats this floor.) Forks always stay on their
+parent's model. Without that line, a task that
 asks for no coding and no hard job keeps the model Claude Code chose for it,
 whatever the agent's type.
 
@@ -452,6 +478,10 @@ cold. Almanac's memory does not change that. So on the main thread:
   your prices differ.
 - Almanac assumes a cache used last turn is still warm. After a long pause it
   is not, so Almanac is a little too careful about moving down.
+- Effort changes the estimate: a reply at low effort costs less than one at high.
+  `routing.effort_cost` (low 0.6, medium 1.0, high 1.6) scales the expected reply
+  cost when a stay is compared with a move. It is a rough estimate, not a measured
+  number, and is used only where Claude Code sends an effort.
 - Compaction (above) keeps the history small, which keeps a move cheap.
 
 Each turn's choice is stored and reused for every request of that turn's tool
@@ -1201,10 +1231,12 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `routing.models` | Haiku, Sonnet, Opus 5.5 | The model for `small`, `medium` and `large` |
 | `routing.ceiling` | `"large"` | The highest tier routing may pick (a pin ignores it) |
 | `routing.classifier` | `"rules"` | `"model"` lets a small model settle turns the rules are unsure about |
-| `routing.effort` | low, medium, (kept) | Effort per tier, set only where Claude Code already sends one; `""` keeps its value |
+| `routing.effort` | medium, medium, low | Each tier's first-rung effort, set only where Claude Code already sends one; `""` keeps its value |
+| `routing.ladders` | see `config.py` | Rungs `[tier, effort]` a failing thread climbs, per starting tier |
+| `routing.effort_cost` | low 0.6, medium 1.0, high 1.6 | Estimated reply-cost factor per effort, for pricing a switch |
 | `routing.margin` | `0.2` | How much cheaper a move down must be than staying |
-| `routing.escalate_after` | `3` | Errors in a row, or one call failing this often, that raise the next turn |
-| `routing.escalate_turns` | `3` | Turns a raise lasts |
+| `routing.escalate_after` | `3` | Errors in a row, or one call failing this often, that raise the thread one rung |
+| `routing.escalate_turns` | `3` | Turns a main-thread raise lasts |
 | `routing.prices`, `routing.work` | see `config.py` | Relative prices and expected work per turn, for pricing a switch |
 | `routing.windows` | 1,000,000 each | Context window per model id (unknown ids count as 200,000) |
 | `playbooks.enabled` | `true` | Match requests against playbooks and give Claude the playbook tools |
