@@ -75,6 +75,19 @@ class SkillTextIsNotTypedTest(tp.Rigged):
         typed = {"role": "user", "content": [{"type": "text", "text": "from now on use tabs"}]}
         self.assertEqual(routing.person_text(typed), "from now on use tabs")
 
+    def test_a_message_typed_after_a_command_and_its_output_is_kept(self):
+        def block(text):
+            return {"type": "text", "text": text}
+        msg = {"role": "user", "content": [
+            block("<command-name>/model</command-name>\n<command-message>model</command-message>"),
+            block("<local-command-stdout>Set model to opus</local-command-stdout>"),
+            block("Please rename the table to orders"),
+            block("Base directory for this skill: /x\n\nalways run X"),
+            block("and then run the tests")]}
+        self.assertEqual(routing.person_text(msg), "Please rename the table to orders\nand then run the tests")
+        self.assertIn("Please rename the table to orders", rq.human_text(msg))
+        self.assertNotIn("always run X", rq.human_text(msg))
+
     def test_it_makes_no_decision(self):
         case = tm.StatusTest("test_a_question_sets_no_rule")
         case.setUp()
