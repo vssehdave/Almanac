@@ -351,16 +351,24 @@ class Memory:
         """Give an exchange a model-written title and summary. The summary joins its searchable text.
         A valid `status` from the model refines the rules' (see status.combine); anything else changes nothing."""
         with self.store.lock:
-            rows = self.store.run("select parent, text, status, ts from node where id = ? and kind = 'leaf' and summary = ''", (node_id,))
+            rows = self.store.run("select parent, text, status, ts, convo, seq from node where id = ? and kind = 'leaf' and summary = ''", (node_id,))
             if not rows:  # gone (the conversation was rewound) or already done
                 return
             text = "Summary: " + summary + "\n\n" + rows[0]["text"]
             by_model = status if status in STATUSES else ""
+            last = self.store.run("select max(seq) n from node where convo = ? and kind = 'leaf'", (rows[0]["convo"],))[0]["n"]
+            new = self._finished(rows[0]["convo"], rows[0]["seq"] < last, aged(combine(rows[0]["status"], by_model), rows[0]["ts"]))
             self.store.run("update node set title = ?, text = ?, summary = ?, mstatus = ?, status = ?, dvec = null, dname = '' "
-                           "where id = ?", (title, text, summary, by_model, aged(combine(rows[0]["status"], by_model), rows[0]["ts"]), node_id))  # the vector is made again from the new text
+                           "where id = ?", (title, text, summary, by_model, new, node_id))  # the vector is made again from the new text
             self.store.run("delete from node_fts where rowid = ?", (node_id,))
             self.store.run("insert into node_fts (rowid, title, text) values (?, ?, ?)", (node_id, title, text))
             self._refresh_topic(rows[0]["parent"])
+
+    def _finished(self, convo_id, followed, status):
+        """An imported conversation is over: only its last exchange may stay open, so old work is never listed as to-do."""
+        if status == "open" and followed and self.store.run("select 1 from convo where id = ? and lane like 'import:%'", (convo_id,)):
+            return "done"
+        return status
 
     def _retag(self, convo_id, turns, group, first, done):
         """Apply the status rules to exchanges `first` up to `done`: a new exchange can change the one before it."""
@@ -369,6 +377,7 @@ class Memory:
         for seq, row in have.items():
             following = rq.human_text(group(seq + 1)[0]) if seq + 1 < len(turns) else None
             status = aged(combine(rule(group(seq), following, newest=seq == len(turns) - 1), row["mstatus"]), row["ts"])
+            status = self._finished(convo_id, seq < len(turns) - 1, status)
             if status != row["status"]:
                 self.store.run("update node set status = ? where convo = ? and kind = 'leaf' and seq = ?", (status, convo_id, seq))
 
