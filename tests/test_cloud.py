@@ -627,6 +627,9 @@ class HandoffTest(CloudCase):
                      "git checkout -b cloud/almanac-takeover-SIG FETCH_HEAD", "is a record of earlier work",
                      "draft pull request", "Never delete a branch, never force-push", "never push to the base branch"):
             self.assertIn(part, text)
+        # a cloud safety check refused one chain rm + commit + push; the first real takeover added co-author lines
+        for part in ("Run each git command on its own", "`git push -u origin cloud/almanac-takeover-SIG`", "no Co-Authored-By"):
+            self.assertIn(part, text)
         out = io.StringIO()
         with redirect_stdout(out), mock.patch.object(cli, "_memory_handle", return_value=self.memory):
             self.assertEqual(cli.main(["cloud", "watchdog"]), 0)
