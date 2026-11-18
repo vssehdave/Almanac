@@ -86,7 +86,7 @@ _SECRETS = [
     (re.compile(r"\b(?:xox[abprs]|xapp)-[A-Za-z0-9-]{10,}"), "[key removed]"),
     (re.compile(r"\bya29\.[A-Za-z0-9_-]{20,}"), "[token removed]"),  # Google access token
     (re.compile(r"(?<![\w/:.])1//[A-Za-z0-9_-]{30,}"), "[token removed]"),  # Google refresh token
-    (re.compile(r"\b\d{8,10}:[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])"), "[token removed]"),  # Telegram bot
+    (re.compile(r"\b\d{8,10}:AA[A-Za-z0-9_-]{33}(?![A-Za-z0-9_-])"), "[token removed]"),  # Telegram bot
     (re.compile(r"(?i)([?&;]sig=)[^&\s\"'\\]{8,}"), r"\1[removed]"),  # Azure SAS signature
     (re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"), "[token removed]"),
     (re.compile(r"\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}"), "[key removed]"),
@@ -105,18 +105,23 @@ _SECRETS = [
     (re.compile(r"(?i)\b((?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?|amqps?|mssql|sqlserver|oracle|ftps?|sftp|ldaps?)://)[^/\s:@]{0,64}:[^\s]{0,256}@"),
      r"\1[removed]@"),
     (re.compile(r"://[^/\s:@]+:[^/\s@]+@"), "://[removed]@"),
-    # curl -u user:password (the user stays; the lazy gap is bounded so a line of "curl" words stays linear)
-    (re.compile(r"(?i)(\bcurl\b[^\n]{0,300}?[ \t](?:-u|--user)(?:[ \t]+|=)\\?['\"]?[^\s'\":]*:)[^\s'\"]+"), r"\1[removed]"),
-    # ODBC style: Pwd=secret; the value ends at the semicolon. A bare upper-case PWD is the shell's working directory.
-    (re.compile(r"(?i)((?<![A-Za-z])(?:[A-Za-z0-9]{1,20}_PWD|(?-i:Pwd|pwd))[ \t]*=[ \t]*\\?[\"']?)[^;\s\"']+"), r"\1[removed]"),
-    # AWS_SECRET_ACCESS_KEY, STRIPE_KEY, any UPPER_CASE_NAME_KEY/_TOKEN/_SECRET/_PASSWORD assignment
-    (re.compile(r"(?P<k>\b[A-Z][A-Z0-9_]{0,60}_(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)[ \t]*=[ \t]*\\?[\"']?)[^\s\"']{3,}"), r"\g<k>[removed]"),
+    # curl -u user:password (the user stays; the lazy gap is bounded so a line of "curl" words stays linear, and it stops at
+    # a pipe or a semicolon so another command's -u is not read; a $variable is not the password)
+    (re.compile(r"(?i)(\bcurl\b[^\n|;]{0,300}?[ \t](?:-u|--user)(?:[ \t]+|=)\\?['\"]?[^\s'\":]*:)(?!\$)[^\s'\"]+"), r"\1[removed]"),
+    # ODBC style: Pwd=secret; the value ends at the semicolon. A bare upper-case PWD is the shell's working directory;
+    # a path, a variable or a call (`pwd=$(pwd)`, `pwd = os.getcwd()`) is code, not a password.
+    (re.compile(r"(?i)((?<![A-Za-z])(?:[A-Za-z0-9]{1,20}_PWD|(?-i:Pwd|pwd))[ \t]*=[ \t]*\\?[\"']?)(?![/~.$`%]|[A-Za-z]:[\\/])(?![^;\s\"'(]{0,100}\()[^;\s\"']+"), r"\1[removed]"),
+    # AWS_SECRET_ACCESS_KEY, STRIPE_KEY, any UPPER_CASE_NAME_KEY/_TOKEN/_SECRET/_PASSWORD assignment of a literal: a quoted
+    # string, or a bare value of 12+ characters with a digit and a letter in it, never a call or an index (`MY_KEY = get_key()`)
+    (re.compile(r"(?P<k>\b[A-Z][A-Z0-9_]{0,60}_(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)[ \t]*=[ \t]*\\?[\"'])(?!(?:None|True|False|null)\b)[^\s\"']{3,}"), r"\g<k>[removed]"),
+    (re.compile(r"(?P<k>\b[A-Z][A-Z0-9_]{0,60}_(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)[ \t]*=[ \t]*)(?=[^\s\"']{0,100}\d)(?=[^\s\"']{0,100}[A-Za-z])"
+                r"(?![^\s\"'(\[]{0,200}[(\[])[^\s\"'(\[]{12,}"), r"\g<k>[removed]"),
     # NAME=value where NAME ends in secret, token, pass(word), api, account or private key (GITHUB_TOKEN, DB_PASS,
     # apiKey, SecretAccessKey), quoted or JSON-escaped (a tool call is stored as JSON: API_KEY=\"...\"),
     # but not tokens, tokenizer or passwords: `max_tokens: 150000` is not a secret. The name's tail is
     # bounded so a long run of such words cannot make the match slow. A quoted value may hold spaces.
     (re.compile(_NAME_HEAD + r"[\"'])[^\"'\\\n]{6,200}(?=\\?[\"'])"), r"\g<k>[removed]"),
-    (re.compile(_NAME_HEAD + r"[\"']?)[^\s\"']{6,}"), r"\g<k>[removed]"),
+    (re.compile(_NAME_HEAD + r"[\"']?)(?![^\s\"'(]{0,100}\()[^\s\"']{6,}"), r"\g<k>[removed]"),  # not a call: `token = get_token()`
 ]
 
 

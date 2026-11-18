@@ -17,10 +17,10 @@ SAMPLES = [
     ("aws session key", "id ASIAIOSFODNN7EXAMPLE ok", "ASIAIOSFODNN7EXAMPLE", "ok"),
     ("odbc Pwd", "Server=db1;Uid=app;Pwd=hunter22x;Database=sales;", "hunter22x", "Database=sales"),
     ("DB_PWD", "export DB_PWD=hunter22x && run", "hunter22x", "&& run"),
-    ("env KEY", "STRIPE_KEY=zk9Qw3Lm7Rt run it", "zk9Qw3Lm7Rt", "run it"),
-    ("env TOKEN", "DEPLOY_TOKEN=zk9Qw3Lm7Rt run it", "zk9Qw3Lm7Rt", "run it"),
-    ("env SECRET", "APP_SECRET=zk9Qw3Lm7Rt run it", "zk9Qw3Lm7Rt", "run it"),
-    ("env PASSWORD", "ADMIN_PASSWORD=zk9Qw3Lm7Rt run it", "zk9Qw3Lm7Rt", "run it"),
+    ("env KEY", "STRIPE_KEY=zk9Qw3Lm7RtX2 run it", "zk9Qw3Lm7RtX2", "run it"),
+    ("env TOKEN", "DEPLOY_TOKEN=zk9Qw3Lm7RtX2 run it", "zk9Qw3Lm7RtX2", "run it"),
+    ("env SECRET", "APP_SECRET=zk9Qw3Lm7RtX2 run it", "zk9Qw3Lm7RtX2", "run it"),
+    ("env PASSWORD", "ADMIN_PASSWORD=zk9Qw3Lm7RtX2 run it", "zk9Qw3Lm7RtX2", "run it"),
     ("quoted phrase", 'PASSWORD="correct horse battery staple" and more', "horse battery", "and more"),
     ("quoted phrase single", "db_password: 'blue green yellow pink'; next", "green yellow", "next"),
     ("quoted phrase json escaped", "run PASSWORD=" + BS + '"correct horse battery staple' + BS + '" now', "horse battery", "now"),
@@ -33,6 +33,9 @@ SAMPLES = [
     ("telegram", "bot 123456789:AAH" + "x9Qz3Lm7Rt" * 3 + "ab done", "x9Qz3Lm7Rt", "done"),
     ("azure sas", "https://acct.blob.core.windows.net/c/f?sv=2022&se=2027&sig=Zm9vYmFyJTJCYmF6JTNE%2Bq9Lk&sp=r ok", "Zm9vYmFy", "&sp=r ok"),
     ("curl -u", "curl -s -u admin:Sup3rSecretpw https://api.local/x", "Sup3rSecretpw", "admin:"),
+    ("quoted constant", 'STRIPE_KEY = "abc"; next', "abc", "next"),
+    ("pwd after code", "x = 1; Pwd=hunter22x;", "hunter22x", "x = 1;"),
+    ("curl after a chain", "ls && curl -u admin:Sup3rSecretpw https://api.local/x", "Sup3rSecretpw", "https://api.local/x"),
     ("curl --user", "curl --user admin:Sup3rSecretpw https://api.local/x", "Sup3rSecretpw", "https://api.local/x"),
 ]
 
@@ -47,7 +50,11 @@ class RedactionGapsTest(unittest.TestCase):
 
     def test_ordinary_text_with_similar_shapes_is_left_alone(self):
         for text in ("cd $PWD and PWD=/home/me/work", "a 1//2 split and 12345678:short", "page?sig=ab&x=1", "curl -s -u admin https://x.local",
-                     "KEY=ab and primary_key: id_column", "docker run -u 1000:1000 img", "http://host:8080/docs?mail=a@b.com"):
+                     "KEY=ab and primary_key: id_column", "docker run -u 1000:1000 img", "MY_KEY = get_key()", "MAX_TOKEN = 4096", "DEFAULT_PASSWORD = None",
+                     "API_TOKEN = load_token_value2(path)", "DB_KEY = keys_table_v2[name]", "AUTH_SECRET = False", "OLD_PWD=/home/me/work",
+                     "pwd=$(pwd)", "pwd = os.getcwd()", "Pwd=C:" + BS + "Users" + BS + "me", "my_pwd=./sub/dir",
+                     "ref 123456789:" + "Zq" * 17 + "Z here", "curl -s https://x.local | grep -u ab:cd12 f", "make && grep -u ab:cd12 f",
+                     "curl -u $USER:$TOKEN https://x.local", 'curl -u "$USER:${TOKEN}" https://x.local', "http://host:8080/docs?mail=a@b.com"):
             with self.subTest(text):
                 self.assertEqual(redact(text), text)
 

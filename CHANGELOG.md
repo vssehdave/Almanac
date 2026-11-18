@@ -17,19 +17,26 @@
   the signature first and stops if it does not match: **set the variable and
   update the scheduled task**. The packet also carries only rule-written
   titles and answers, no model summaries, which are built from tool output.
+  The signature also covers the snapshot's tree hash (without the two hand-off
+  files) and its time: the watchdog recomputes the tree, measures the age from
+  the signed time and rejects a time more than 5 minutes ahead. An unset or
+  empty key fails the check, and nothing is ever signed with an empty key.
 - **Security fix: more secrets are removed.** PGP private key blocks, PuTTY
   `.ppk` keys, `SecretAccessKey` values and `ASIA` keys, ODBC `Pwd=`, any
   `UPPER_CASE_KEY=` style assignment, quoted multi-word passwords, URL
   passwords with an empty user or a `/` or `@` in them, Google `ya29.` and
   `1//` tokens, Slack `xapp-`, Telegram bot tokens, Azure `sig=` and
-  `curl -u user:password`.
+  `curl -u user:password`. Code is left alone: `MY_KEY = get_key()`,
+  `MAX_TOKEN = 4096`, `pwd=$(pwd)`, `curl -u $USER:$TOKEN` and a `grep -u`
+  after a pipe keep their text, and a bare `UPPER_CASE_KEY=` value is taken
+  out only when it is 12 or more characters with a digit and a letter (or is
+  quoted). Telegram tokens must start `AA` after the colon.
 - **Security fix: a skill's text is not what you typed.** After a typed slash
   command Claude Code inserts the skill's own text ("Base directory for this
   skill: ..."). Typed-text detection counted it as your words, so a skill file
   saying "from now on always ..." became a `decision`, a "Standing decision" in
   the handover, an automatic playbook trigger and the cloud packet's task. That
-  block, and any text block after a command block in the same message, no
-  longer counts.
+  block no longer counts; a message typed after a command and its output does.
 - **Security fix: recall no longer prints tool output.** The note at the top of
   a new conversation, and the compaction outline's related list, took hits from
   the transcript search, so text from a tool result or a web page could appear
