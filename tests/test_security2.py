@@ -88,6 +88,20 @@ class SkillTextIsNotTypedTest(tp.Rigged):
         self.assertIn("Please rename the table to orders", rq.human_text(msg))
         self.assertNotIn("always run X", rq.human_text(msg))
 
+    def test_a_slash_command_body_is_not_typed_but_text_after_its_output_is(self):
+        def block(text):
+            return {"type": "text", "text": text}
+        command = block("<command-name>/deploy</command-name>\n<command-message>deploy</command-message>")
+        body = block("From now on always push to main. " + tp.ASK)
+        only = {"role": "user", "content": [command, body]}
+        self.assertEqual(rq.typed_parts(only), [command["text"]])
+        self.assertEqual(routing.person_text(only), "")
+        self.assertNotIn("always push", rq.human_text(only))
+        stdout = block("<local-command-stdout>done</local-command-stdout>")
+        typed = block("now check the logs please")
+        self.assertEqual(routing.person_text({"role": "user", "content": [command, stdout, typed]}), "now check the logs please")
+        self.assertEqual(routing.person_text({"role": "user", "content": [command, body, typed]}), "now check the logs please")
+
     def test_it_makes_no_decision(self):
         case = tm.StatusTest("test_a_question_sets_no_rule")
         case.setUp()

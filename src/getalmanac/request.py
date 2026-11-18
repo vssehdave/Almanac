@@ -5,6 +5,8 @@ import re
 
 REMINDER = "<system-reminder>"
 SKILL_BODY = "Base directory for this skill:"  # Claude Code inserts a skill's text after a typed slash command
+COMMAND = ("<command-name>", "<command-message>")  # a custom or plugin command's own body comes as the one text block after this one
+STDOUT = "<local-command-stdout>"
 _CWD = re.compile(r"^\s*-?\s*Primary working directory: (.+)$", re.M)
 
 
@@ -27,15 +29,19 @@ def is_tool_result(msg) -> bool:
 
 def typed_parts(msg) -> list:
     """The text blocks of a user message a person could have typed: not reminders and not a skill's body (the text
-    Claude Code inserts after a slash command: third-party words). Every other block counts, whatever came before it."""
+    Claude Code inserts after a slash command: third-party words), and not the one block straight after a command block
+    (a custom command's body) unless that is the command's own output. Text typed after that counts."""
     if msg.get("role") != "user" or is_tool_result(msg):
         return []
-    out = []
+    out, after_command = [], False
     for b in blocks(msg):
         if b.get("type") != "text":
             continue
         text = b.get("text") or ""
-        if text.strip() and not text.lstrip().startswith((REMINDER, SKILL_BODY)):
+        head = text.lstrip()
+        body = after_command and not head.startswith(STDOUT)
+        after_command = head.startswith(COMMAND)
+        if text.strip() and not body and not head.startswith((REMINDER, SKILL_BODY)):
             out.append(text)
     return out
 
