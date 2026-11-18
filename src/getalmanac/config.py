@@ -66,11 +66,22 @@ DEFAULTS = {
     "routing": {
         "mode": "off",  # "off" changes nothing; "subagents" routes sub-agent threads; "all" routes the main thread too
         "models": {"small": "claude-haiku-5-5", "medium": "claude-sonnet-5-5", "large": "claude-opus-5-5"},
+        "route_inherited": False,  # false: a sub-agent never goes below the model it starts on, even one it only inherited from its parent
         "ceiling": "large",  # the highest tier routing may pick (a pin ignores it)
         "classifier": "rules",  # "model" lets a small model settle the turns the rules are unsure about
-        "effort": {"small": "low", "medium": "medium", "large": ""},  # set only where Claude Code already sends one; "" keeps its value
+        "effort": {"small": "medium", "medium": "medium", "large": "low"},  # a tier's normal effort: set only where Claude Code already sends one; "" keeps its value
+        # After a failure a thread moves one rung up the ladder of the tier it started on, never past its end or the ceiling.
+        # A rung is [tier, effort]; the start itself is the first rung, at the tier's normal effort above.
+        "ladders": {
+            "small": [["medium", "low"], ["medium", "medium"]],  # Haiku -> Sonnet low -> Sonnet medium
+            "medium": [["large", "low"], ["large", "high"]],  # Sonnet -> Opus low -> Opus high
+            "large": [["large", "high"]],  # Opus low -> Opus high
+        },
+        # An ESTIMATE, not a measured number: what an effort level multiplies the reply (output and thinking) cost by,
+        # when comparing a stay with a move on the main thread. An effort that is not listed counts as 1.
+        "effort_cost": {"low": 0.6, "medium": 1.0, "high": 1.6},
         "margin": 0.2,  # a move down on the main thread must be at least this much cheaper than staying
-        "escalate_after": 3,  # tool errors in a row, or one call failing this often, raise the next turn a tier
+        "escalate_after": 3,  # tool errors in a row, or one call failing this often, raise the next turn one rung
         "escalate_turns": 3,  # turns the raise lasts
         # Relative prices per token, for comparing models only. They are list-price ratios as of 2026-11-03 for the
         # 5.5 models (cache write 1.25x input, cache read 0.05x for Sonnet and Opus); the Haiku cache-read ratio
@@ -154,8 +165,29 @@ def _file() -> dict:
         return {}
 
 
+def _routing_ok(cfg) -> dict:
+    """Put back the default of any routing table that is malformed: a typo must not break every request or send a bad effort."""
+    tiers, levels = ("small", "medium", "large"), ("low", "medium", "high", "xhigh", "max")
+    route = cfg.get("routing")
+    if not isinstance(route, dict):
+        cfg["routing"] = copy.deepcopy(DEFAULTS["routing"])
+        return cfg
+    ladders, effort, cost = route.get("ladders"), route.get("effort"), route.get("effort_cost")
+    good = {
+        "ladders": isinstance(ladders, dict) and all(
+            k in tiers and isinstance(v, list) and all(isinstance(r, list) and len(r) == 2 and r[0] in tiers and r[1] in levels for r in v)
+            for k, v in ladders.items()),
+        "effort": isinstance(effort, dict) and all(k in tiers and v in ("", *levels) for k, v in effort.items()),
+        "effort_cost": isinstance(cost, dict) and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in cost.values()),
+    }
+    for key, ok in good.items():
+        if not ok:
+            route[key] = copy.deepcopy(DEFAULTS["routing"][key])
+    return cfg
+
+
 def load() -> dict:
-    cfg = _merge(copy.deepcopy(DEFAULTS), _file())
+    cfg = _routing_ok(_merge(copy.deepcopy(DEFAULTS), _file()))
     if os.environ.get("ALMANAC_UPSTREAM"):
         cfg["upstream"] = os.environ["ALMANAC_UPSTREAM"]
     # ALMANAC_DISABLE=skills,agents,tools,memory,compaction turns layers off for one run

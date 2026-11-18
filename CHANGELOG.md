@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **Routing: a failure ladder, an agent model floor, effort-aware pricing.** A
+  thread whose tool calls keep failing climbs one rung of its starting model's
+  ladder (`routing.ladders`): Haiku medium, Sonnet low, Sonnet medium; Sonnet
+  medium, Opus low, Opus high; Opus low, Opus high. This holds for the main thread
+  and, new, for a sub-agent judged on its own history; forks stay on their
+  parent's model and `routing.ceiling` caps every ladder. In `subagents` mode the
+  main thread's model is untouched but its effort now follows its model's
+  ladder. A sub-agent is never routed below the model it starts on, whether
+  its definition asked for it or it inherited it (a pin still wins);
+  `routing.route_inherited` (default false) lets an inherited model be routed down.
+  Saying an earlier attempt failed takes the next rung of the ladder, not the
+  top tier. In `subagents` mode effort is written only on a raise and never
+  lowers the one Claude Code sent. A malformed `routing.ladders`, `effort` or
+  `effort_cost` in `config.json` falls back to the default. **Default `routing.effort` is now medium, medium, low**
+  (was low, medium, kept), so Opus requests that carry an effort are sent at low.
+  `routing.effort_cost` scales the reply cost, as an estimate, when a stay is
+  compared with a move.
+
 - **`almanac memory import` stores past Claude Code conversations.** It reads
   the transcripts in `~/.claude/projects` and stores them through the same code
   the proxy uses (cleaning, redaction, status tags, search). The project is

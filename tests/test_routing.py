@@ -157,7 +157,7 @@ class Case(unittest.TestCase):
     def start(self, respond=None, **overrides):
         if getattr(self, "rig", None):
             self.rig.close()
-        overrides = {"routing.mode": self.mode, **overrides}
+        overrides = {"routing.mode": self.mode, "routing.route_inherited": True, **overrides}  # the older tests below predate the floor
         self.rig = Rig(respond=respond, layers=[SetProject(), *getattr(self, "before", []), RoutingLayer()], store=self.store, overrides=overrides)
         self.addCleanup(self.rig.close)
 
@@ -200,11 +200,11 @@ class ClassifyTest(unittest.TestCase):
 class DecisionTest(Case):
     def test_the_model_and_effort_follow_the_tier(self):
         sent = self.send(convo([{"text": "list the files in src"}]))
-        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (SMALL, "low"))
+        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (SMALL, "medium"))
         sent = self.send(convo([{"text": "fix the bug in cli.py"}]), model=SMALL)
         self.assertEqual((sent["model"], sent["output_config"]["effort"]), (MEDIUM, "medium"))
         sent = self.send(convo([{"text": "design a plugin system"}]))
-        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (LARGE, "high"))
+        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (LARGE, "low"))
         self.assertEqual(sent["thinking"], {"type": "adaptive", "display": "omitted"})  # untouched
 
     def test_the_decision_is_frozen_across_a_tool_loop_and_identical_on_replay(self):
@@ -243,7 +243,8 @@ class DecisionTest(Case):
     def test_incidental_words_do_not_promote_a_session_to_large(self):
         self.assertEqual(self.send(convo([{"text": "run all the tests"}]))["model"], MEDIUM)
 
-    def test_the_top_tier_keeps_the_effort_the_client_asked_for(self):
+    def test_the_top_tier_keeps_the_effort_the_client_asked_for_when_its_effort_is_blank(self):
+        self.start(**{"routing.effort": {"small": "medium", "medium": "medium", "large": ""}})
         raw = body(convo([{"text": "design a plugin system"}]))
         raw["output_config"]["effort"] = "xhigh"
         self.rig.messages(raw, extra=MAIN)
@@ -315,7 +316,7 @@ class SwitchPriceTest(Case):
     def test_a_move_down_is_made_when_it_is_cheap(self):
         self.send(convo([{"text": "write a parser in utils.py"}]))
         sent = self.send(convo([{"text": "write a parser in utils.py"}, {"text": "list the files in src"}]))
-        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (SMALL, "low"))
+        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (SMALL, "medium"))
         last = self.decisions()[-1]
         self.assertEqual(last["move"], "down")
         self.assertLess(last["switch"], last["stay"])
@@ -389,7 +390,7 @@ class EscalationTest(Case):
     def test_a_person_saying_it_is_still_broken_raises_the_turn(self):
         turns = [{"text": "list the files in src"}, {"text": "that's not right, explain again"}]
         sent = self.send(convo(turns), model=SMALL)
-        self.assertEqual(sent["model"], LARGE)  # said to have failed: large by the rules
+        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (MEDIUM, "low"))  # said to have failed: one rung up Haiku's ladder
         self.assertIn("failed", self.decisions()[-1]["why"])
 
     def test_the_raise_stops_at_the_top_tier(self):
@@ -416,7 +417,7 @@ class SubagentTest(Case):
         self.rig.messages(body(loop, MEDIUM), extra=sub_headers())
         sent = [json.loads(r["body"]) for r in self.rig.upstream.requests]
         self.assertEqual([s["model"] for s in sent], [SMALL, SMALL])
-        self.assertEqual(sent[0]["output_config"]["effort"], "low")
+        self.assertEqual(sent[0]["output_config"]["effort"], "medium")
 
     def test_a_hard_task_goes_to_the_large_model(self):
         self.rig.messages(body([human("Difficulty: hard\nWhy does the cache return stale rows?")], SMALL), extra=sub_headers())
@@ -672,6 +673,173 @@ class ReportTest(unittest.TestCase):
         record = rig.records()[-1]
         self.assertEqual((record["answered"], record["route"]["tier"], record["route"]["first"]), (SMALL, "small", True))
         self.assertEqual(record["model"], MEDIUM)  # what Claude Code asked for
+
+
+def thread(task, errors=0):
+    """A sub-agent's own messages: its task, then `errors` failed tool calls."""
+    out = [human(task)]
+    for i in range(errors):
+        out += [{"role": "assistant", "content": [{"type": "tool_use", "id": f"e{i}", "name": "Bash", "input": {"command": f"try {i}"}}]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"e{i}", "content": "boom", "is_error": True}]}]
+    return out
+
+
+class LadderTest(Case):
+    def sub(self, task, model, errors, agent="agent-1", kind="custom"):
+        self.rig.messages(body(thread(task, errors), model), extra=sub_headers(agent, kind))
+        sent = self.rig.sent()
+        return sent["model"], sent["output_config"]["effort"]
+
+    def climb(self, task, model, expected, **kw):
+        got = [self.sub(task, model, n, **kw) for n in (0, 3, 6, 9)]
+        self.assertEqual(got, expected)
+
+    def test_a_sonnet_subagent_climbs_to_opus_low_then_opus_high_and_stays(self):
+        self.climb("Difficulty: standard\nAdd a retry to fetch() in net.py.", MEDIUM,
+                   [(MEDIUM, "medium"), (LARGE, "low"), (LARGE, "high"), (LARGE, "high")])
+
+    def test_a_haiku_subagent_never_goes_above_sonnet_medium(self):
+        self.climb("Difficulty: simple\nRead README.md and report its first line.", SMALL,
+                   [(SMALL, "medium"), (MEDIUM, "low"), (MEDIUM, "medium"), (MEDIUM, "medium")])
+
+    def test_an_opus_subagent_runs_low_then_high_and_stays(self):
+        self.climb("Difficulty: hard\nFind why the cache returns stale rows.", LARGE,
+                   [(LARGE, "low"), (LARGE, "high"), (LARGE, "high"), (LARGE, "high")])
+
+    def test_a_task_that_says_it_failed_takes_the_next_rung_not_the_large_tier(self):
+        self.climb("that didn't work, try again\nread README.md and report its first line.", SMALL,
+                   [(MEDIUM, "low"), (MEDIUM, "medium"), (MEDIUM, "medium"), (MEDIUM, "medium")])
+
+    def test_a_person_saying_it_failed_takes_the_next_rung_on_the_main_thread(self):
+        sent = self.send(convo([{"text": "list the files in src"}, {"text": "that didn't work, try again"}]), model=SMALL)
+        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (MEDIUM, "low"))
+
+    def test_a_fork_never_moves(self):
+        self.assertEqual(self.sub("Add a retry to fetch() in net.py.", SMALL, 6, kind="fork"), (SMALL, "high"))
+
+    def test_the_main_thread_climbs_the_same_ladder(self):
+        turns = [{"text": "design a plugin system", "errors": 3}, {"text": "design a cache"}]
+        sent = self.send(convo(turns), model=LARGE)
+        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (LARGE, "high"))
+        turns = [{"text": "fix the bug in cli.py", "errors": 3}, {"text": "ok, try b.py"}]
+        sent = self.send(convo(turns))
+        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (LARGE, "low"))
+
+    def test_the_ceiling_caps_the_ladder(self):
+        self.start(**{"routing.ceiling": "medium"})
+        self.climb("Difficulty: simple\nRead README.md.", SMALL, [(SMALL, "medium"), (MEDIUM, "low"), (MEDIUM, "medium"), (MEDIUM, "medium")])
+        self.assertEqual(self.sub("Difficulty: standard\nAdd a retry in net.py.", MEDIUM, 6, agent="b"), (MEDIUM, "medium"))
+
+
+def routing_default_route_inherited():
+    from getalmanac import config
+    return config.DEFAULTS["routing"]["route_inherited"]
+
+
+class AgentFloorTest(Case):
+    def sub(self, task, model, **kw):
+        self.rig.messages(body([human(task)], model), extra=sub_headers(**kw))
+        return self.rig.sent()["model"]
+
+    def test_an_agents_own_model_is_a_floor(self):
+        self.send(convo([{"text": "hello"}]), model=MEDIUM)  # the parent runs on Sonnet; this agent asked for Opus
+        self.assertEqual(self.sub("Add a retry to fetch() in net.py.", LARGE), LARGE)
+        self.assertEqual(self.sub("Difficulty: simple\nlist the files", LARGE, agent="b"), LARGE)
+
+    def test_a_task_that_needs_more_still_moves_the_agent_up(self):
+        self.send(convo([{"text": "hello"}]), model=LARGE)
+        self.assertEqual(self.sub("Difficulty: hard\nfind the race", SMALL), LARGE)
+
+    def test_an_agent_that_only_inherited_the_parents_model_keeps_it_unless_route_inherited_is_on(self):
+        self.send(convo([{"text": "hello"}]), model=LARGE)
+        self.assertEqual(self.sub("Difficulty: simple\nlist the files", LARGE), SMALL)  # on in these tests: routed down
+        self.start(**{"routing.route_inherited": False})  # the default: the plain floor
+        self.assertFalse(routing_default_route_inherited())
+        self.send(convo([{"text": "hello"}]), model=LARGE)
+        self.assertEqual(self.sub("Difficulty: simple\nlist the files", LARGE, agent="b"), LARGE)
+        self.assertEqual(self.sub("Difficulty: simple\nlist the files", LARGE, agent="c", kind="Explore"), LARGE)
+
+    def test_a_pin_overrides_the_floor(self):
+        self.send(convo([{"text": "hello"}]), model=MEDIUM)
+        self.store.put(routing.pin_key("proj1"), "small")
+        self.assertEqual(self.sub("Add a retry to fetch() in net.py.", LARGE), SMALL)
+
+
+class MainEffortOnlyTest(Case):
+    mode = "subagents"
+
+    def ask(self, turns, model, effort):
+        raw = body(convo(turns), model)
+        raw["output_config"]["effort"] = effort
+        self.rig.messages(raw, extra=MAIN)
+        sent = self.rig.sent()
+        return sent["model"], sent["output_config"]["effort"]
+
+    def test_the_model_stays_and_the_effort_climbs_then_falls_back(self):
+        turns = [{"text": "design a plugin system", "errors": 3}]
+        got = []
+        for text in ("a", "b", "c", "d"):
+            turns = turns + [{"text": text}]
+            got.append(self.ask(turns, LARGE, "low"))
+        self.assertEqual(got, [(LARGE, "high")] * 3 + [(LARGE, "low")])
+
+    def test_the_client_effort_is_never_lowered_and_is_left_alone_when_nothing_failed(self):
+        turns = [{"text": "design a plugin system", "errors": 3}, {"text": "a"}]
+        self.assertEqual(self.ask(turns, LARGE, "xhigh"), (LARGE, "xhigh"))
+        self.assertEqual(self.ask(turns, LARGE, "high"), (LARGE, "high"))
+        self.assertEqual(self.ask([{"text": "design a plugin system"}], LARGE, "xhigh"), (LARGE, "xhigh"))
+        self.assertEqual(self.ask([{"text": "design a plugin system"}], LARGE, "medium"), (LARGE, "medium"))
+
+    def test_the_turn_where_the_person_says_it_went_wrong_is_raised_too(self):
+        turns = [{"text": "design a plugin system"}, {"text": "that's wrong, try again"}]
+        self.assertEqual(self.ask(turns, LARGE, "low"), (LARGE, "high"))
+
+    def test_a_sonnet_main_thread_keeps_its_model_and_effort(self):
+        turns = [{"text": "fix the bug in cli.py", "errors": 3}, {"text": "ok, b.py"}]
+        self.assertEqual(self.ask(turns, MEDIUM, "medium"), (MEDIUM, "medium"))  # its next rung is another model
+
+
+class ConfigCheckTest(unittest.TestCase):
+    def load(self, **routing):
+        from getalmanac import config
+        with mock.patch.object(config, "_file", return_value={"routing": routing}):
+            return config.load()["routing"], config.DEFAULTS["routing"]
+
+    def test_a_malformed_ladder_falls_back_to_the_default(self):
+        for bad in ({"small": [["huge", "low"]]}, {"small": ["medium"]}, ["x"], {"small": [["medium"]]},
+                    {"small": [["medium", "ultra"]]}, {"huge": [["medium", "low"]]}, {"small": "medium"}):
+            got, default = self.load(ladders=bad)
+            self.assertEqual(got["ladders"], default["ladders"], bad)
+
+    def test_a_valid_ladder_is_kept(self):
+        got, _ = self.load(ladders={"small": [["medium", "high"]]})
+        self.assertEqual(got["ladders"]["small"], [["medium", "high"]])
+
+    def test_a_malformed_effort_or_effort_cost_falls_back_to_the_default(self):
+        got, default = self.load(effort={"large": "ultra"}, effort_cost={"low": "x"})
+        self.assertEqual((got["effort"], got["effort_cost"]), (default["effort"], default["effort_cost"]))
+        got, default = self.load(effort=["low"], effort_cost=[1])
+        self.assertEqual((got["effort"], got["effort_cost"]), (default["effort"], default["effort_cost"]))
+        got, _ = self.load(effort={"large": ""})
+        self.assertEqual(got["effort"]["large"], "")
+
+
+class EffortPriceTest(Case):
+    def test_effort_scales_the_reply_cost(self):
+        cfg = self.rig.proxy.cfg["routing"]
+        low, high = (routing.price(cfg, "large", 1000, True, "medium", e) for e in ("low", "high"))
+        self.assertLess(low, high)
+        self.assertEqual(routing.price(cfg, "large", 1000, True, "medium"), routing.price(cfg, "large", 1000, True, "medium", "medium"))
+
+    def test_effort_changes_a_borderline_move_down(self):
+        def move(**overrides):
+            self.setUp()
+            self.start(**overrides)
+            self.send(convo([{"text": "design a plugin system"}]), model=LARGE)
+            sent = self.send(convo([{"text": "design a plugin system", "pad": 40000}, {"text": "fix the bug in cli.py"}]), model=LARGE)
+            return sent["model"]
+        self.assertEqual(move(**{"routing.effort_cost": {"low": 1.0, "medium": 1.0, "high": 1.0}}), MEDIUM)
+        self.assertEqual(move(), LARGE)  # Opus at low effort is estimated cheaper, so staying wins
 
 
 if __name__ == "__main__":
