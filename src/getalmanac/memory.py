@@ -576,11 +576,12 @@ class Memory:
             found.append(hit)
         return found
 
-    def search(self, query, project=None, exclude_lane=None, limit=8, kind="leaf", lane=None) -> list:
+    def search(self, query, project=None, exclude_lane=None, limit=8, kind="leaf", lane=None, deep=True) -> list:
         """Stored exchanges that match `query`, best first. Needs two of its words (one if it has one).
 
         With a model installed, exchanges near the query by meaning are added, and the two rankings are
-        merged by reciprocal rank fusion.
+        merged by reciprocal rank fusion. `deep=False` leaves out exchanges only their transcript (tool output,
+        web pages) matches: what is printed unmarked into a conversation must not carry that text.
         """
         words = sorted({w for w in re.findall(r"[a-z0-9_]{2,}", query.lower()) if w not in STOP})[:24]
         terms = set(tokens(query))
@@ -607,7 +608,7 @@ class Memory:
         hits.sort(key=lambda h: (-h["score"], -h["ts"], h["id"]))
         for hit in hits:
             hit.pop("vec", None)
-        deep = self._deep(words, terms, need, project, exclude_lane, {hit["id"] for hit in hits}, lane) if kind == "leaf" and words and terms else []
+        deep = self._deep(words, terms, need, project, exclude_lane, {hit["id"] for hit in hits}, lane) if deep and kind == "leaf" and words and terms else []
         if not near and not deep:
             return hits[:limit]
         fused = {hit["id"]: 1 / (RRF_K + rank) for rank, hit in enumerate(hits, 1)}
@@ -630,7 +631,7 @@ class Memory:
     def related(self, lane, text, limit=12) -> list:
         """Exchanges of one conversation that match `text`, best first, ties by id. [] on any error."""
         try:
-            return self.search(text[:2000], lane=lane, limit=limit)
+            return self.search(text[:2000], lane=lane, limit=limit, deep=False)
         except Exception:
             return []
 
@@ -748,7 +749,7 @@ class Memory:
         """The note added to a new conversation's first message, or "" when nothing is worth adding."""
         if not project:
             return ""
-        hits = self.search(first_text, project=project, exclude_lane=lane, limit=6)
+        hits = self.search(first_text, project=project, exclude_lane=lane, limit=6, deep=False)
         recent = self.recent(project=project, exclude_lane=lane)
         if not hits and not recent:
             return ""

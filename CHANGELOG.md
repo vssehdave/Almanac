@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Security fix: recall no longer prints tool output.** The note at the top of
+  a new conversation, and the compaction outline's related list, took hits from
+  the transcript search, so text from a tool result or a web page could appear
+  as a plain line. They now use only exchanges matched by their question,
+  answer or summary; `memory_search` still searches tool output and marks it as
+  a quoted record.
 - **Security fix: cleaning stored text takes linear time.** The pattern that
   strips `<system-reminder` tags backtracked quadratically (a `<` followed by
   20,000 spaces took 10 seconds), and so did the private-key pattern on a pile
