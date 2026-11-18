@@ -618,6 +618,17 @@ class HandoffTest(CloudCase):
         self.assertNotIn("cloud/other", text)
         self.assertIn("  auto        on", text)
 
+    def test_status_asks_origin_only_where_the_hand_off_was_ever_used(self):
+        cfg = {"cloud": {"auto": False, "heartbeat_minutes": 10}}
+        real = cloud._must
+
+        def no_remote(cwd, *args, **kw):
+            assert "ls-remote" not in args, "asked origin"
+            return real(cwd, *args, **kw)
+        with mock.patch.object(cloud, "_must", side_effect=no_remote):
+            text = cloud.status(self.alpha, cfg, self.memory.store, listed=False)
+        self.assertIn("takeover    not checked: the hand-off is off here", text)
+
     def test_the_watchdog_prompt_holds_every_stop_condition(self):
         text = cloud.watchdog(10)
         for part in ("git fetch origin cloud/handoff`. If it fails (the branch does not exist), stop.",
