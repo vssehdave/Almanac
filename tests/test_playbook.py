@@ -600,8 +600,13 @@ class AutoTest(Rigged):
         self.assertEqual(self.count(), 0)
         playbook._auto_set("weekly-report", "0" * 64)  # an entry for some other script text
         self.assertFalse(playbook.automatic(playbook.load("weekly-report")))
-        playbook._auto_set("weekly-report", pb["hash"])
+        playbook.auto_file().write_text(json.dumps({"weekly-report": pb["hash"]}), encoding="utf-8")  # the hash copied by hand
+        self.assertFalse(playbook.automatic(playbook.load("weekly-report")))
+        playbook._auto_set("weekly-report", pb["hash"])  # what the CLI writes: signed with its own key
         self.assertTrue(playbook.automatic(playbook.load("weekly-report")))
+        Path(self.home, "auto.key").write_bytes(b"k" * 32)  # a key written by hand does not match the signature
+        self.assertFalse(playbook.automatic(playbook.load("weekly-report")))
+        playbook._auto_set("weekly-report", pb["hash"])
         self.assertIn("already run", reminders(self.ask(rig, session="s2")["messages"][0])[0])
         self.assertEqual(self.count(), 1)
 
