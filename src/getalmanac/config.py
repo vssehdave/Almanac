@@ -27,6 +27,18 @@ DEFAULTS = {
         "always_full": [],  # skill names never collapsed
         "scan_on_launch": True,  # scan new or changed skills and plugins with SkillSpector in the background (skills.py)
     },
+    # What `almanac` loads Claude Code with: the user's own settings minus what is off here (see profile.py)
+    "profile": {
+        "enabled": True,
+        "off_plugins": ["claude-mem@thedotmack", "logbook@logbook", "pocketbook@pocketbook"],  # plugin ids switched off
+        "off_skills": ["logbook"],  # user skills switched off
+        # A user-settings hook is left out when its command contains one of these, or the name of anything in the two
+        # lists above (the part of a plugin id before the @), so a new plugin under development is one line in off_plugins.
+        "off_hooks": ["getlogbook"],
+        # Hook text of a plugin that is not off but whose job Almanac now does itself (a mode banner and its rules) is cut
+        # from requests when it contains one of these. The plugin stays installed.
+        "off_hook_text": ["MODE ACTIVE", "MODE CHANGED", "MODE OFF"],
+    },
     "startup": {
         "agent_chars": 60,  # characters of description kept for a listed agent type; 0 leaves the agent listing alone
         "system_prefix": False,  # move the stable startup sections to the end of the system prompt so a new conversation can read them from cache (sysprefix.py)
@@ -198,6 +210,7 @@ def load() -> dict:
             cfg["startup"]["agent_chars"] = 0
             cfg["startup"]["system_prefix"] = False
             cfg["cheatsheet"]["mode"] = "off"  # "all" means no change to the request at all
+            cfg["profile"]["enabled"] = False
             cfg["playbooks"]["enabled"] = False
             cfg["library"]["inject"] = False
             cfg["accounts"]["fallback"] = []

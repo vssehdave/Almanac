@@ -74,6 +74,19 @@ def with_bundle(args, cfg):
     return ["--plugin-dir", str(folder), *args]
 
 
+def with_profile(args, cfg):
+    """Add the clean profile (the user's own setup minus the off plugins, hooks and skills) to Claude Code's arguments."""
+    from . import profile
+
+    try:
+        flags, notes = profile.prepare(cfg, args)
+    except Exception as exc:  # a broken profile must not stop Claude Code, but it must be said
+        flags, notes = [], [f"the clean profile is off for this run: {type(exc).__name__}: {exc}"]
+    for note in notes:
+        print(f"almanac: {note}", file=sys.stderr)
+    return [*flags, *args]
+
+
 def https_session(cfg):
     """A tls.Session when this launch should run in HTTPS-proxy mode, else None (and says why)."""
     asked = os.environ.get("ALMANAC_HTTPS", "").lower()
@@ -208,6 +221,7 @@ def run(args, cfg) -> int:
     env = https_env(session, server.server_address[1], cfg=cfg) if session else child_env(url, cfg=cfg)
     args = with_memory_tools(list(args), cfg)
     args = with_bundle(args, cfg)
+    args = with_profile(args, cfg)
     # Ctrl+C belongs to Claude Code. A handler (not SIG_IGN) so the child does not inherit it.
     previous = signal.signal(signal.SIGINT, lambda *_: None)
     try:
