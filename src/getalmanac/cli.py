@@ -41,6 +41,7 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac playbook list|show|approve [--auto]|remove|path   recorded ways of doing repeated tasks, and their scripts
   almanac playbook mine        find tasks you repeat in past sessions, no model (--days 30, --min 3)
   almanac playbook compile     have one Claude Code session write the best repeat up as a playbook (--top N, --dry-run)
+  almanac library list|show|forget   the prompt library: how past prompts were solved (list --project NAME; show ID; forget ID)
   almanac projects             projects seen; `projects merge FROM INTO`, `projects rename NAME NEW`
   almanac status               settings, files and recent activity
   almanac doctor               check that everything needed is in place
@@ -612,6 +613,41 @@ def _playbook(rest):
     return 0
 
 
+def _library(rest):
+    from . import library
+
+    parser = argparse.ArgumentParser(prog="almanac library")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("list").add_argument("--project", help="a project name or key; default: all projects")
+    for name in ("show", "forget"):
+        sub.add_parser(name).add_argument("id", type=int)
+    args = parser.parse_args(rest)
+    memory = _memory_handle()
+    if args.cmd == "list":
+        key = None
+        if args.project:
+            key = memory.projects.find(args.project)
+            if not key:
+                print(f"almanac: no project is called {args.project!r}; see `almanac projects`", file=sys.stderr)
+                return 2
+        entries = library.listing(memory.store, key)
+        for e in entries:
+            _print(f"{e['id']:>5}  {time.strftime('%Y-%m-%d', time.localtime(e['created']))}  {e['uses']:>4}  {e['prompt'][:70]}")
+        if not entries:
+            print("No entry is stored for that.")
+        return 0
+    if args.cmd == "show":
+        text = library.show(memory, args.id)
+    else:
+        gone = library.forget(memory.store, args.id)
+        text = f"forgot {len(gone)} entr{'y' if len(gone) == 1 else 'ies'}: {', '.join(map(str, gone))}" if gone else None
+    if text is None:
+        print(f"almanac: no entry {args.id}; see `almanac library list`", file=sys.stderr)
+        return 2
+    _print(text)
+    return 0
+
+
 def _mcp(_rest):
     from . import mcp
 
@@ -634,7 +670,7 @@ def _version(_rest):
 COMMANDS = {"serve": _serve, "report": _report, "status": _status, "doctor": _doctor, "config": _config,
             "version": _version, "memory": _memory, "projects": _projects, "route": _route, "cheatsheet": _cheatsheet, "mcp": _mcp,
             "semantic": _semantic, "cloud": _cloud, "skill": _skill, "pack": _pack,
-            "playbook": _playbook}
+            "playbook": _playbook, "library": _library}
 
 
 def main(argv=None):

@@ -335,7 +335,7 @@ class McpTest(Case):
         self.assertEqual(self.ask("initialize", {"protocolVersion": "2025-06-18"})["result"]["protocolVersion"], "2025-06-18")
         self.assertEqual([t["name"] for t in self.ask("tools/list")["result"]["tools"]],
                          ["memory_search", "memory_read", "memory_projects", "playbook_find", "playbook_save", "playbook_run",
-                          "memory_list", "memory_handover", "memory_user_messages"])
+                          "memory_list", "memory_handover", "memory_user_messages", "library_find"])
         self.assertIsNone(mcp.handle(self.memory, {"jsonrpc": "2.0", "method": "notifications/initialized"}, self.alpha))
         self.assertEqual(self.ask("nope")["error"]["code"], -32601)
 

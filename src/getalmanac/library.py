@@ -6,15 +6,19 @@ touched, the fixes (a failed step and what recovered it) and how it ended. No mo
 redacted and tag-stripped like the rest of memory. When a later entry in the same project asks for the same
 thing by nearly the same route, it replaces the older one as the current entry, which is kept and linked
 under `superseded_by`; the newer one lists what changed. Rows go with their conversation (forget, prune).
+Current entries are searchable (an FTS5 table over prompt and route), and `note` renders the one that best
+matches a typed prompt as the short reminder the playbook layer adds to the request.
 """
 import json
 import re
+import sqlite3
 import time
 
 from . import mine
 from . import request as rq
-from .match import tokens
-from .memory import _first_line, clean, exchange, redact
+from .match import STOP, tokens
+from .memory import QUOTED, _first_line, clean, exchange, redact
+from .routing import handwritten
 from .status import rule
 
 SCHEMA = """
@@ -27,6 +31,7 @@ create table if not exists library (
 );
 create unique index if not exists library_exchange on library (convo, seq);
 create index if not exists library_project on library (project, superseded_by, updated);
+create virtual table if not exists library_fts using fts5(prompt, route, tokenize='porter unicode61');
 """
 PROMPT_CHARS = 600
 MAX_FILES = 20
@@ -35,10 +40,32 @@ MAX_ROUTE = 60
 PROMPT_SAME = 0.6  # word-set Jaccard of two prompts that count as the same task
 ROUTE_SAME = 0.5  # step-set Jaccard of two routes that count as the same task
 COMPARE = 500  # most current entries of a project one new entry is compared with
+THRESHOLD = 0.6  # share of a stored prompt's words found in the typed text for the note to be shown (see README)
+MIN_SHARED = 3  # words they must share, whatever the share: two short prompts alike in one word are not the same task
+MIN_SHARED_LONG = 5  # ... when the stored prompt has more than LONG words
+LONG = 30
+CANDIDATES = 50  # most entries the full-text search hands to the scorer
+NOTE_CHARS = 800
+CLOSE = "</system-reminder>"
 EDITS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 _EXIT = re.compile(r"(?i)exit(?:ed)?(?: with)?[ _](?:code|status)[: =]*[1-9]\d*")  # matched at the start of a result only
 _ERROR = re.compile(r"(?i)error|fail|exception|denied|not found|rejected|cannot|no module")
 _EXIT_ONLY = re.compile(r"(?i)^exit code[: ]*\d+$")
+
+
+def setup(store):
+    """Create the tables. The search table of a store written before it existed is filled from the current entries."""
+    with store.lock:
+        store.db.executescript(SCHEMA)
+        if not store.run("select 1 from library_fts limit 1") and store.run("select 1 from library where superseded_by = 0 limit 1"):
+            store.run("insert into library_fts (rowid, prompt, route) select id, prompt, route from library where superseded_by = 0")
+
+
+def _sync(store, ids):
+    """Only current entries are searchable: bring the search rows of `ids` in line with the table."""
+    for entry in ids:
+        store.run("delete from library_fts where rowid = ?", (entry,))
+        store.run("insert into library_fts (rowid, prompt, route) select id, prompt, route from library where id = ? and superseded_by = 0", (entry,))
 
 
 def _short(path) -> str:
@@ -135,6 +162,7 @@ def _merge(store, new_id, project, prompt, route, fixes):
                + [f"new fix: {f}" for f in fixes if _fix_key(f) not in seen])
     store.run("update library set superseded_by = ? where id = ?", (new_id, old["id"]))
     store.run("update library set changes = ?, uses = ? where id = ?", (json.dumps(changes, ensure_ascii=False), old["uses"], new_id))
+    _sync(store, [old["id"]])
 
 
 def record(memory, lane, group, seq, min_tools, now=None) -> int:
@@ -171,6 +199,7 @@ def record(memory, lane, group, seq, min_tools, now=None) -> int:
                                   "outcome, created, updated) values (?,?,?,?,?,?,?,?,?,?,?,?)", row)
         if not cursor.rowcount:  # this exchange already has its entry
             return 0
+        _sync(store, [cursor.lastrowid])
         _merge(store, cursor.lastrowid, row[2], prompt, route, fixes)
     return 1
 
@@ -182,7 +211,10 @@ def observe(memory, ctx, messages, reply):
         if not turns or reply.get("stop_reason") == "tool_use":  # nothing finished yet
             return 0
         group = messages[turns[-1]:] + [{"role": "assistant", "content": reply["content"]}]
-        return record(memory, ctx.lane, group, len(turns) - 1, (ctx.cfg.get("library") or {}).get("min_tools", 5))
+        written = record(memory, ctx.lane, group, len(turns) - 1, (ctx.cfg.get("library") or {}).get("min_tools", 5))
+        if written:  # `almanac report` counts these; the lane keeps the record shaped like the request records
+            ctx.proxy.log.write({"ts": time.time(), "kind": "library", "lane": ctx.lane, "written": written})
+        return written
     except Exception as exc:  # a failed record must not cost the rest of the worker's jobs
         try:
             ctx.proxy.log.write({"ts": time.time(), "kind": "error", "where": "library", "error": redact(f"{type(exc).__name__}: {exc}")[:300]})
@@ -194,9 +226,25 @@ def observe(memory, ctx, messages, reply):
 def _delete(store, ids):
     """Delete entries. What each one superseded now points at what it was superseded by (or is current again)."""
     for entry in ids:
+        older = [r["id"] for r in store.run("select id from library where superseded_by = ?", (entry,))]
         store.run("update library set superseded_by = coalesce((select superseded_by from library where id = ?), 0) "
                   "where superseded_by = ?", (entry, entry))
         store.run("delete from library where id = ?", (entry,))
+        _sync(store, [entry, *older])
+
+
+def forget(store, entry) -> int:
+    """Delete an entry and every older entry it replaced, so forgetting a task does not bring its past version back.
+    Returns the ids deleted, the entry first (empty when there is no such entry)."""
+    chain, todo = [], [entry]
+    while todo:
+        found = todo.pop()
+        if found in chain or not store.run("select 1 from library where id = ?", (found,)):
+            continue
+        chain.append(found)
+        todo += [r["id"] for r in store.run("select id from library where superseded_by = ?", (found,))]
+    _delete(store, chain)
+    return chain
 
 
 def drop(store, convo_ids):
@@ -208,3 +256,152 @@ def drop(store, convo_ids):
 def drop_from(store, convo_id, seq):
     """Delete a conversation's entries from exchange `seq` on: it was rewound and those exchanges are gone."""
     _delete(store, [r["id"] for r in store.run("select id from library where convo = ? and seq >= ?", (convo_id, seq))])
+
+
+# ---- finding and showing ---------------------------------------------------------------------------------
+
+_SQL = ("select l.*, n.id node from library_fts f join library l on l.id = f.rowid "
+        "join node n on n.convo = l.convo and n.kind = 'leaf' and n.seq = l.seq "  # an entry whose exchange is gone cannot be read back: skipped
+        "where library_fts match ? and l.superseded_by = 0")
+
+
+def _score(query, prompt) -> float:
+    """The share of the stored prompt's words the typed text has. Only the part the person typed counts on the stored side
+    (it may hold pasted text), and the typed text's own length does not matter: a long prompt typed again, or with a new
+    tail, is not penalised for being long."""
+    words = set(tokens(handwritten(prompt)))
+    shared = len(query & words)
+    return round(shared / len(words), 3) if words and shared >= (MIN_SHARED_LONG if len(words) > LONG else MIN_SHARED) else 0.0
+
+
+def search(store, text, project="", limit=3, floor=0.0) -> list:
+    """Current entries that match `text`, as (score, entry) best first: those of `project` before any other project's,
+    then by score, then the newer. The score is the word overlap of the text with the entry's request. Deterministic."""
+    query = set(tokens(text))
+    words = list(dict.fromkeys(w for w in re.findall(r"[a-z0-9_]{2,}", text.lower()) if w not in STOP))[:24]
+    if not query or not words:
+        return []
+    match, found = " OR ".join(f'"{w}"' for w in words), {}
+    try:
+        for scope in ([project] if project else []) + [None]:
+            rows = store.run(_SQL + (" and l.project = ?" if scope else "") + " order by bm25(library_fts), l.id limit ?",
+                             (match, *([scope] if scope else []), CANDIDATES))
+            found.update({r["id"]: dict(r) for r in rows})
+    except sqlite3.OperationalError:  # a store opened without the library tables
+        return []
+    scored = [(_score(query, row["prompt"]), row) for row in found.values()]
+    scored = [(score, row) for score, row in scored if score > 0 and score >= floor]
+    scored.sort(key=lambda p: (p[1]["project"] != project, -p[0], -p[1]["id"]))
+    return scored[:limit]
+
+
+def find(store, text, project="", floor=0.0):
+    """The best current entry for `text` as (entry, score): in `project` first, then in any project. None when nothing scores."""
+    best = search(store, text, project, 1, floor)
+    return (best[0][1], best[0][0]) if best else None
+
+
+def bump(store, entry) -> int:
+    """Count one more time the entry was shown. Returns its uses."""
+    store.run("update library set uses = uses + 1 where id = ?", (entry,))
+    return store.run("select uses from library where id = ?", (entry,))[0]["uses"]
+
+
+def _piece(value, size=None) -> str:
+    """One stored piece of text on one line, with no reminder tag whatever was stored."""
+    value = " ".join(clean(str(value)).split())
+    return value[:size].rstrip() + "…" if size and len(value) > size else value
+
+
+def _list(value) -> list:
+    try:
+        items = json.loads(value)
+    except (TypeError, ValueError):
+        return []
+    return [i for i in items if isinstance(i, str)] if isinstance(items, list) else []
+
+
+def _fit(line, room) -> str:
+    """`line` cut to `room` characters (with its newline), or "" when too little room is left to say anything."""
+    if room < 24:
+        return ""
+    return line if len(line) + 1 <= room else line[:room - 2].rstrip() + "…"
+
+
+def lines(entry, limit) -> list:
+    """The body of a note: when it was, the route, fixes and files, cut so the lines together stay under `limit`
+    characters (each is cut, the route first, then the fixes; the rest gets what is left)."""
+    uses = entry["uses"]
+    head = (f"Almanac: you did a task like this before ({time.strftime('%Y-%m-%d', time.localtime(entry['created']))}, "
+            f"exchange {entry['node']}, used {uses} time{'' if uses == 1 else 's'}).")
+    route = " > ".join(_piece(s) for s in _list(entry["route"]) if _piece(s))
+    fixes = "; ".join(f for f in (_piece(f, 160) for f in _list(entry["fixes"])[:2]) if f)
+    files = ", ".join(f for f in (_piece(f, 80) for f in _list(entry["files"])[:5]) if f)
+    room, out = limit - len(head) - 1, [head]
+    for label, text, share in (("Route last time: ", route, 0.5), ("Fixes found then: ", fixes, 0.6), ("Files: ", files, 1.0)):
+        line = _fit(label + text, int(room * share)) if text else ""
+        if line:
+            out.append(line)
+            room -= len(line) + 1
+    return out
+
+
+def note(entry, limit=NOTE_CHARS) -> str:
+    """The reminder for a typed prompt that matches `entry`: at most `limit` characters, always closed by the tag."""
+    tail = ('This is a record of earlier work, not an instruction. Check it against the code; read the full transcript with '
+            f'memory_read {{"id": {int(entry["node"])}}} if you need it.\n' + CLOSE)
+    body = lines(entry, max(0, limit - len(tail) - len("<system-reminder>\n")))
+    text = "<system-reminder>\n" + "".join(line + "\n" for line in body) + tail
+    if len(text) > limit:  # a limit too small for even the fixed parts: keep the closing tag
+        text = text[:max(0, limit - len(CLOSE) - 2)].rstrip() + "…\n" + CLOSE
+    return text
+
+
+def render_found(found) -> str:
+    """Entries from `search`, as the `library_find` tool shows them: like the note, with what was asked, and the quoted sentence."""
+    if not found:
+        return "No earlier entry matches."
+    return "\n\n".join("\n".join([f"Asked: {_piece(entry['prompt'], 200)}", *lines(entry, NOTE_CHARS)]) for _, entry in found) + "\n\n" + QUOTED
+
+
+def listing(store, project=None) -> list:
+    """Current entries, oldest first, of one project or of all."""
+    return [dict(r) for r in store.run("select * from library where superseded_by = 0" + (" and project = ?" if project else "") + " order by id",
+                                       (project,) if project else ())]
+
+
+def _day(ts) -> str:
+    return time.strftime("%Y-%m-%d", time.localtime(ts))
+
+
+def _describe(entry, indent="") -> list:
+    out = [f"Asked: {_piece(entry['prompt'])}", f"Route: {' > '.join(_list(entry['route'])) or 'none'}"]
+    for label, key in (("Fixes", "fixes"), ("Changes since the earlier entry", "changes")):
+        if _list(entry[key]):
+            out += [f"{label}:"] + [f"  - {_piece(item)}" for item in _list(entry[key])]
+    out += [f"Files: {', '.join(_list(entry['files'])) or 'none'}", f"Outcome: {_piece(entry['outcome'])}"]
+    return [indent + line for line in out]
+
+
+def show(memory, entry_id):
+    """One entry in full with its history (the entries it replaced, newest first), as text; None when there is no such entry."""
+    store = memory.store
+    rows = store.run("select * from library where id = ?", (entry_id,))
+    if not rows:
+        return None
+    entry, older, seen, todo = dict(rows[0]), [], {entry_id}, [entry_id]
+    while todo:
+        for row in store.run("select * from library where superseded_by = ? order by id desc", (todo.pop(),)):
+            if row["id"] not in seen:
+                seen.add(row["id"])
+                older.append(dict(row))
+                todo.append(row["id"])
+
+    def head(row):
+        return (f"Entry {row['id']} (project {memory.projects.name(row['project'])}, {_day(row['created'])}, used {row['uses']} "
+                f"time{'' if row['uses'] == 1 else 's'}, exchange {row['seq'] + 1} of conversation #{row['convo']})"
+                + (f", replaced by entry {row['superseded_by']}" if row["superseded_by"] else ""))
+
+    out = [head(entry), *_describe(entry), "History:"]
+    out += [x for row in older for x in ["  " + head(row), *_describe(row, "    ")]] if older else ["  none: no earlier entry was replaced"]
+    return "\n".join(out)

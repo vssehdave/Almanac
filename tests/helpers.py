@@ -143,7 +143,7 @@ class Rig:
         while self.proxy.count < self.expected and time.time() < end:
             time.sleep(0.01)
         self.proxy.drain()
-        return Log(self.log_path).tail()
+        return [r for r in Log(self.log_path).tail() if r.get("kind") != "library"]  # the writer's own records land after the request's
 
     def close(self):
         self.server.shutdown()
