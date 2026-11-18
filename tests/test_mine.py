@@ -235,6 +235,11 @@ class StepsTest(unittest.TestCase):
         self.assertEqual(mine.steps({"name": "Bash", "input": "not a dict"}), ["Bash"])
         self.assertEqual(mine.steps(block("Bash", command="cd /work/app")), ["Bash: cd"])  # a path is never kept
 
+    def test_a_typed_rtk_wrapper_is_not_the_step(self):
+        self.assertEqual(mine.steps(block("Bash", command="rtk git status && rtk bypass npm test")), ["Bash: git status", "Bash: npm test"])
+        self.assertEqual(mine.steps(block("Bash", command="rtk.exe git log -3")), ["Bash: git log"])
+        self.assertEqual(mine.steps(block("Bash", command="rtk gain")), ["Bash: rtk gain"])  # rtk's own command stays
+
     def test_a_secret_in_the_first_words_is_removed(self):
         (step,) = mine.steps(block("Bash", command=f"deploy {SECRET} --now"))
         self.assertNotIn(SECRET, step)
