@@ -76,7 +76,7 @@ _NAME_HEAD = (r"(?i)(?P<k>(?:SECRET[_-]?ACCESS[_-]?KEY|SECRET|TOKEN|PASSW(?:OR)?
 # A bare value that is code, not a secret: the WHOLE value is a call or subscript (`get_key()`, `os.environ.get("X")`,
 # `keys[name]`), alone on its line or ending at a ; , or # comment. `s3cr3t(xyz)abc123` has text after the closing bracket,
 # so it is not code. The inside may not hold a bracket, which keeps the check linear.
-_CALL = (r"(?:[A-Za-z_][\w.]*[(\[][^\n)\]]{0,200}[)\]](?:\.\w+(?:[(\[][^\n)\]]{0,100}[)\]])?){0,5}"
+_CALL = (r"(?:[A-Za-z_][\w.]*[(\[][^\n)\]]{0,200}[)\]](?:\.?\w*[(\[][^\n)\]]{0,100}[)\]]|\.\w+){0,5}"
          r"(?=[ \t]*[;,]?[ \t]*(?:#[^\n]*)?(?:\r?\n|\Z|\\n|[\"'}])))")
 # A name that is an identifier, so a value that is one is code: ALL_CAPS or snake_case (`DEFAULT_LIMIT`, `some_name`).
 _IDENT = r"(?:[A-Z]+|[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+|[a-z][a-z0-9]*(?:_[a-z0-9]+)+)(?=[\s\"';,)]|\Z)"
@@ -115,11 +115,11 @@ _SECRETS = [
     # curl -u user:password (the user stays; the lazy gap is bounded so a line of "curl" words stays linear, and it stops at
     # a pipe or a semicolon so another command's -u is not read (a quoted argument is skipped whole, so a | or ; inside it
     # does not end the gap); a $variable is not the password)
-    (re.compile(r"(?i)(\bcurl\b(?:[^\n|;'\"]|'[^'\n]*'|\"[^\"\n]*\"){0,300}?[ \t](?:-u|--user)(?:[ \t]+|=)\\?['\"]?[^\s'\":]*:)(?!\$)[^\s'\"]+"), r"\1[removed]"),
+    (re.compile(r"(?i)(\bcurl\b(?:[^\n|;'\"]|'[^'\n]*'|\"[^\"\n]*\"|'(?![^'\n]*')|\"(?![^\"\n]*\")){0,300}?[ \t](?:-u|--user)(?:[ \t]+|=)\\?['\"]?[^\s'\":]*:)(?!\$)[^\s'\"]+"), r"\1[removed]"),
     # ODBC style: Pwd=secret; the value ends at the semicolon. A bare upper-case PWD is the shell's working directory;
     # a path, a shell variable or a call (`pwd=$(pwd)`, `Pwd=$HOME`, `pwd = os.getcwd()`) is code, not a password.
     (re.compile(r"(?i)((?<![A-Za-z])(?:[A-Za-z0-9]{1,20}_PWD|(?-i:Pwd|pwd))[ \t]*=[ \t]*\\?[\"']?)"
-                r"(?!\$[({]|(?-i:\$[A-Z_][A-Z0-9_]*)(?!\w)|\.{1,2}/|~/|/|[A-Za-z]:[\\/]|" + _CALL + r")[^;\s\"']+"), r"\1[removed]"),
+                r"(?!\$[({]|(?-i:\$[A-Z_][A-Z0-9_]*)(?!\w)|(?:`[^`\s]*`|%[A-Za-z_]\w*%)(?=[;\s\"']|\Z)|\.{1,2}/|~/|/|[A-Za-z]:[\\/]|" + _CALL + r")[^;\s\"']+"), r"\1[removed]"),
     # AWS_SECRET_ACCESS_KEY, STRIPE_KEY, any UPPER_CASE_NAME_KEY/_TOKEN/_SECRET/_PASSWORD assignment of a literal: a quoted
     # string, or a bare value of 12+ characters with a digit and a letter in it, never a call (`MY_KEY = get_key()`)
     (re.compile(r"(?P<k>\b[A-Z][A-Z0-9_]{0,60}_(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)[ \t]*=[ \t]*\\?[\"'])(?!(?:None|True|False|null)\b)[^\s\"']{3,}"), r"\g<k>[removed]"),

@@ -21,7 +21,6 @@
   passes, because its signed time is only checked against the clock, not
   against earlier takeovers.
 
-
 - **Prompt library entries become playbook candidates.** `almanac playbook
   mine` now also lists a current library entry that was used at least twice
   and whose route is two or more commands and nothing else (`Bash:` steps; a
