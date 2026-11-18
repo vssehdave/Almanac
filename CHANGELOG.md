@@ -9,8 +9,9 @@
   and, new, for a sub-agent judged on its own history; forks stay on their
   parent's model and `routing.ceiling` caps every ladder. In `subagents` mode the
   main thread's model is untouched but its effort now follows its model's
-  ladder. A sub-agent is never routed below the model its own definition asked
-  for (a pin still wins). **Default `routing.effort` is now medium, medium, low**
+  ladder. A sub-agent is never routed below the model it starts on, whether
+  its definition asked for it or it inherited it (a pin still wins);
+  `routing.route_inherited` (default false) lets an inherited model be routed down. **Default `routing.effort` is now medium, medium, low**
   (was low, medium, kept), so Opus requests that carry an effort are sent at low.
   `routing.effort_cost` scales the reply cost, as an estimate, when a stay is
   compared with a move.

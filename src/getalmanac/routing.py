@@ -319,10 +319,10 @@ class RoutingLayer:
         if tier == "inherit":
             tier = cur
         failed_text = why == FAILED_WHY
-        if kind == "sub" and pin not in TIERS:  # the model the agent's definition asked for is a floor, unless it only inherited the parent's
+        if kind == "sub" and pin not in TIERS:  # the model the agent starts on is a floor; `route_inherited` lifts it for one that only inherited the parent's
             parent = store.get(f"route:main:{ctx.session}")
-            if parent and parent != body["model"] and TIERS.index(tier) < TIERS.index(tier_now):
-                tier, why = tier_now, why + f"; kept at the {tier_now} model the agent asked for"
+            if (not cfg["route_inherited"] or parent and parent != body["model"]) and TIERS.index(tier) < TIERS.index(tier_now):
+                tier, why = tier_now, why + f"; kept at the {tier_now} model the agent starts on"
         if pin not in TIERS and TIERS.index(tier) > top:
             tier, why = TIERS[top], why + f" (held at the {cfg['ceiling']} ceiling)"
         effort = cfg["effort"].get(tier, "")

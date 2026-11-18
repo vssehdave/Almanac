@@ -157,7 +157,7 @@ class Case(unittest.TestCase):
     def start(self, respond=None, **overrides):
         if getattr(self, "rig", None):
             self.rig.close()
-        overrides = {"routing.mode": self.mode, **overrides}
+        overrides = {"routing.mode": self.mode, "routing.route_inherited": True, **overrides}  # the older tests below predate the floor
         self.rig = Rig(respond=respond, layers=[SetProject(), *getattr(self, "before", []), RoutingLayer()], store=self.store, overrides=overrides)
         self.addCleanup(self.rig.close)
 
@@ -723,6 +723,11 @@ class LadderTest(Case):
         self.assertEqual(self.sub("Difficulty: standard\nAdd a retry in net.py.", MEDIUM, 6, agent="b"), (MEDIUM, "medium"))
 
 
+def routing_default_route_inherited():
+    from getalmanac import config
+    return config.DEFAULTS["routing"]["route_inherited"]
+
+
 class AgentFloorTest(Case):
     def sub(self, task, model, **kw):
         self.rig.messages(body([human(task)], model), extra=sub_headers(**kw))
@@ -737,9 +742,14 @@ class AgentFloorTest(Case):
         self.send(convo([{"text": "hello"}]), model=LARGE)
         self.assertEqual(self.sub("Difficulty: hard\nfind the race", SMALL), LARGE)
 
-    def test_an_agent_that_only_inherited_the_parents_model_is_routed_down(self):
+    def test_an_agent_that_only_inherited_the_parents_model_keeps_it_unless_route_inherited_is_on(self):
         self.send(convo([{"text": "hello"}]), model=LARGE)
-        self.assertEqual(self.sub("Difficulty: simple\nlist the files", LARGE), SMALL)
+        self.assertEqual(self.sub("Difficulty: simple\nlist the files", LARGE), SMALL)  # on in these tests: routed down
+        self.start(**{"routing.route_inherited": False})  # the default: the plain floor
+        self.assertFalse(routing_default_route_inherited())
+        self.send(convo([{"text": "hello"}]), model=LARGE)
+        self.assertEqual(self.sub("Difficulty: simple\nlist the files", LARGE, agent="b"), LARGE)
+        self.assertEqual(self.sub("Difficulty: simple\nlist the files", LARGE, agent="c", kind="Explore"), LARGE)
 
     def test_a_pin_overrides_the_floor(self):
         self.send(convo([{"text": "hello"}]), model=MEDIUM)

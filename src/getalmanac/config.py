@@ -66,6 +66,7 @@ DEFAULTS = {
     "routing": {
         "mode": "off",  # "off" changes nothing; "subagents" routes sub-agent threads; "all" routes the main thread too
         "models": {"small": "claude-haiku-5-5", "medium": "claude-sonnet-5-5", "large": "claude-opus-5-5"},
+        "route_inherited": False,  # false: a sub-agent never goes below the model it starts on, even one it only inherited from its parent
         "ceiling": "large",  # the highest tier routing may pick (a pin ignores it)
         "classifier": "rules",  # "model" lets a small model settle the turns the rules are unsure about
         "effort": {"small": "medium", "medium": "medium", "large": "low"},  # a tier's normal effort: set only where Claude Code already sends one; "" keeps its value

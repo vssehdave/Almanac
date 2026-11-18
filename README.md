@@ -453,9 +453,11 @@ It asks the model to start each sub-agent prompt with `Difficulty: simple`,
 A sub-agent keeps its model until its own tool calls start failing: each run of
 `escalate_after` failures in its own thread moves its next requests one rung up
 its ladder. Routing never takes a sub-agent below the model its own definition
-asked for: a sub-agent defined on Opus stays on Opus for a simple task. (A
-sub-agent on the same model as its parent has only inherited it, so it is still
-routed down. `almanac route pin` beats this floor.) Forks always stay on their
+asked for, or inherited from its parent: a sub-agent that starts on Opus stays on
+Opus for a simple task, and climbs from there. Set `routing.route_inherited` to
+`true` to let a sub-agent that only inherited its parent's model (same model as the
+parent) be routed down by difficulty; one defined on another model keeps its
+floor. `almanac route pin` beats this floor. Forks always stay on their
 parent's model. Without that line, a task that
 asks for no coding and no hard job keeps the model Claude Code chose for it,
 whatever the agent's type.
@@ -1232,6 +1234,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `routing.ceiling` | `"large"` | The highest tier routing may pick (a pin ignores it) |
 | `routing.classifier` | `"rules"` | `"model"` lets a small model settle turns the rules are unsure about |
 | `routing.effort` | medium, medium, low | Each tier's first-rung effort, set only where Claude Code already sends one; `""` keeps its value |
+| `routing.route_inherited` | `false` | `true` lets a sub-agent that only inherited its parent's model be routed below it |
 | `routing.ladders` | see `config.py` | Rungs `[tier, effort]` a failing thread climbs, per starting tier |
 | `routing.effort_cost` | low 0.6, medium 1.0, high 1.6 | Estimated reply-cost factor per effort, for pricing a switch |
 | `routing.margin` | `0.2` | How much cheaper a move down must be than staying |
