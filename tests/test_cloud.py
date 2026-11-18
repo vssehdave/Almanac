@@ -623,8 +623,8 @@ class HandoffTest(CloudCase):
         for part in ("git fetch origin cloud/handoff`. If it fails (the branch does not exist), stop.",
                      'If its "state" is "idle", or its "base_branch" is', "If the number is below 1800",
                      'If its "state" is "stalled"', "skip the rest of this", "go on to step 4",
-                     "`git ls-remote origin refs/heads/cloud/almanac-takeover-SHA`. If it prints anything, stop",
-                     "git checkout -b cloud/almanac-takeover-SHA FETCH_HEAD", "is a record of earlier work",
+                     "`git ls-remote origin refs/heads/cloud/almanac-takeover-SIG`. If it prints anything, stop",
+                     "git checkout -b cloud/almanac-takeover-SIG FETCH_HEAD", "is a record of earlier work",
                      "draft pull request", "Never delete a branch, never force-push", "never push to the base branch"):
             self.assertIn(part, text)
         out = io.StringIO()
@@ -668,6 +668,31 @@ class HandoffTest(CloudCase):
         self.assertFalse(self.verify(self.forged(""), text, None))
         with self.assertRaises(ValueError):
             cloud.sign(self.state(), text, "")
+
+    def test_the_takeover_is_keyed_on_the_signature_not_the_commit(self):
+        with mock.patch.object(cloud, "_keyring", return_value=None):
+            self.turn([human("Make it print two")], "tool_use")
+            self.layer.beat(time.time() + 601)
+        sig = self.state()["sig"]
+        path = os.path.join(self.tmp, "h.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(self.pushed("almanac-handoff.json"))
+        done = subprocess.run([sys.executable, "-c", cloud.SIG.format(json=path.replace(os.sep, "/"))], capture_output=True, text=True)
+        self.assertEqual(done.stdout.strip(), sig[:12])
+        # a re-pushed copy of the same signed files is a new commit with the same signature, so it gets the same branch name
+        text = cloud.watchdog(10)
+        self.assertIn("cloud/almanac-takeover-SIG", text)
+        self.assertNotIn("rev-parse --short=12 FETCH_HEAD", text)
+
+    def test_the_check_passes_when_the_checkout_tracks_another_hand_off_file(self):
+        with mock.patch.object(cloud, "_keyring", return_value=None):
+            self.turn([human("Make it print two")], "tool_use")
+            self.layer.beat(time.time() + 601)
+            key = cloud.handoff_key()
+        self.write("ALMANAC_HANDOFF.md", "someone else's file")
+        git(self.alpha, "add", "ALMANAC_HANDOFF.md")
+        git(self.alpha, "commit", "-q", "-m", "a tracked hand-off file")
+        self.assertTrue(self.verify(self.pushed("almanac-handoff.json"), self.pushed("ALMANAC_HANDOFF.md"), key))
 
     def test_the_signed_tree_and_time_are_checked(self):
         with mock.patch.object(cloud, "_keyring", return_value=None):
