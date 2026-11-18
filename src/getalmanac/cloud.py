@@ -644,6 +644,8 @@ def status(cwd, cfg, store, listed=False) -> str:
     last = store.get(f"handoff:{top}")
     lines.append("  last beat   " + (time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(last["time"])) + f", {last['state']}, "
                                     f"commit {last['commit'][:12]}" if last else "none pushed from this machine"))
+    if not listed and not last:  # never on here: no takeover can exist, so no network call
+        return "\n".join(lines + ["  takeover    not checked: the hand-off is off here"])
     try:
         found = _must(top, "ls-remote", "origin", f"refs/heads/{TAKEOVER}*", timeout=60).splitlines()
     except Exception as exc:
