@@ -105,6 +105,10 @@ def load(path) -> dict:
                 continue
             if line["type"] == "user" and _local_command(body.get("content"), local) or line.get("isMeta"):
                 continue
+            origin = line.get("origin")
+            if line["type"] == "user" and isinstance(origin, dict) and origin.get("kind") not in (None, "human") and not any(
+                    isinstance(b, dict) and b.get("type") == "tool_result" for b in body.get("content") or []):
+                continue  # a task notification, an agent's message, a plugin's or an auto-continue: not the person's words
             session = session or str(line.get("sessionId") or "")
             start = start or str(line.get("cwd") or "")
             content = body.get("content")
@@ -159,6 +163,7 @@ def _folders(group, cwds) -> list:
             here = cwd
             for match in sorted([*_CD.finditer(command), *_GIT_C.finditer(command)], key=lambda m: m.start()):
                 arg = match.group(1).strip("\"'")
+                arg = os.path.expanduser(arg) if arg[:2] in ("~", "~/", "~\\") else arg  # `cd ~/GitHub/X`: the owner's home
                 if not arg or arg[0] in "$~-%" or "$" in arg:
                     continue
                 if re.match(r"^(?:[A-Za-z]:[\\/]|/)", arg):

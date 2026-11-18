@@ -126,6 +126,20 @@ class ProjectPerExchange(ImportBase):
         self.run_import(t.write())
         self.assertEqual({c["project"] for c in self.convos()}, {self.key(self.b)})
 
+    def test_cd_into_a_home_relative_folder(self):
+        home, name = os.path.split(self.b)
+        t = self.session().turn(stamp(2), "build it", "done", tool=("Bash", {"command": f"cd ~/{name} && make"}))
+        with mock.patch.dict(os.environ, {"USERPROFILE": home, "HOME": home}):
+            self.run_import(t.write())
+        self.assertEqual({c["project"] for c in self.convos()}, {self.key(self.b)})
+
+    def test_a_task_notification_is_not_a_typed_prompt(self):
+        t = self.session().turn(stamp(2), "build it", "started")
+        t.turn(stamp(2, 1), "<task-notification><task-id>bgtmc8yha</task-id></task-notification>", "it finished",
+               origin={"kind": "task-notification"})
+        self.run_import(t.write())
+        self.assertEqual([r["title"] for r in self.store.run("select title from node where kind = 'leaf'")], ["build it"])
+
     def test_git_dash_c(self):
         t = self.session().turn(stamp(2), "status", "done", tool=("Bash", {"command": f"git -C {self.b} status"}))
         self.run_import(t.write())
