@@ -16,6 +16,7 @@ USAGE = """almanac: a local proxy for Claude Code
 
   almanac [claude arguments]   run Claude Code through the proxy (the usual way)
   almanac claude [arguments]   the same, for arguments that clash with a command below
+  almanac sandbox [--plugin PATH ...] [--list] [-- claude arguments]   plain Claude Code in ~/.claude-sandbox, no proxy and none of your plugins, loading only those plugins
   almanac serve [--port N]     run only the proxy, for clients you start yourself
   almanac report [--json]      where the latest session's context went, and what was kept out
   almanac memory search WORDS  search stored conversations (--project NAME, --all)
@@ -33,7 +34,7 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac route [status]       what model routing is set to and what it decided lately
   almanac route pin TIER       keep this project on small, medium or large (`pin off` lifts it)
   almanac cheatsheet show [opus|sonnet|haiku|fable|agent]   the rules added for that model (agent: for a sub-agent), and their size
-  almanac cheatsheet path      where your own copies go (opus.md, sonnet.md, haiku.md, fable.md, common.md, skills.md, agent.md)
+  almanac cheatsheet path      where your own copies go (opus.md, sonnet.md, haiku.md, fable.md, common.md, skills.md, agent.md, lean.md)
   almanac skill scan PATH|URL  scan a skill or plugin with SkillSpector (exit 0 SAFE, 1 CAUTION, 2 DO_NOT_INSTALL, 3 error)
   almanac skill add URL|PATH   fetch, scan, and install its skills only if SAFE (--skill NAME, --ref SHA)
   almanac skill audit          scan installed skills and plugins not scanned yet (--again: all), then a table
@@ -684,12 +685,18 @@ def _print(text):
         print(text.encode(sys.stdout.encoding or "ascii", "replace").decode(sys.stdout.encoding or "ascii"))
 
 
+def _sandbox(rest):
+    from . import sandbox
+
+    return sandbox.run(rest)
+
+
 def _version(_rest):
     print(f"almanac {__version__}")
     return 0
 
 
-COMMANDS = {"serve": _serve, "report": _report, "status": _status, "doctor": _doctor, "config": _config,
+COMMANDS = {"sandbox": _sandbox, "serve": _serve, "report": _report, "status": _status, "doctor": _doctor, "config": _config,
             "version": _version, "memory": _memory, "projects": _projects, "route": _route, "cheatsheet": _cheatsheet, "mcp": _mcp,
             "semantic": _semantic, "cloud": _cloud, "skill": _skill, "pack": _pack,
             "playbook": _playbook, "library": _library}
