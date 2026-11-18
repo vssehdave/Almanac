@@ -6,12 +6,13 @@ import tempfile
 import time
 import unittest
 import zlib
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 
 import helpers  # noqa: F401  (sets ALMANAC_HOME before getalmanac loads)
 from test_memory import make_repo
 
-from getalmanac import cli, importer, memory as memory_mod, project
+from getalmanac import cli, importer, memory as memory_mod, project, request as rq
 from getalmanac.memory import Memory
 from getalmanac.store import Store
 
@@ -74,6 +75,10 @@ class ImportBase(unittest.TestCase):
         os.makedirs(self.folder)
         self.store = Store(os.path.join(self.tmp, "almanac.db"))
         self.memory = Memory(self.store)
+        self.scratch = os.path.join(self.tmp, "scratch")  # the test repos sit in the temp folder, so it is not the ignored one here
+        patch = mock.patch.object(importer, "scratch_dirs", lambda: [project.normalize(self.scratch)])
+        patch.start()
+        self.addCleanup(patch.stop)
 
     def _close(self):
         try:
@@ -141,18 +146,40 @@ class ProjectPerExchange(ImportBase):
         self.run_import(t.write())
         self.assertEqual({c["project"] for c in self.convos()}, {self.key(self.b)})
 
-    def test_no_signal_inherits_and_the_first_takes_the_session_folder(self):
+    def test_no_signal_inherits_and_the_first_takes_the_first_real_project(self):
         t = (self.session()
              .turn(stamp(2, 0), "hello there", "hi")
              .turn(stamp(2, 1), "look at beta", "ok", tool=("Read", {"file_path": self.b + "/a.py"}))
              .turn(stamp(2, 2), "and then explain it", "sure"))
         self.run_import(t.write())
-        by_seq = {}
-        for leaf in self.leaves():
-            by_seq[leaf["lane"], leaf["seq"]] = leaf["project"]
-        self.assertEqual(by_seq["import:%s:0" % SID, 0], self.key(self.a))  # session folder
-        self.assertEqual(by_seq["import:%s:1" % SID, 0], self.key(self.b))
-        self.assertEqual(by_seq["import:%s:1" % SID, 1], self.key(self.b))  # inherited
+        self.assertEqual({(l["lane"], l["seq"]): l["project"] for l in self.leaves()},
+                         {("import:%s:0" % SID, n): self.key(self.b) for n in range(3)})  # one run, all Beta
+
+    def test_a_session_with_no_signal_at_all_takes_its_start_folder(self):
+        t = self.session().turn(stamp(2, 0), "hello there", "hi").turn(stamp(2, 1), "and again", "hi")
+        self.run_import(t.write())
+        self.assertEqual({l["project"] for l in self.leaves()}, {self.key(self.a)})
+
+    def test_a_scratch_folder_gets_no_vote_and_inherits(self):
+        clone = make_repo(self.scratch, "clone", "https://github.com/me/clone.git")
+        t = (self.session()
+             .turn(stamp(2, 0), "fix beta", "ok", tool=("Edit", {"file_path": self.b + "/b.py"}))
+             .turn(stamp(2, 1), "try it in a clone", "ok", tool=("Edit", {"file_path": clone + "/c.py"})))
+        self.run_import(t.write())
+        self.assertEqual([c["project"] for c in self.convos()], [self.key(self.b)])
+
+    def _bash(self, command):
+        return {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": command}}]}
+
+    def test_a_relative_cd_follows_an_earlier_cd_in_the_same_command(self):
+        elsewhere = project.normalize(os.path.join(self.tmp, "elsewhere"))
+        self.assertEqual(importer._folders([self._bash(f"cd {elsewhere} && cd src && ls")], [self.a]), [])  # not Alpha/src
+        self.assertEqual(importer._folders([self._bash(f"cd {self.b} && cd src")], [self.a]), [self.b, self.b + "/src"])
+
+    def test_a_folder_that_does_not_exist_gets_no_vote_unless_it_is_a_deleted_worktree(self):
+        self.assertEqual(importer._folders([self._bash("cd nope")], [self.a]), [])
+        gone = project.normalize(os.path.join(self.repos, "Beta-sec2"))
+        self.assertEqual(importer._folders([self._bash(f"cd {gone}")], [self.a]), [gone])
 
     def test_a_session_that_switches_project_is_two_conversations(self):
         t = (self.session()
@@ -231,6 +258,30 @@ class Safety(ImportBase):
         self.assertEqual([c["lane"] for c in self.convos()], ["proxylane"])
         self.assertEqual(report["skipped"]["already stored"], 1)
 
+    def test_sessions_sharing_a_prefix_are_both_stored_whole(self):
+        one, two = self.session(session="s-one"), self.session(session="s-two")
+        for t in (one, two):
+            for i in range(3):
+                t.turn(stamp(3, i), f"shared question {i}", f"shared answer {i}")
+        for i in range(3):
+            one.turn(stamp(3, 10 + i), f"first branch {i}", "a")
+            two.turn(stamp(2, 10 + i), f"second branch {i}", "b")
+        report = self.run_import(one.write(), two.write())
+        self.assertEqual({(l["lane"], l["seq"]) for l in self.leaves()},
+                         {(f"import:{s}:0", n) for s in ("s-one", "s-two") for n in range(6)})
+        self.assertEqual(report["skipped"]["already stored"], 0)
+
+    def test_a_conversation_the_proxy_stored_only_in_part_is_still_imported(self):
+        t = self.session()
+        for i in range(4):
+            t.turn(stamp(2, i), f"question {i}", f"answer {i}")
+        path = t.write()
+        part = importer.load(path)["messages"][:4]  # the first two exchanges
+        self.memory.index("proxylane", SID, self.key(self.a), part, finished=True)
+        report = self.run_import(path)
+        self.assertEqual(report["skipped"]["already stored"], 0)
+        self.assertEqual(len(self.leaves()), 4)
+
     def test_a_session_still_being_written_is_left_alone(self):
         path = self.session().turn(stamp(0), "typing now", "ok").write()
         os.utime(path, None)
@@ -264,6 +315,31 @@ class Safety(ImportBase):
         self.assertIn("alpha", out.getvalue())
         self.assertIn("1 conversation", out.getvalue())
         self.assertIn("pending", out.getvalue())
+
+
+class LocalCommands(ImportBase):
+    def commands(self, stdout):
+        t = self.session()
+        t._add("user", "user", "<local-command-caveat>Caveat: the messages below were generated by the user</local-command-caveat>", stamp(2), isMeta=True)
+        t._add("user", "user", "<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>", stamp(2))
+        if stdout:
+            t._add("user", "user", "<local-command-stdout></local-command-stdout>", stamp(2))
+        return t.turn(stamp(2, 1), "please fix the parser", "done")
+
+    def test_a_clear_before_a_prompt_does_not_swallow_the_prompt(self):
+        for stdout in (True, False):
+            loaded = importer.load(self.commands(stdout).write())
+            self.assertEqual([rq.human_text(loaded["messages"][i]) for i in rq.human_turns(loaded["messages"])], ["please fix the parser"])
+
+    def test_the_stored_exchange_is_the_typed_prompt(self):
+        self.run_import(self.commands(True).write())
+        self.assertEqual([r["title"] for r in self.store.run("select title from node where kind = 'leaf'")], ["please fix the parser"])
+
+    def test_raw_results_carry_the_transcript_time(self):
+        when = stamp(5)
+        t = self.session().turn(when, "show it", "done", tool=("Bash", {"command": "ls"}), result="y" * (memory_mod.RESULT_CHARS + 50))
+        self.run_import(t.write())
+        self.assertEqual([round(r["ts"]) for r in self.store.run("select ts from raw")], [round(epoch(when))])
 
 
 class Status(ImportBase):

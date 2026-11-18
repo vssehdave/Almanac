@@ -67,12 +67,30 @@ def _time(text) -> float:
         return 0.0
 
 
+def _local_command(content, state) -> bool:
+    """Whether a user line is part of a local command (/clear, /model, /login): the caveat line before it, its
+    `<command-name>` line and its output. The model never sees these, and merged into the next typed prompt they
+    would make it look like the body of a command. `state` is [a caveat was just seen]."""
+    if not isinstance(content, str):
+        content = next((b.get("text") for b in content or [] if isinstance(b, dict) and b.get("type") == "text"), "")
+    head = (content or "").lstrip()
+    if head.startswith("<local-command-caveat>"):
+        state[0] = True
+        return True
+    if head.startswith("<local-command-stdout>"):
+        return True
+    if head.startswith("<command-name>") and state[0]:
+        return True
+    state[0] = False
+    return False
+
+
 def load(path) -> dict:
     """One transcript as the messages the API saw: session, start folder, messages, and per message its time and folder.
 
     Claude Code writes one line per content block; blocks of one reply (and the results of parallel tool calls)
     are joined into one message. Thinking blocks, meta lines and sidechains are dropped."""
-    messages, stamps, cwds, session, start = [], [], [], "", ""
+    messages, stamps, cwds, session, start, local = [], [], [], "", "", [False]
     with open(path, encoding="utf-8", errors="replace") as handle:
         for raw in handle:
             try:
@@ -81,10 +99,12 @@ def load(path) -> dict:
                 continue
             if not isinstance(line, dict) or line.get("type") not in ("user", "assistant"):
                 continue
-            if line.get("isSidechain") or line.get("isMeta") or line.get("isCompactSummary"):
+            if line.get("isSidechain") or line.get("isCompactSummary"):
                 continue
             body = line.get("message")
             if not isinstance(body, dict) or body.get("role") not in ("user", "assistant"):
+                continue
+            if line["type"] == "user" and _local_command(body.get("content"), local) or line.get("isMeta"):
                 continue
             session = session or str(line.get("sessionId") or "")
             start = start or str(line.get("cwd") or "")
@@ -107,8 +127,11 @@ def locate(path: str) -> str:
     """The repository root a path belongs to, or "". A path that no longer exists is matched by its name: the
     first folder under the nearest existing one, with its `-suffix` parts taken off (`Almanac-sec2` -> `Almanac`).
     shortcut: a deleted folder is only matched to a repository that still sits beside it."""
-    if repo_root(path):
-        return repo_root(path)
+    return repo_root(path) or _by_name(path)
+
+
+def _by_name(path: str) -> str:
+    """The repository a deleted folder's name points to (see locate), or ""."""
     here = Path(normalize(path))
     try:
         for parent in here.parents:
@@ -125,21 +148,41 @@ def locate(path: str) -> str:
 
 
 def _folders(group, cwds) -> list:
-    """The folders a Bash command moves into: `cd X`, `pushd X`, `git -C X`, a relative one read against the line's folder."""
+    """The folders a Bash command moves into: `cd X`, `pushd X`, `git -C X`. A relative one is read against the
+    folder the command is in at that point (the line's folder, or the last `cd` before it). A folder that is gone
+    counts only when a deleted worktree's name still points to a repository."""
     found = []
     for msg, cwd in zip(group, cwds):
         for block in rq.blocks(msg):
             command = (block.get("input") or {}).get("command") if block.get("type") == "tool_use" else None
             if not isinstance(command, str):
                 continue
-            for match in [*_CD.finditer(command), *_GIT_C.finditer(command)]:
+            here = cwd
+            for match in sorted([*_CD.finditer(command), *_GIT_C.finditer(command)], key=lambda m: m.start()):
                 arg = match.group(1).strip("\"'")
                 if not arg or arg[0] in "$~-%" or "$" in arg:
                     continue
-                absolute = bool(re.match(r"^(?:[A-Za-z]:[\\/]|/)", arg))
-                if absolute or cwd:
-                    found.append(normalize(arg if absolute else os.path.normpath(os.path.join(cwd, arg))))
+                if re.match(r"^(?:[A-Za-z]:[\\/]|/)", arg):
+                    path = normalize(arg)
+                elif here:
+                    path = normalize(os.path.normpath(os.path.join(here, arg)))
+                else:
+                    continue
+                if match.re is _CD:
+                    here = path
+                if os.path.isdir(path) or _by_name(path):
+                    found.append(path)
     return found
+
+
+def scratch_dirs() -> list:
+    """Folders whose repositories are throwaway clones (the temp folder, Claude's own): they never get a vote."""
+    return [normalize(tempfile.gettempdir()), normalize(str(Path.home() / ".claude"))]
+
+
+def _scratch(root) -> bool:
+    low = normalize(root).lower()
+    return any(low == d.lower() or low.startswith(d.lower() + "/") for d in scratch_dirs())
 
 
 def exchange_root(group, cwds, start_cwd) -> str:
@@ -149,14 +192,14 @@ def exchange_root(group, cwds, start_cwd) -> str:
     roots = {}
     for path in [*tool_paths(group), *_folders(group, cwds)]:
         root = locate(path)
-        if root:
+        if root and not _scratch(root):
             key = describe(root)[0]
             votes[key] += 1
             roots.setdefault(key, root)
     if not votes:
         for cwd in cwds:
             root = locate(cwd) if cwd and normalize(cwd) != normalize(start_cwd) else ""
-            if root:
+            if root and not _scratch(root):
                 key = describe(root)[0]
                 votes[key] += 1
                 roots.setdefault(key, root)
@@ -169,21 +212,19 @@ def plan(loaded) -> list:
     turns = rq.human_turns(messages)
     home = loaded["cwd"]
     home_root = locate(home) or (describe(home)[2] if home else "")
-    runs, last = [], home_root
-    for n, start in enumerate(turns):
-        end = turns[n + 1] if n + 1 < len(turns) else len(messages)
-        root = exchange_root(messages[start:end], loaded["cwds"][start:end], home) or last
+    ends = [turns[n + 1] if n + 1 < len(turns) else len(messages) for n in range(len(turns))]
+    found = [exchange_root(messages[s:e], loaded["cwds"][s:e], home) for s, e in zip(turns, ends)]
+    # leading exchanges with no signal take the first real project, not the folder Claude Code happened to start in
+    last = next((r for r in found if r), home_root)
+    runs = []
+    for n, root in enumerate(found):
+        root = root or last
         last = root
         if runs and runs[-1]["root"] == root:
             runs[-1]["last"] = n
         else:
             runs.append({"root": root, "first": n, "last": n})
     return runs
-
-
-def _first_mark(messages, turns) -> str:
-    from .memory import exchange
-    return exchange(messages[turns[0]:turns[1] if len(turns) > 1 else len(messages)])["mark"]
 
 
 def _store_run(memory, lane, session, key, messages, stamps):
@@ -207,6 +248,20 @@ def _restatus_last(memory, lane, messages, following, newest):
         status = aged(combine(rule(messages[turns[-1]:], following, newest=newest), rows[0]["mstatus"]), rows[0]["ts"])
         if status != rows[0]["status"]:
             memory.store.run("update node set status = ? where id = ?", (status, rows[0]["id"]))
+
+
+def _held(memory, lanes, messages, turns) -> bool:
+    """Whether one stored conversation (not this session's own lanes) already holds every exchange of the session.
+    A conversation that shares only a prefix with it does not count: the rest would be lost."""
+    from .memory import exchange
+    ends = [turns[i + 1] if i + 1 < len(turns) else len(messages) for i in range(len(turns))]
+    marks = [exchange(messages[t:e])["mark"] for t, e in zip(turns, ends)]
+    for row in memory.store.run("select c.id, c.lane from convo c join node n on n.convo = c.id and n.kind = 'leaf' "
+                                "and n.seq = 0 where n.mark = ?", (marks[0],)):
+        have = {r["mark"] for r in memory.store.run("select mark from node where convo = ? and kind = 'leaf'", (row["id"],))}
+        if row["lane"] not in lanes and set(marks) <= have:
+            return True
+    return False
 
 
 def _import(memory, files, days, idle, now) -> dict:
@@ -236,10 +291,8 @@ def _import(memory, files, days, idle, now) -> dict:
             start = turns[run["first"]]
             end = turns[run["last"] + 1] if run["last"] + 1 < len(turns) else len(messages)
             pieces.append((f"import:{session}:{n}", run["root"], messages[start:end], [item["stamps"][turns[i]] for i in range(run["first"], run["last"] + 1)]))
-        if any(memory.store.run("select 1 from node n join convo c on c.id = n.convo where n.kind = 'leaf' and n.seq = 0 "
-                                "and n.mark = ? and c.lane != ?", (_first_mark(msgs, rq.human_turns(msgs)), lane))
-               for lane, _, msgs, _ in pieces):
-            report["skipped"]["already stored"] += 1  # a conversation the proxy (or an earlier import) kept already
+        if _held(memory, [lane for lane, *_ in pieces], messages, turns):
+            report["skipped"]["already stored"] += 1  # the proxy (or an earlier import) kept all of it already
             continue
         for n, (lane, root, msgs, stamps) in enumerate(pieces):
             new = not memory.store.run("select 1 from convo where lane = ?", (lane,))

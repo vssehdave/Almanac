@@ -442,7 +442,7 @@ class Memory:
         self.store.run("insert into detail_fts (rowid, text) values (?, ?)", (leaf, texts["search"]))
         for call_id, text in texts["raw"]:
             try:  # keeping a result whole is a bonus: a failure here must not lose the exchange
-                self.save_raw(convo["lane"], call_id, text, cleaned=True)
+                self.save_raw(convo["lane"], call_id, text, cleaned=True, ts=self._at(seq) if self.stamps else None)
             except Exception:
                 pass
         return leaf, topic
@@ -450,14 +450,14 @@ class Memory:
     def has_raw(self, lane, tool_use_id) -> bool:
         return bool(self.store.run("select 1 from raw where lane = ? and tool_use_id = ?", (lane, tool_use_id)))
 
-    def save_raw(self, lane, tool_use_id, text, cleaned=False):
+    def save_raw(self, lane, tool_use_id, text, cleaned=False, ts=None):
         """Keep one tool result whole (compressed), so a stub or a cut transcript can be read back.
         `cleaned` says `text` came from result_text, so it need not be cleaned again."""
         text = text if cleaned else clean(text)
         if RAW_LIMIT and len(text) > RAW_LIMIT:
             text = text[:RAW_LIMIT] + f"\n... ({len(text) - RAW_LIMIT} more characters not kept)"
         self.store.run("insert or replace into raw (lane, tool_use_id, size, ts, data) values (?, ?, ?, ?, ?)",
-                       (lane, tool_use_id, len(text), time.time(), zlib.compress(text.encode("utf-8", "replace"))))
+                       (lane, tool_use_id, len(text), ts or time.time(), zlib.compress(text.encode("utf-8", "replace"))))
 
     def raw(self, tool_use_id):
         """The saved text of the newest tool result with this call id, or None."""
