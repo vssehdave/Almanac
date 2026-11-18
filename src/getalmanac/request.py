@@ -4,6 +4,7 @@ import json
 import re
 
 REMINDER = "<system-reminder>"
+SKILL_BODY = "Base directory for this skill:"  # Claude Code inserts a skill's text after a typed slash command
 _CWD = re.compile(r"^\s*-?\s*Primary working directory: (.+)$", re.M)
 
 
@@ -24,12 +25,24 @@ def is_tool_result(msg) -> bool:
     return msg.get("role") == "user" and any(b.get("type") == "tool_result" for b in blocks(msg))
 
 
-def human_text(msg) -> str:
-    """What the person typed in a user message: its text minus injected reminders."""
+def typed_parts(msg) -> list:
+    """The text blocks of a user message a person could have typed: not reminders and not a skill's body (the text
+    Claude Code inserts after a slash command: third-party words). Every other block counts, whatever came before it."""
     if msg.get("role") != "user" or is_tool_result(msg):
-        return ""
-    parts = [b.get("text") or "" for b in blocks(msg) if b.get("type") == "text"]
-    return "\n".join(p for p in parts if p.strip() and not p.lstrip().startswith(REMINDER)).strip()
+        return []
+    out = []
+    for b in blocks(msg):
+        if b.get("type") != "text":
+            continue
+        text = b.get("text") or ""
+        if text.strip() and not text.lstrip().startswith((REMINDER, SKILL_BODY)):
+            out.append(text)
+    return out
+
+
+def human_text(msg) -> str:
+    """What the person typed in a user message: its text minus injected reminders and skill text."""
+    return "\n".join(p for p in typed_parts(msg) if p.strip()).strip()
 
 
 def human_turns(messages) -> list:

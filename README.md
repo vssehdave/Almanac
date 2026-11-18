@@ -162,7 +162,10 @@ removed), and `memory_read` with `result` set to its tool call id returns it a
 page at a time: at most 400 lines or 40,000 characters, as a quoted record.
 `memory_search` also looks through the transcripts, tool output included, so an
 id, an error or a path that only showed up in a command's output can be found;
-the hit shows the matching line. A turn that is still running is stored as an
+the hit shows the matching line. Only `memory_search` does this: the note at
+the top of a new conversation and the compaction outline list exchanges that
+match by their question, answer or summary, never by tool output, because that
+text can come from a web page. A turn that is still running is stored as an
 open record after every 30,000 characters of new work (in the background, after
 the reply), so what it found early on can be searched before the turn ends; the
 finished exchange replaces that record.
@@ -200,7 +203,7 @@ call only carries text from the conversation whose login it uses. Set
 exchanges have a model-written summary and what today's calls used.
 
 Obvious secrets (API keys, tokens, private keys, `password=` values, bearer
-credentials, passwords in URLs) are removed before text is stored, including
+credentials, passwords in URLs, cloud and chat tokens, `curl -u` logins) are removed before text is stored, including
 from model-written summaries. This is best effort: see [Security](#security).
 
 Text handed back to the model (the note for a new conversation, the compaction
@@ -1014,6 +1017,15 @@ Setup, once: connect GitHub (the Claude GitHub App at claude.ai/code, or
 connector), turn `cloud.auto` on and restart Almanac, run `almanac cloud on` in
 the repository, then in that repository run `/schedule` and create an hourly task with the prompt `almanac cloud
 watchdog` prints.
+
+Then put the secret that `almanac cloud watchdog` prints in that task's
+environment as `ALMANAC_HANDOFF_KEY`. Each snapshot's `almanac-handoff.json` is
+signed (HMAC-SHA256 over its fields and the packet text) with a key kept in the
+OS keyring when the `keyring` module is installed, else in `cloud.key` in the
+Almanac home. The watchdog prompt checks the signature first and stops when it
+does not match, so a commit that someone else pushed to `cloud/handoff` is
+never acted on. The packet holds rule-written titles and answers only, never
+model summaries.
 
 When a takeover happened, `almanac cloud status` names the branch. Pull the
 work back with `claude --teleport` or `git fetch origin <branch>`.

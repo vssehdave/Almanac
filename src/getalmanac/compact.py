@@ -35,7 +35,7 @@ import time
 
 from . import request as rq
 from . import sse
-from .memory import QUOTED, _first_line, exchange, result_text, transcript
+from .memory import QUOTED, _first_line, clean, exchange, result_text, transcript
 
 CHARS_PER_TOKEN = 3.0  # conservative: real text runs a little over 3 characters a token
 HEADER = ("Almanac compacted this conversation to keep it inside the context window. The messages before this "
@@ -189,7 +189,7 @@ def build_prefix(messages, covered, ids, budget_chars, told=None, statuses=None,
     if full:
         parts.append("The most recent exchanges before this point, in full:\n\n"
                      + "\n\n".join(f"--- Exchange {seq + 1} {tag(seq)}---\n{text}" for seq, text in full))
-    summary = {"type": "text", "text": "<system-reminder>\n" + "\n\n".join(parts) + "\n</system-reminder>"}
+    summary = {"type": "text", "text": "<system-reminder>\n" + clean("\n\n".join(parts)) + "\n</system-reminder>"}  # model text and stored titles too
 
     # Session-start context survives as it was: reminders in the first message, and
     # every system message (hook output, environment, skill listing, tools added).

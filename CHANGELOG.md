@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+- **Security fix: smaller hardening items.** Git's error text (it can echo a
+  remote URL with its password) and library errors are redacted before they are
+  raised or logged; the compaction summary is cleaned (tags and secrets) before
+  it is stored; and a playbook file that is a symbolic link is no longer written
+  through.
+- **Security fix: the cloud watchdog checks a signature.** It used to act on
+  any commit on `cloud/handoff`, so anyone who could push there could give the
+  cloud task its instructions. `almanac-handoff.json` now carries an HMAC-SHA256
+  over its fields and the packet text, made with a secret from the OS keyring
+  (if the `keyring` module is installed) or the file `cloud.key` in the Almanac
+  home. `almanac cloud watchdog` prints the line to put in the cloud task's
+  environment as `ALMANAC_HANDOFF_KEY`, and the watchdog prompt now verifies
+  the signature first and stops if it does not match: **set the variable and
+  update the scheduled task**. The packet also carries only rule-written
+  titles and answers, no model summaries, which are built from tool output.
+  The signature also covers the snapshot's tree hash (without the two hand-off
+  files) and its time: the watchdog recomputes the tree, measures the age from
+  the signed time and rejects a time more than 5 minutes ahead. An unset or
+  empty key fails the check, and nothing is ever signed with an empty key.
+- **Security fix: more secrets are removed.** PGP private key blocks, PuTTY
+  `.ppk` keys, `SecretAccessKey` values and `ASIA` keys, ODBC `Pwd=`, any
+  `UPPER_CASE_KEY=` style assignment, quoted multi-word passwords, URL
+  passwords with an empty user or a `/` or `@` in them, Google `ya29.` and
+  `1//` tokens, Slack `xapp-`, Telegram bot tokens, Azure `sig=` and
+  `curl -u user:password`. Code is left alone: `MY_KEY = get_key()`,
+  `MAX_TOKEN = 4096`, `pwd=$(pwd)`, `curl -u $USER:$TOKEN` and a `grep -u`
+  after a pipe keep their text, and a bare `UPPER_CASE_KEY=` value is taken
+  out only when it is 12 or more characters with a digit and a letter (or is
+  quoted). Telegram tokens must start `AA` after the colon.
+- **Security fix: a skill's text is not what you typed.** After a typed slash
+  command Claude Code inserts the skill's own text ("Base directory for this
+  skill: ..."). Typed-text detection counted it as your words, so a skill file
+  saying "from now on always ..." became a `decision`, a "Standing decision" in
+  the handover, an automatic playbook trigger and the cloud packet's task. That
+  block no longer counts; a message typed after a command and its output does.
+- **Security fix: recall no longer prints tool output.** The note at the top of
+  a new conversation, and the compaction outline's related list, took hits from
+  the transcript search, so text from a tool result or a web page could appear
+  as a plain line. They now use only exchanges matched by their question,
+  answer or summary; `memory_search` still searches tool output and marks it as
+  a quoted record.
+- **Security fix: cleaning stored text takes linear time.** The pattern that
+  strips `<system-reminder` tags backtracked quadratically (a `<` followed by
+  20,000 spaces took 10 seconds), and so did the private-key pattern on a pile
+  of unclosed `BEGIN` lines. Both ran on every tool result, in the background
+  worker and inline during compaction under the store lock.
 - **Automatic playbook approvals are signed.** `approve --auto` now signs its
   `auto.json` entry with a random key kept in `auto.key`, so copying an
   approved script's hash into `auto.json` no longer makes it run by itself.

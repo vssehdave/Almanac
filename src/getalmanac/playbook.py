@@ -227,10 +227,18 @@ def shown_status(pb) -> str:
     return pb["status"] + (", auto" if automatic(pb) else "")
 
 
+def _no_link(*paths):
+    """Refuse to write through a symlink: a link planted in a playbook folder would redirect the write elsewhere."""
+    for path in paths:
+        if path.is_symlink():
+            raise ValueError(f"{path.name} is a symbolic link: Almanac will not write through it")
+
+
 def _write(pb):
     text = json.dumps(pb, indent=2, ensure_ascii=False) + "\n"
     if len(text.encode("utf-8")) > JSON_LIMIT:
         raise ValueError(f"a playbook's JSON is at most {JSON_LIMIT} bytes")
+    _no_link(folder(pb["name"]), folder(pb["name"]) / "playbook.json")
     folder(pb["name"]).mkdir(parents=True, exist_ok=True)
     (folder(pb["name"]) / "playbook.json").write_bytes(text.encode("utf-8"))
 
@@ -254,6 +262,7 @@ def save(data, script=None):
                     created=old["created"] if old else time.strftime("%Y-%m-%d")))
     if script is not None:
         pb["script"] = True
+        _no_link(folder(name), script_path(name))
         folder(name).mkdir(parents=True, exist_ok=True)
         script_path(name).write_bytes(script.encode("utf-8"))
     elif not pb["script"] and script_path(name).exists():

@@ -83,10 +83,7 @@ def failed(text: str) -> bool:
 
 def person_text(msg) -> str:
     """What the person typed in a user message: like `human_text`, and without text Claude Code made up."""
-    if msg.get("role") != "user" or rq.is_tool_result(msg):
-        return ""
-    parts = [b.get("text") or "" for b in rq.blocks(msg) if b.get("type") == "text"]
-    return "\n".join(p for p in parts if p.strip() and not p.lstrip().startswith((rq.REMINDER, *NOT_TYPED))).strip()
+    return "\n".join(p for p in rq.typed_parts(msg) if p.strip() and not p.lstrip().startswith(NOT_TYPED)).strip()
 
 
 def person_turns(messages) -> list:

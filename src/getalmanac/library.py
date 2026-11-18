@@ -17,7 +17,7 @@ import time
 from . import mine
 from . import request as rq
 from .match import STOP, tokens
-from .memory import QUOTED, _first_line, clean, exchange
+from .memory import QUOTED, _first_line, clean, exchange, redact
 from .routing import handwritten
 from .status import _ends_on_question
 
@@ -218,7 +218,7 @@ def observe(memory, ctx, messages, reply):
         return written
     except Exception as exc:  # a failed record must not cost the rest of the worker's jobs
         try:
-            ctx.proxy.log.write({"ts": time.time(), "kind": "error", "where": "library", "error": f"{type(exc).__name__}: {exc}"[:300]})
+            ctx.proxy.log.write({"ts": time.time(), "kind": "error", "where": "library", "error": redact(f"{type(exc).__name__}: {exc}")[:300]})
         except Exception:
             pass
         return 0

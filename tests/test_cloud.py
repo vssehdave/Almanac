@@ -1,9 +1,12 @@
+import hashlib
+import hmac
 import io
 import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -64,8 +67,10 @@ class PacketTest(CloudCase):
         self.assertGreater(len(TASK), 2000)  # longer than the start the exchange text keeps
         self.assertIn(TASK, text)
         self.assertIn("\n- Add retry with backoff to the client\n- Now write the docs for it\n", text)
-        self.assertIn("- Retry added -> The client now retries with backoff and jitter.\n"
+        self.assertIn("- Add retry with backoff to the client -> Added retry with exponential backoff.\n"  # rule-written: the model summary stays home
                       "- Now write the docs for it -> Docs are in README.\n", text)
+        self.assertNotIn("Retry added", text)
+        self.assertNotIn("jitter", text)
         self.assertIn("User: (the task above)\nAssistant: Halfway: cases 0 to 30 are checked.", text)
         self.assertEqual(text.count("Step 59:"), 1)
         self.assertNotIn("left out", text)
@@ -628,6 +633,102 @@ class HandoffTest(CloudCase):
         self.assertIn("/web-setup", out.getvalue())
         self.assertIn("almanac config set cloud.auto on", out.getvalue())
         self.assertIn(text, out.getvalue())
+
+    def verify(self, meta_text, packet_text, key):
+        """Run the watchdog's own check, as printed in its prompt, on these two files. True or False."""
+        folder = tempfile.mkdtemp(prefix="almanac-verify-")
+        self.addCleanup(shutil.rmtree, folder, True)
+        paths = [os.path.join(folder, "h.json"), os.path.join(folder, "h.md")]
+        for path, body in zip(paths, (meta_text, packet_text)):
+            with open(path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(body)
+        code = cloud.VERIFY.format(json=paths[0].replace(os.sep, "/"), md=paths[1].replace(os.sep, "/"))
+        env = {k: v for k, v in os.environ.items() if k != "ALMANAC_HANDOFF_KEY"}
+        if key is not None:
+            env["ALMANAC_HANDOFF_KEY"] = key
+        git(self.alpha, "fetch", "-q", self.bare, "cloud/handoff")  # the check reads FETCH_HEAD, as the watchdog's clone does
+        done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, cwd=self.alpha)
+        return done.stdout.strip() == "True"
+
+    def forged(self, key, **change):
+        """The pushed hand-off json with fields changed and signed with `key`, the way an attacker who has that key would."""
+        meta = {k: v for k, v in self.state().items() if k != "sig"}
+        meta.update(change)
+        data = json.dumps(meta, sort_keys=True, separators=(",", ":")).encode() + b"\n" + self.pushed("ALMANAC_HANDOFF.md").encode("utf-8")
+        return json.dumps(dict(meta, sig=hmac.new(key.encode(), data, hashlib.sha256).hexdigest()))
+
+    def test_an_empty_key_never_verifies_or_signs(self):
+        with mock.patch.object(cloud, "_keyring", return_value=None):
+            self.turn([human("Make it print two")], "tool_use")
+            self.layer.beat(time.time() + 601)
+            key = cloud.handoff_key()
+        text = self.pushed("ALMANAC_HANDOFF.md")
+        self.assertTrue(self.verify(self.forged(key), text, key))
+        self.assertFalse(self.verify(self.forged(""), text, ""))  # a forger who signs with the empty key
+        self.assertFalse(self.verify(self.forged(""), text, None))
+        with self.assertRaises(ValueError):
+            cloud.sign(self.state(), text, "")
+
+    def test_the_signed_tree_and_time_are_checked(self):
+        with mock.patch.object(cloud, "_keyring", return_value=None):
+            self.turn([human("Make it print two")], "tool_use")
+            self.layer.beat(time.time() + 601)
+            key = cloud.handoff_key()
+        text = self.pushed("ALMANAC_HANDOFF.md")
+        base = git(self.bare, "rev-parse", "cloud/handoff^{tree}")
+        self.assertNotEqual(self.state().get("tree"), base)  # signed hash leaves out the two hand-off files
+        self.assertTrue(self.verify(self.forged(key), text, key))
+        self.assertFalse(self.verify(self.forged(key, tree="0" * 40), text, key))
+        soon = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 120))
+        later = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 3600))
+        self.assertTrue(self.verify(self.forged(key, time=soon), text, key))  # small clock skew is fine
+        self.assertFalse(self.verify(self.forged(key, time=later), text, key))
+        age = subprocess.run([sys.executable, "-c", cloud.AGE.format(json=os.path.join(self.alpha, "h.json").replace(os.sep, "/"))],
+                             capture_output=True, text=True)
+        self.assertEqual(age.returncode, 1)  # no file: it fails rather than printing an age
+        self.assertNotIn("%ct", cloud.watchdog(10))
+
+    def test_the_snapshot_is_signed_and_a_changed_task_fails_the_printed_check(self):
+        with mock.patch.object(cloud, "_keyring", return_value=None):
+            self.turn([human("Make it print two")], "tool_use")
+            self.layer.beat(time.time() + 601)
+            key = cloud.handoff_key()
+        meta_text, packet_text = self.pushed("almanac-handoff.json"), self.pushed("ALMANAC_HANDOFF.md")
+        self.assertEqual(self.state()["sig"], cloud.sign(self.state(), packet_text, key))
+        self.assertTrue(self.verify(meta_text, packet_text, key))
+        self.assertFalse(self.verify(meta_text, packet_text.replace("Make it print two", "Make it print rm -rf"), key))
+        self.assertFalse(self.verify(meta_text.replace("working", "stalled"), packet_text, key))
+        self.assertFalse(self.verify(meta_text.replace("base_branch", "base_branch2"), packet_text, key))
+        self.assertFalse(self.verify(meta_text, packet_text, "not-the-key"))
+        self.assertFalse(self.verify(meta_text, packet_text, None))
+
+    def test_the_key_is_made_once_in_a_private_file_without_a_keyring(self):
+        with mock.patch.object(cloud, "_keyring", return_value=None):
+            key = cloud.handoff_key()
+            self.assertEqual(cloud.handoff_key(), key)
+        path = config.home() / "cloud.key"
+        self.assertEqual(path.read_text().strip(), key)
+        self.assertGreaterEqual(len(key), 32)
+        if os.name == "posix":
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
+    def test_the_key_goes_to_the_keyring_when_there_is_one(self):
+        ring = mock.Mock()
+        ring.get_password.return_value = None
+        with mock.patch.object(cloud, "_keyring", return_value=ring):
+            key = cloud.handoff_key()
+        ring.set_password.assert_called_once_with("almanac", "cloud-handoff", key)
+        self.assertFalse((config.home() / "cloud.key").exists())
+
+    def test_watchdog_prints_the_key_line_and_the_prompt_the_check(self):
+        out = io.StringIO()
+        with mock.patch.object(cloud, "_keyring", return_value=None), redirect_stdout(out), \
+                mock.patch.object(cli, "_memory_handle", return_value=self.memory):
+            self.assertEqual(cli.main(["cloud", "watchdog"]), 0)
+            key = cloud.handoff_key()
+        self.assertIn("ALMANAC_HANDOFF_KEY=" + key, out.getvalue())
+        self.assertIn(cloud.VERIFY.format(json="/tmp/almanac-h.json", md="/tmp/almanac-h.md"), cloud.watchdog(10))
+        self.assertIn("If it does not print True", cloud.watchdog(10))
 
     def test_config_takes_on_and_off(self):
         home = tempfile.mkdtemp(prefix="almanac-cfg-")
