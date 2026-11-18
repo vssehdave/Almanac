@@ -207,7 +207,7 @@ class SummaryTest(Case):
         self.ask("From now on keep retries at five in the fetch module")
         self.assertEqual(self.leaves()[2]["status"], "decision")
         self.assertEqual(self.leaves()[2]["mstatus"], "noise")  # the model's word is kept, the rule's wins
-        self.assertEqual(summarize._parse(json.loads(message('{"title": "a", "summary": "b"}')[2])), ("a", "b", ""))
+        self.assertEqual(summarize._parse(json.loads(message('{"title": "a", "summary": "b"}')[2])), ("a", "b", "", None))
 
     def test_the_model_cannot_make_an_exchange_a_standing_decision(self):
         self.verdict = message(json.dumps({"title": TITLE, "summary": SUMMARY, "status": "decision"}))
