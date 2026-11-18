@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Security fix: more secrets are removed.** PGP private key blocks, PuTTY
+  `.ppk` keys, `SecretAccessKey` values and `ASIA` keys, ODBC `Pwd=`, any
+  `UPPER_CASE_KEY=` style assignment, quoted multi-word passwords, URL
+  passwords with an empty user or a `/` or `@` in them, Google `ya29.` and
+  `1//` tokens, Slack `xapp-`, Telegram bot tokens, Azure `sig=` and
+  `curl -u user:password`.
 - **Security fix: a skill's text is not what you typed.** After a typed slash
   command Claude Code inserts the skill's own text ("Base directory for this
   skill: ..."). Typed-text detection counted it as your words, so a skill file

@@ -203,7 +203,7 @@ call only carries text from the conversation whose login it uses. Set
 exchanges have a model-written summary and what today's calls used.
 
 Obvious secrets (API keys, tokens, private keys, `password=` values, bearer
-credentials, passwords in URLs) are removed before text is stored, including
+credentials, passwords in URLs, cloud and chat tokens, `curl -u` logins) are removed before text is stored, including
 from model-written summaries. This is best effort: see [Security](#security).
 
 Text handed back to the model (the note for a new conversation, the compaction
