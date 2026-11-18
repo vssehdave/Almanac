@@ -60,6 +60,13 @@ class WriterTest(LibraryCase):
         self.assertTrue(row["outcome"].startswith("done: Done: it works"))
         self.assertEqual((row["project"], row["seq"]), (self.key, 0))
 
+    def test_outcome_says_how_the_work_ended_not_what_the_prompt_ruled(self):
+        self.finish("Never skip the x test, make it pass", self.calls())
+        self.finish("Make the y test pass", self.calls(), lane="lane-2", answer="It still fails. Should I revert?")
+        done, asked = self.rows()
+        self.assertTrue(done["outcome"].startswith("done: "), done["outcome"])
+        self.assertTrue(asked["outcome"].startswith("open: "), asked["outcome"])
+
     def test_fewer_tool_calls_than_min_tools_writes_nothing(self):
         self.finish("Look at the proxy", self.calls()[:4])
         self.assertEqual(self.rows(), [])
