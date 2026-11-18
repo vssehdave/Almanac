@@ -590,7 +590,7 @@ class Memory:
 
     # ---- reading -------------------------------------------------------------
 
-    def _near(self, query, project, exclude_lane, lane=None, convo=None) -> list:
+    def _near(self, query, project, exclude_lane, lane=None, convo=None, roots=False) -> list:
         """[(id, cosine)] of the exchanges nearest to `query` by meaning, nearest first; [] when that search is off."""
         model = semantic.active()
         if not model:
@@ -605,6 +605,8 @@ class Memory:
             sql, args = sql + " and c.lane = ?", args + [lane]
         if convo:
             sql, args = sql + " and (c.id = ? or c.parent = ?)", args + [convo, convo]
+        if roots:
+            sql += " and c.parent = 0"
         # shortcut: reads every vector of the project for each search, fine to about 20,000 exchanges; past that, use a vector index
         rows = self.store.run(sql, args)
         if not rows:
@@ -616,10 +618,10 @@ class Memory:
         near = [(r["id"], round(score, 4)) for r, score in zip(rows, scores) if score >= DENSE_MIN]
         return sorted(near, key=lambda p: (-p[1], p[0]))[:DENSE_TOP]
 
-    def _deep(self, words, terms, need, project, exclude_lane, known, lane=None, convo=None) -> list:
+    def _deep(self, words, terms, need, project, exclude_lane, known, lane=None, convo=None, roots=False) -> list:
         """Exchanges the title-and-text search missed whose transcript (tool output included) holds the query, best first,
         each with the matching line as its snippet."""
-        sql = ("select n.id, n.kind, n.title, n.text, n.ts, n.project, n.convo, c.title ctitle, detail_fts.text dtext "
+        sql = ("select n.id, n.kind, n.title, n.text, n.ts, n.project, n.convo, c.title ctitle, c.parent cparent, detail_fts.text dtext "
                "from detail_fts join node n on n.id = detail_fts.rowid join convo c on c.id = n.convo "
                "where detail_fts match ? and n.kind = 'leaf'")
         args = [" OR ".join(f'"{w}"' for w in words)]
@@ -631,6 +633,8 @@ class Memory:
             sql, args = sql + " and c.lane = ?", args + [lane]
         if convo:
             sql, args = sql + " and (c.id = ? or c.parent = ?)", args + [convo, convo]
+        if roots:
+            sql += " and c.parent = 0"
         found = []
         for row in self.store.run(sql + " order by bm25(detail_fts) limit 20", args):
             if row["id"] in known:
@@ -643,20 +647,20 @@ class Memory:
             found.append(hit)
         return found
 
-    def search(self, query, project=None, exclude_lane=None, limit=8, kind="leaf", lane=None, deep=True, convo=None) -> list:
+    def search(self, query, project=None, exclude_lane=None, limit=8, kind="leaf", lane=None, deep=True, convo=None, roots=False) -> list:
         """Stored exchanges that match `query`, best first. Needs two of its words (one if it has one).
 
         With a model installed, exchanges near the query by meaning are added, and the two rankings are
         merged by reciprocal rank fusion. `deep=False` leaves out exchanges only their transcript (tool output,
         web pages) matches: what is printed unmarked into a conversation must not carry that text.
-        `convo` limits it to one conversation (by id) and the sub-agent work filed under it.
+        `convo` limits it to one conversation (by id) and the sub-agent work filed under it; `roots` leaves sub-agent work out.
         """
         words = sorted({w for w in re.findall(r"[a-z0-9_]{2,}", query.lower()) if w not in STOP})[:24]
         terms = set(tokens(query))
-        near = self._near(query, project, exclude_lane, lane, convo) if kind == "leaf" else []
+        near = self._near(query, project, exclude_lane, lane, convo, roots) if kind == "leaf" else []
         if (not words or not terms) and not near:
             return []
-        sql = ("select n.id, n.kind, n.title, n.text, n.ts, n.vec, n.project, n.convo, c.title ctitle, "
+        sql = ("select n.id, n.kind, n.title, n.text, n.ts, n.vec, n.project, n.convo, c.title ctitle, c.parent cparent, "
                "bm25(node_fts, 3.0, 1.0) rank from node_fts join node n on n.id = node_fts.rowid "
                "join convo c on c.id = n.convo where node_fts match ? and n.kind = ?")
         args = [" OR ".join(f'"{w}"' for w in words), kind]
@@ -668,6 +672,8 @@ class Memory:
             sql, args = sql + " and c.lane = ?", args + [lane]
         if convo:
             sql, args = sql + " and (c.id = ? or c.parent = ?)", args + [convo, convo]
+        if roots:
+            sql += " and c.parent = 0"
         vector, need, hits = embed.embed(query), min(2, len(terms)), []
         for row in self.store.run(sql + " order by rank limit 60", args) if words and terms else []:
             overlap = len(terms & set(tokens(row["title"] + " " + row["text"])))
@@ -678,7 +684,7 @@ class Memory:
         hits.sort(key=lambda h: (-h["score"], -h["ts"], h["id"]))
         for hit in hits:
             hit.pop("vec", None)
-        deep = self._deep(words, terms, need, project, exclude_lane, {hit["id"] for hit in hits}, lane, convo) if deep and kind == "leaf" and words and terms else []
+        deep = self._deep(words, terms, need, project, exclude_lane, {hit["id"] for hit in hits}, lane, convo, roots) if deep and kind == "leaf" and words and terms else []
         if not near and not deep:
             return hits[:limit]
         fused = {hit["id"]: 1 / (RRF_K + rank) for rank, hit in enumerate(hits, 1)}
@@ -689,7 +695,7 @@ class Memory:
         hits += deep
         known = {hit["id"] for hit in hits}
         extra = [n for n, _ in near if n not in known]
-        for row in self.store.run("select n.id, n.kind, n.title, n.text, n.ts, n.project, n.convo, c.title ctitle "
+        for row in self.store.run("select n.id, n.kind, n.title, n.text, n.ts, n.project, n.convo, c.title ctitle, c.parent cparent "
                                   "from node n join convo c on c.id = n.convo "
                                   f"where n.id in ({','.join('?' * len(extra))})", extra) if extra else []:
             hits.append(dict(row, snippet=snippet(row["text"], terms)))
@@ -708,13 +714,12 @@ class Memory:
     def within(self, convo_id, limit=20) -> list:
         """The exchanges stored under one conversation, its sub-agents' work included, newest first, shaped like search hits."""
         return [dict(r, snippet=snippet(r["text"], set())) for r in self.store.run(
-            "select n.id, n.title, n.text, n.ts from node n join convo c on c.id = n.convo "
+            "select n.id, n.title, n.text, n.ts, c.parent cparent from node n join convo c on c.id = n.convo "
             "where n.kind = 'leaf' and (c.id = ? or c.parent = ?) order by n.ts desc, n.id desc limit ?", (convo_id, convo_id, limit))]
 
-    def parent_of(self, session):
-        """The conversation the main thread of this session is in (the newest one stored), or None."""
-        rows = self.store.run("select id, project from convo where session = ? and parent = 0 order by updated desc, id desc limit 1",
-                              (session,)) if session else []
+    def convo_of(self, lane):
+        """{"id", "project"} of the conversation stored for this lane, or None while it is not stored yet."""
+        rows = self.store.run("select id, project from convo where lane = ? and parent = 0", (lane,)) if lane else []
         return dict(rows[0]) if rows else None
 
     def recent(self, project=None, exclude_lane=None, limit=3, since=None, until=None) -> list:
@@ -758,6 +763,8 @@ class Memory:
                               (" and n.ts >= ?", since), (" and n.ts < ?", until)):
             if value:
                 sql, args = sql + clause, args + [value]
+        if convo_id is None:
+            sql += " and c.parent = 0"  # a sub-agent's prompt is not something the person typed
         words = re.findall(r"[a-z0-9_]{2,}", query.lower())
         found = []
         # shortcut: reads every matching exchange of the range and filters in Python; narrow it with `since` on a big store
@@ -831,7 +838,7 @@ class Memory:
         """The note added to a new conversation's first message, or "" when nothing is worth adding."""
         if not project:
             return ""
-        hits = self.search(first_text, project=project, exclude_lane=lane, limit=6, deep=False)
+        hits = self.search(first_text, project=project, exclude_lane=lane, limit=6, deep=False, roots=True)  # a sub-agent's prompt is not the person's request
         recent = self.recent(project=project, exclude_lane=lane)
         if not hits and not recent:
             return ""
@@ -1009,9 +1016,22 @@ class MemoryLayer:
         return {"content": [{"type": "text", "text": text}], "stop_reason": "end_turn"} if text else None
 
     def _parent(self, ctx) -> dict:
-        """The conversation a sub-agent belongs to, {"id", "project"} or {}: its session's main conversation when
-        the lane first appeared, and kept (the note it was sent names it)."""
-        return ctx.store.frozen(f"subparent:{ctx.lane}", lambda: self.memory.parent_of(ctx.session) or {})
+        """The conversation a sub-agent belongs to, {"id", "project"}, or {} while it is not stored yet (nothing is kept then).
+        Its session's main thread leaves its lane in `mainlane:` when it sends a request; the sub-agent keeps the lane it
+        found on its first request, so a later /clear cannot move it, and the id once the conversation is stored."""
+        store, key = ctx.store, f"subparent:{ctx.lane}"
+        with store.lock:
+            kept = store.get(key)
+            if kept:
+                return kept
+            lane = store.get(f"subparentlane:{ctx.lane}") or store.get(f"mainlane:{ctx.session}") or ""
+            if not lane:
+                return {}
+            store.put(f"subparentlane:{ctx.lane}", lane)
+            found = self.memory.convo_of(lane)
+            if found:
+                store.put(key, found)
+            return found or {}
 
     @staticmethod
     def _add(first, text):
@@ -1023,18 +1043,27 @@ class MemoryLayer:
 
     def transform(self, body, ctx):
         cfg = ctx.cfg["memory"]
-        if not (cfg["enabled"] and cfg["recall"]):
+        if not cfg["enabled"]:
             return
         messages = body.get("messages") or []
+        main = self._main_thread(body, ctx)
+        if main and ctx.store.get(f"mainlane:{ctx.session}") != ctx.lane:  # before the reply is stored (that is queued), so a sub-agent that starts at once can find this conversation
+            ctx.store.put(f"mainlane:{ctx.session}", ctx.lane)
+        if not cfg["recall"]:
+            return
         if self._sub_thread(body, ctx):
             parent = self._parent(ctx)
-            if parent and cfg.get("tools", True):  # the note names a tool: no tool, no note
-                note = (f'<system-reminder>\nYou are a subagent of conversation {parent["id"]}; search its memory with memory_search '
-                        f'{{"conversation": {parent["id"]}}} before re-deriving earlier findings.\n</system-reminder>')
-                self._add(messages[rq.human_turns(messages)[0]], note)
-                ctx.stats["memory"] = {"subnote_chars": len(note)}
+            if parent:  # the note's words are kept with the parent: turning the tools off later does not change them
+                def compose():
+                    return (f'<system-reminder>\nYou are a subagent of conversation {parent["id"]}; search its memory with memory_search '
+                            f'{{"conversation": {parent["id"]}}} before re-deriving earlier findings.\n</system-reminder>'
+                            if cfg.get("tools", True) else "")  # the note names a tool: no tool, no note
+                note = ctx.store.frozen(f"subnote:{ctx.lane}", compose)
+                if note:
+                    self._add(messages[rq.human_turns(messages)[0]], note)
+                    ctx.stats["memory"] = {"subnote_chars": len(note)}
             return
-        if not self._main_thread(body, ctx):
+        if not main:
             return
         first = messages[rq.human_turns(messages)[0]]
         note = ctx.store.frozen(f"recall:{ctx.lane}", lambda: self.memory.recall(

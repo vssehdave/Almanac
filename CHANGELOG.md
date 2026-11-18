@@ -12,7 +12,11 @@
   `memory_search` gains a validated `conversation` filter, and `query` is
   optional with it (the conversation's exchanges are listed).
   A sub-agent that ends by calling `SubagentHandback` is stored too, with its
-  report as the answer.
+  report as the answer. The parent is found from the main thread's lane, saved
+  before its reply is stored, so a sub-agent started on the first turn still
+  finds it, and one started after `/clear` is filed under the new conversation.
+  Sub-agent prompts are never listed or recalled as the person's own words;
+  search hits from them say "sub-agent of conversation N".
 
 - **Routing: a failure ladder, an agent model floor, effort-aware pricing.** A
   thread whose tool calls keep failing climbs one rung of its starting model's

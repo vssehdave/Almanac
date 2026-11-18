@@ -105,7 +105,8 @@ def _day(ts) -> str:
 def render_hits(hits) -> str:
     if not hits:
         return "Nothing stored matches."
-    return "\n".join(f"[{h['id']}] {_day(h['ts'])} {h['title']}\n    {h['snippet']}" for h in hits) + "\n" + QUOTED
+    tag = lambda h: f" (sub-agent of conversation {h['cparent']})" if h.get("cparent") else ""  # noqa: E731
+    return "\n".join(f"[{h['id']}] {_day(h['ts'])} {h['title']}{tag(h)}\n    {h['snippet']}" for h in hits) + "\n" + QUOTED
 
 
 def render_node(memory, node) -> str:
@@ -227,7 +228,7 @@ def call(memory, name, args, cwd) -> str:
     if name == "memory_search":
         convo_id, query = args.get("conversation"), str(args.get("query") or "")
         if convo_id is not None:
-            if isinstance(convo_id, bool) or not isinstance(convo_id, int) or convo_id < 1:
+            if isinstance(convo_id, bool) or not isinstance(convo_id, int) or not 1 <= convo_id < 2 ** 63:
                 raise ValueError("conversation must be a conversation number (a positive integer) from memory_list")
             if not memory.store.run("select 1 from convo where id = ?", (convo_id,)):
                 return "No stored conversation has that number. memory_list shows them."

@@ -342,6 +342,7 @@ class SubagentTest(Case):
         # the main conversation, stored by its first reply
         self.memory.index("main-lane", SESSION, self.key, [human("Find out why requests are retried twice")], reply("Looking.", "tool_use"))
         self.parent = self.store.run("select id from convo where lane = 'main-lane'")[0]["id"]
+        self.store.put(f"mainlane:{SESSION}", "main-lane")  # what the main thread's own request leaves behind
 
     def body(self, prompt="Search the code for the retry helper and report where it lives"):
         env = f"# Environment\n - Primary working directory: {self.alpha}\n"
@@ -366,6 +367,8 @@ class SubagentTest(Case):
             self.sub(self.body())
         # a newer main conversation appears in the same session: the note this lane already has does not change
         self.memory.index("main-2", SESSION, self.key, [human("A different main task entirely")], reply("ok", "tool_use"))
+        self.store.put(f"mainlane:{SESSION}", "main-2")
+        self.rig.cfg["memory"]["tools"] = False  # nor does turning the tools off mid-run
         fifth = self.sub(self.body())
         self.assertEqual(self.rig.upstream.requests[-1]["body"], self.rig.upstream.requests[-5]["body"])
         self.assertEqual(fifth["messages"][0], first["messages"][0])
@@ -435,6 +438,55 @@ class SubagentTest(Case):
                                    {"type": "tool_use", "id": "b", "name": "Bash", "input": {}}], "stop_reason": "tool_use"}
         self.assertIsNone(MemoryLayer._handback(reply_mixed))
 
+    def test_a_subagent_that_starts_before_its_parent_is_stored_gets_the_note_later_and_is_filed_under_it(self):
+        late = "99999999-aaaa-bbbb-cccc-000000000001"
+        self.store.put(f"mainlane:{late}", "late-lane")  # the main thread has sent its request; its row is not written yet
+        replies = [sse("Checking.", tool=("Bash", {"command": "ls"})), sse("Found the retry helper in net.py.")]
+        self.rig.upstream.respond = lambda req: (200, {"content-type": "text/event-stream"}, replies[min(len(self.rig.upstream.requests) - 1, 1)])
+        raw = json.dumps(self.body()).encode()
+        self.rig.messages(raw, session=late, extra=self.HEADERS)
+        self.assertEqual(self.rig.upstream.requests[-1]["body"], raw)  # no parent yet: no note
+        self.rig.records()
+        self.assertEqual(self.store.run("select count(*) n from state where key like 'subparent:%'")[0]["n"], 0)  # nothing was frozen
+        self.memory.index("late-lane", late, self.key, [human("Find out why requests are retried twice")], reply("Looking.", "tool_use"))
+        late_id = self.store.run("select id from convo where lane = 'late-lane'")[0]["id"]
+        self.rig.messages(self.body(), session=late, extra=self.HEADERS)
+        self.assertEqual(len(self.note_of(self.rig.sent())), 1)
+        self.assertIn(f"conversation {late_id};", self.note_of(self.rig.sent())[0])
+        self.rig.records()
+        self.assertEqual([r["parent"] for r in self.store.run("select parent from convo where lane not in ('main-lane', 'late-lane')")], [late_id])
+
+    def test_a_subagent_after_clear_is_filed_under_the_new_conversation(self):
+        self.rig.messages(self.body("A completely new task after clearing the chat"))  # the new main conversation, same session
+        self.rig.records()
+        new = self.store.run("select id from convo where parent = 0 and lane != 'main-lane'")[0]["id"]
+        self.assertNotEqual(new, self.parent)
+        self.assertIn(f"conversation {new};", self.note_of(self.sub(self.body()))[0])
+        self.rig.records()
+        self.assertEqual([r["parent"] for r in self.store.run("select parent from convo where parent != 0")], [new])
+
+    def test_a_subagent_started_just_after_clear_never_takes_the_old_conversation_as_its_parent(self):
+        self.store.put(f"mainlane:{SESSION}", "new-lane")  # cleared: the new main thread has sent its request, its row is still queued
+        raw = json.dumps(self.body()).encode()
+        self.rig.messages(raw, extra=self.HEADERS)
+        self.assertEqual(self.rig.upstream.requests[-1]["body"], raw)
+        self.rig.records()
+        self.assertEqual(self.store.run("select count(*) n from convo where parent != 0")[0]["n"], 0)
+
+    def test_a_subagents_prompt_is_not_something_the_person_typed(self):
+        self.sub(self.body())
+        self.rig.records()
+        self.assertEqual(self.memory.user_messages(project=self.key, query="retry helper"), [])
+        child = self.store.run("select id from convo where parent = ?", (self.parent,))[0]["id"]
+        self.assertEqual(len(self.memory.user_messages(convo_id=child)), 1)
+
+    def test_subagent_hits_are_tagged_and_never_recalled_as_the_persons_request(self):
+        self.sub(self.body())
+        self.rig.records()
+        found = mcp.call(self.memory, "memory_search", {"query": "retry helper report", "project": "all"}, self.alpha)
+        self.assertIn(f"(sub-agent of conversation {self.parent})", found)
+        self.assertNotIn("Search the code for the retry helper", self.memory.recall(self.key, "search the code for the retry helper report", "elsewhere", 2400))
+
     def test_a_main_thread_exchange_is_unaffected(self):
         self.rig.messages(self.body("Why do requests retry twice?"))
         self.assertEqual(self.note_of(self.rig.sent()), [])
@@ -462,7 +514,7 @@ class SubagentTest(Case):
         self.assertNotIn("A second retry wrapper", listing)
 
     def test_memory_search_checks_its_arguments(self):
-        for bad in ("abc", True, -1, 1.5, [1]):
+        for bad in ("abc", True, -1, 1.5, [1], 2 ** 63):
             with self.assertRaises(ValueError, msg=repr(bad)):
                 mcp.call(self.memory, "memory_search", {"query": "retry", "conversation": bad}, self.alpha)
         self.assertIn("No stored conversation", mcp.call(self.memory, "memory_search", {"conversation": 9999}, self.alpha))
