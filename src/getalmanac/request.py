@@ -39,9 +39,11 @@ def typed_parts(msg) -> list:
             continue
         text = b.get("text") or ""
         head = text.lstrip()
+        if not head or head.startswith(REMINDER):
+            continue  # between a command and its body these change nothing
         body = after_command and not head.startswith(STDOUT)
         after_command = head.startswith(COMMAND)
-        if text.strip() and not body and not head.startswith((REMINDER, SKILL_BODY)):
+        if not body and not head.startswith(SKILL_BODY):
             out.append(text)
     return out
 
