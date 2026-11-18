@@ -6,7 +6,7 @@ store and `git` only. Building it sends nothing. `send` hands it to Claude Code'
 only `almanac cloud send` calls that.
 
 With `cloud.auto` on, `HandoffLayer` also keeps a snapshot of a running task (the work tree and the packet) on
-origin's `almanac/handoff` branch, so a scheduled cloud task can take over when this machine goes quiet.
+origin's `cloud/handoff` branch, so a scheduled cloud task can take over when this machine goes quiet.
 """
 import json
 import os
@@ -302,8 +302,8 @@ def send(exe, text, cwd, yes=False) -> int:
     return code
 
 
-HANDOFF = "almanac/handoff"
-TAKEOVER = "claude/almanac-takeover-"
+HANDOFF = "cloud/handoff"
+TAKEOVER = "cloud/almanac-takeover-"
 
 
 # Names that hold credentials by convention: their changes never go on the branch.
@@ -369,7 +369,7 @@ def snapshot(cwd, text, state, session) -> tuple:
 
 class HandoffLayer:
     """With `cloud.auto` on: while a task runs in a repository turned on with `almanac cloud on`, push a snapshot
-    to its origin's almanac/handoff every heartbeat. Any other folder is ignored: no entry, no git.
+    to its origin's cloud/handoff every heartbeat. Any other folder is ignored: no entry, no git.
 
     "Running" is what the proxy sees of the main conversation: a request came in within the last interval, or
     the last reply asked for a tool. A reply that ends the turn pushes "idle" once and the heartbeat stops.
@@ -497,7 +497,7 @@ class HandoffLayer:
             rows = self.memory.store.run("select id from convo where lane = ?", (entry["lane"],))
             text = packet(self.memory, rows[0]["id"] if rows else None, cwd, live=entry["live"], on_branch=True)
             commit, top = snapshot(cwd, text or "No record of this conversation was stored.", state, entry["session"])
-            # by address, not by name, so older git adds no remote-tracking ref (git 2.56 adds origin/almanac/handoff anyway)
+            # by address, not by name, so older git adds no remote-tracking ref (git 2.56 adds origin/cloud/handoff anyway)
             where = _must(top, "remote", "get-url", "--push", "origin")
             env = {}
             if not (os.environ.get("GIT_SSH_COMMAND") or os.environ.get("GIT_SSH") or _git(top, "config", "core.sshCommand")):

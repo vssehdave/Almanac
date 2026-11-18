@@ -960,7 +960,7 @@ Nothing can start a cloud session from a machine with no network, so the
 trigger has to wait in the cloud already. It works like this:
 
 - While a task runs, Almanac pushes a snapshot of it to the branch
-  `almanac/handoff` on `origin`, once every heartbeat (10 minutes by default).
+  `cloud/handoff` on `origin`, once every heartbeat (10 minutes by default).
   The snapshot is your current commit plus your uncommitted changes to tracked
   files, plus the hand-off packet as `ALMANAC_HANDOFF.md` and a small
   `almanac-handoff.json` (state, time, base branch and commit). Untracked files
@@ -975,7 +975,7 @@ trigger has to wait in the cloud already. It works like this:
   Almanac pushes once with state `idle` and stops until the next request.
 - A scheduled task you create in the cloud runs every hour. If the hand-off
   branch says `working` and is older than three heartbeats, it takes over: it
-  makes a `claude/almanac-takeover-<commit>` branch, carries on the task,
+  makes a `cloud/almanac-takeover-<commit>` branch, carries on the task,
   pushes and opens a draft pull request against your branch. Otherwise it
   stops at once.
 - If the upstream itself keeps failing while this machine can still reach
@@ -989,7 +989,7 @@ trigger has to wait in the cloud already. It works like this:
   below 400 resets the count and pushes `working` again at once. One `stalled`
   push per stall; if it fails, the normal heartbeat rules go on.
   **Known limit:** if the local session recovers after a takeover has started,
-  both carry on: the cloud one on its own `claude/almanac-takeover-...`
+  both carry on: the cloud one on its own `cloud/almanac-takeover-...`
   branch. Almanac cannot stop it, so check `almanac cloud status`.
 
 All of it runs off the request path. No git, no `origin`, a refused push or
@@ -1021,7 +1021,7 @@ that ends in a pushed branch and a draft pull request has not been seen yet.
 Know this before you turn it on:
 
 - **What is sent where.** To the `origin` remote of each repository you turned
-  on, branch `almanac/handoff`, force-pushed (that
+  on, branch `cloud/handoff`, force-pushed (that
   branch only): your uncommitted edits to tracked files, every local commit
   not pushed yet (they are the snapshot's history), and the packet. The packet
   is your conversation's task and recent transcript, including tool output
@@ -1040,7 +1040,7 @@ Know this before you turn it on:
   could plant a `working` hand-off, and the scheduled task would carry it out
   with your GitHub access. Turn this on only for repositories only you push to.
 - `almanac memory forget` does not touch the branch; delete it with
-  `git push origin --delete almanac/handoff`.
+  `git push origin --delete cloud/handoff`.
 - **Cost.** There is no separate charge for the cloud machine, but each
   scheduled run uses a little of your plan, even the runs that find nothing to
   do. On a team with metered usage credits switched on, runs past the plan
@@ -1185,7 +1185,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `playbooks.compile_per_day` | `1` | Most Sonnet sessions a day that write a playbook from a repeated task (`0` is off) |
 | `cheatsheet.mode` | `"on"` | `"off"` stops adding the working rules for each model |
 | `offline.hold_minutes` | `480` | Minutes a model request waits for the network to return (`0` fails at once) |
-| `cloud.auto` | `false` | Keep a running task's snapshot on `origin`'s `almanac/handoff` branch (`on`/`off`) |
+| `cloud.auto` | `false` | Keep a running task's snapshot on `origin`'s `cloud/handoff` branch (`on`/`off`) |
 | `cloud.heartbeat_minutes` | `10` | How often that snapshot is pushed while a task runs |
 | `cloud.stall_after` | `5` | Failed upstream attempts in a row (connection error or status 500+) before the snapshot is pushed at once as `stalled`; `0` is off |
 | `remote_control` | `false` | Run sessions in HTTPS-proxy mode |
@@ -1226,8 +1226,8 @@ after 45 days without being used, and a conversation that keeps running keeps
 its choices.
 
 With `cloud.auto` on, a copy of the latest packet and your uncommitted work
-also sits on GitHub, on the `almanac/handoff` branch. Forget does not reach it;
-`git push origin --delete almanac/handoff` deletes it.
+also sits on GitHub, on the `cloud/handoff` branch. Forget does not reach it;
+`git push origin --delete cloud/handoff` deletes it.
 
 ## If something goes wrong
 
