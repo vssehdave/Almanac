@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Security fix: a skill's text is not what you typed.** After a typed slash
+  command Claude Code inserts the skill's own text ("Base directory for this
+  skill: ..."). Typed-text detection counted it as your words, so a skill file
+  saying "from now on always ..." became a `decision`, a "Standing decision" in
+  the handover, an automatic playbook trigger and the cloud packet's task. That
+  block, and any text block after a command block in the same message, no
+  longer counts.
 - **Security fix: recall no longer prints tool output.** The note at the top of
   a new conversation, and the compaction outline's related list, took hits from
   the transcript search, so text from a tool result or a web page could appear
