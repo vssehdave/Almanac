@@ -313,12 +313,16 @@ back as its earlier version. `almanac report` counts entries written and
 notes shown in the last 24 hours.
 
 **Candidates for playbooks.** `almanac playbook mine` also reads the library: a
-current entry used at least twice (`uses` of 2 or more) whose route holds only
-`Bash:` and `Skill:` steps is listed as a candidate next to the ones found in
-your transcripts, and `almanac playbook compile` takes it the same way (it is
-a draft until you approve it). Entries of one route make one candidate; a
-route the transcripts already gave, one a playbook already matches, and one
-already compiled are left out.
+current entry used at least twice (`uses` of 2 or more) whose route is two or
+more `Bash:` steps and nothing else (a skill is instructions for the model, and
+an edit, a read or an agent needs judgment, so none of those qualifies) is
+listed as a candidate next to the ones found in your transcripts, and
+`almanac playbook compile` takes it the same way (it is a draft until you
+approve it). Entries of one route make one candidate. Work the transcripts
+already found, a route a playbook already matches, and one already compiled
+are left out. The list holds 20 candidates and the transcript ones come first,
+so library candidates only fill the places they leave free. If the database is
+locked, mining carries on without them.
 
 ### 3. Compaction that keeps the cache
 

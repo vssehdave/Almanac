@@ -4,8 +4,8 @@
 
 - **Prompt library entries become playbook candidates.** `almanac playbook
   mine` now also lists a current library entry that was used at least twice
-  and whose route is only commands and skills (`Bash:` and `Skill:` steps; an
-  edit, a read, an agent or any other tool means it needs judgment). Entries
+  and whose route is two or more commands and nothing else (`Bash:` steps; a
+  skill, an edit, a read, an agent or any other tool means it needs judgment). Entries
   with the same route make one candidate, and one is left out when the
   transcript mining already found the same steps, a playbook's triggers
   already match it, or it was already compiled. They go through the same

@@ -12,6 +12,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import statistics
 import subprocess
 import sys
@@ -340,8 +341,9 @@ def _common(members, key="tools", most=12) -> list:
 
 
 def mechanical(route) -> bool:
-    """True when every step is a command or a skill, which run.py can carry out: an edit, a read, an agent or any other tool needs judgment."""
-    return bool(route) and all(s.startswith(("Bash: ", "Skill: ")) for s in route)
+    """True when the route is at least two commands and nothing else: only run.py can carry out a command. A skill is
+    instructions for the model, and an edit, a read, an agent or any other tool needs judgment."""
+    return len(route) >= 2 and all(s.startswith("Bash: ") for s in route)
 
 
 def phase(sig) -> str:
@@ -423,12 +425,15 @@ def mine(days=30, minimum=3, cfg=None, dirs=None, out=print, now=None) -> list:
         from . import library
         from .store import Store
 
-        store = Store(config.home() / "almanac.db")
         try:
-            library.setup(store)
-            found = (found + library.candidates(store, found))[:KEEP]
-        finally:
-            store.close()
+            store = Store(config.home() / "almanac.db")
+            try:
+                library.setup(store)
+                found = (found + library.candidates(store, found))[:KEEP]
+            finally:
+                store.close()
+        except sqlite3.Error:  # a locked or damaged database costs the library candidates, not the transcript ones
+            pass
     _save(candidates_path(), {"mined": int(time.time() if now is None else now), "days": days, "min": minimum, "candidates": found})
     if not found:
         out("no repeated multi-step requests found")

@@ -19,6 +19,7 @@ from . import mine
 from . import request as rq
 from .match import STOP, tokens
 from .memory import QUOTED, _first_line, clean, exchange, redact
+from .project import Projects
 from .routing import handwritten
 from .status import _ends_on_question
 
@@ -373,25 +374,43 @@ def listing(store, project=None) -> list:
                                        (project,) if project else ())]
 
 
-def candidates(store, found=()) -> list:
-    """Miner candidates from the current entries used at least MIN_USES times whose route is all mechanical, most used first.
+def _found(route, prompt, found) -> bool:
+    """Did the transcript miner already find this work? By steps (the same form) when the candidate has them, and by
+    its tools or the words of its requests when not: a worded candidate keeps only each command's first two raw words."""
+    words = mine.words(prompt)
+    for c in found:
+        if tuple(c.get("tools") or ()) == route:
+            return True
+        if c.get("steps"):
+            if _jaccard(set(route), set(c["steps"])) >= ROUTE_SAME:
+                return True
+        elif any(_jaccard(words, mine.words(x)) >= mine.SIMILAR for x in c.get("examples") or ()):
+            return True
+    return False
 
-    Entries of one route make one candidate. A route the transcript miner already found (`found`), one a stored playbook's
+
+def candidates(store, found=()) -> list:
+    """Miner candidates from the current entries used at least MIN_USES times whose route is all commands, most used first.
+
+    Entries of one route make one candidate. Work the transcript miner already found (`found`), a route a stored playbook's
     triggers already match, and one already compiled are left out: the existing compile step takes it from here.
     """
-    seen = {tuple(c.get(key) or ()) for c in found for key in ("tools", "steps")}
-    done = mine._state()["compiled"]
-    made = {}
-    for e in sorted(listing(store), key=lambda e: (-e["uses"], e["id"])):
+    done, names, made, convos = mine._state()["compiled"], Projects(store), {}, {}
+    for e in store.run("select convo, project, prompt, route, uses from library where superseded_by = 0 and uses >= ? "
+                       "order by uses desc, id", (MIN_USES,)):
         route = tuple(_list(e["route"]))
-        if e["uses"] < MIN_USES or route in seen or not mine.mechanical(route) or mine._matched([{"text": e["prompt"]}]):
+        if not mine.mechanical(route) or _found(route, e["prompt"], found) or mine._matched([{"text": e["prompt"]}]):
             continue
         c = made.setdefault(route, {"id": hashlib.sha256(("library:" + ",".join(route)).encode("utf-8")).hexdigest()[:12], "count": 0,
-                                    "sessions": 1, "projects": [], "tokens": 0, "median_requests": len(route), "examples": [],
-                                    "tools": list(route), "skills": _list(e["skills"]), "agents": [], "kind": "library"})
+                                    "sessions": 0, "projects": [], "tokens": 0, "examples": [], "tools": list(route),
+                                    "skills": [], "agents": [], "kind": "library"})
+        convos.setdefault(route, set()).add(e["convo"])
         c["count"] += e["uses"]
-        c["projects"] += [e["project"]] * (e["project"] not in c["projects"])
+        name = names.name(e["project"])
+        c["projects"] += [name] * (name not in c["projects"] and len(c["projects"]) < 5)
         c["examples"] += [e["prompt"]] * (len(c["examples"]) < 3)
+    for route, c in made.items():
+        c["sessions"] = len(convos[route])
     return [c for c in made.values() if c["id"] not in done]
 
 
