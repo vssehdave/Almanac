@@ -99,7 +99,7 @@ class SummaryTest(Case):
         self.assertFalse([k for k in call["headers"] if k.startswith("x-claude-code")])
         self.assertEqual(call["path"], "/v1/messages?beta=true")
         self.assertEqual(sent["system"], [{"type": "text", "text": IDENTITY}, {"type": "text", "text": summarize.INSTRUCTION}])
-        self.assertEqual((sent["model"], sent["max_tokens"], "stream" in sent, "tools" in sent), (MODEL, 1000, False, False))
+        self.assertEqual((sent["model"], sent["max_tokens"], "stream" in sent, "tools" in sent), (MODEL, 1500, False, False))
         self.assertIn("retry helper", sent["messages"][0]["content"])
         used = summarize.today(self.store)
         self.assertEqual((used["calls"], used["in"], used["out"]), (1, 50, 20))

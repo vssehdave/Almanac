@@ -39,9 +39,9 @@ INSTRUCTION = ("You write notes for a project memory. The user message holds one
                "was asked or done. The summary is 1 to 3 plain sentences: what was done, what was decided or found, "
                "and which files were touched. The status is one of open (the person still waits on something here), "
                "done, decision (the person set a rule or choice that should keep holding), superseded (the attempt "
-               "was abandoned or went wrong) or noise (only an acknowledgement). The facts are up to 5 short lines, each at most "
-               "100 characters, that someone may search for later: decisions made, exact values, file and function names, "
-               "errors and how they were fixed. Only what the exchange states; use [] when there is nothing.")
+               "was abandoned or went wrong) or noise (only an acknowledgement). The facts are at most 5 lines, each under 90 "
+               "characters, for what someone may search for later and the summary leaves out: decisions made, exact values, "
+               "file and function names, errors and how they were fixed. Fewer is better; use [] when there is nothing.")
 
 
 def today(store) -> dict:
@@ -254,7 +254,8 @@ class SummaryLayer:
         text = memory.detail(node_id) or store.run("select text from node where id = ?", (node_id,))[0]["text"]
         if len(text) > INPUT_CHARS:
             text = text[: INPUT_CHARS // 3] + "\n... (middle not shown) ...\n" + text[-(2 * INPUT_CHARS // 3):]
-        body = {"model": model, "max_tokens": 1000, "system": _identity(orig) + [{"type": "text", "text": INSTRUCTION}],
+        body = {"model": model, "max_tokens": 1500, "thinking": {"type": "disabled"},  # measured: the same note takes about 380 output tokens, not 1,000
+                "system": _identity(orig) + [{"type": "text", "text": INSTRUCTION}],
                 "messages": [{"role": "user", "content": text}]}
         seen = {}
         message = call(ctx, body, used, seen=seen)

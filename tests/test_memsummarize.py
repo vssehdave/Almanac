@@ -128,6 +128,7 @@ class Refine(ti.ImportBase):
         with mock.patch.dict(ANSWER, {"facts": ["Trigger is 100k tokens", "parser.py: fix off-by-one"]}):
             self.refine()
         self.assertIn("facts", FakeConn.sent[0]["body"]["system"][1]["text"])
+        self.assertEqual(FakeConn.sent[0]["body"]["thinking"], {"type": "disabled"})
         row = self.store.run("select id, facts from node where kind = 'leaf'")[0]
         self.assertEqual(row["facts"], 1)
         self.assertEqual([r["text"] for r in self.store.run("select text from fact where node = ?", (row["id"],))],
