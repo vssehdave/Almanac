@@ -270,10 +270,10 @@ class IndexTest(Fresh):
     def save(self, name="weekly-report", **over):
         playbook.save({"name": name, "title": "Weekly report", "when": "w", "triggers": ["weekly report"], "steps": ["Run it"], "source": "owner", **over})
 
-    def sent(self, inject=True, model=MEDIUM, **kw):
+    def sent(self, inject=True, model=MEDIUM, enabled=True, **kw):
         work = body(convo([{"text": "hello"}]), model, system=claude_system())
         there = ctx(**kw)
-        there.cfg["playbooks"]["inject"] = inject
+        there.cfg["playbooks"].update(inject=inject, enabled=enabled)
         transform(work, there)
         return work
 
@@ -309,11 +309,18 @@ class IndexTest(Fresh):
         self.assertEqual(self.sent(klass="subagent", agent="a1")["system"][-1]["text"], "Main prompt.\n\n" + cheatsheet.text_for(MEDIUM, True))
         self.assertEqual(self.sent(model=SMALL)["system"][-1]["text"], "Main prompt.\n\n" + cheatsheet.text_for(SMALL))
 
-    def test_not_added_when_inject_is_off_or_there_is_no_sheet(self):
+    def test_not_added_when_inject_or_the_playbooks_are_off(self):
         self.save()
         self.assertIn("Playbooks on hand", json.dumps(self.sent()))
         self.assertEqual(self.sent(inject=False)["system"][-1]["text"], "Main prompt.\n\n" + cheatsheet.text_for(MEDIUM))
-        self.assertEqual(self.sent(model="some-model")["system"], claude_system())
+        self.assertEqual(self.sent(enabled=False)["system"][-1]["text"], "Main prompt.\n\n" + cheatsheet.text_for(MEDIUM))
+
+    def test_the_list_follows_the_playbook_settings_not_the_cheatsheet(self):
+        self.save()
+        alone = "Main prompt.\n\n" + cheatsheet.index()
+        self.assertEqual(self.sent(mode="off")["system"][-1]["text"], alone)  # the sheet is off, the list is not
+        self.assertEqual(self.sent(model="some-model")["system"][-1]["text"], alone)  # a model with no sheet still gets it
+        self.assertEqual(self.sent(mode="off", enabled=False)["system"], claude_system())
 
     def test_a_broken_playbook_folder_gives_nothing(self):
         Path(self.home, "playbooks").write_text("a file where the folder should be")

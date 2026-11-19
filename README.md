@@ -936,7 +936,7 @@ your past sessions and write it up, with no effort from you.
   no output.
 - **Playbooks on hand.** A way of working cannot be found from the words of a
   request such as "yes, do it". So when `playbooks.enabled` and
-  `playbooks.inject` are on, the cheatsheet ends with a list of the playbooks
+  `playbooks.inject` are on, the system prompt ends with a list of the playbooks
   you have that apply everywhere: one line each, by name, 12 at most. It goes
   to the main thread and its forks, not to other sub-agents or to Haiku. Claude is told to call
   `playbook_find` with a playbook's name, which returns its full steps, and to

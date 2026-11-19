@@ -98,10 +98,11 @@ class CheatsheetLayer:
         sheet = text_for(body["model"], sub) if ctx.cfg["cheatsheet"]["mode"] == "on" else ""
         lean = lean_text(ctx.cfg)
         books = ctx.cfg.get("playbooks") or {}
-        # the main thread and its forks only (a fork shares its parent's cached prefix); Haiku's sheet is short on purpose
+        # the main thread and its forks only (a fork shares its parent's cached prefix); Haiku's sheet is short on purpose.
+        # The list follows the playbook settings, not the cheatsheet's: it is there with the sheet off or no sheet for the model.
         main = ctx.thread in ("main", "fork")
-        if sheet and main and family(body["model"]) != "haiku" and books.get("enabled") and books.get("inject") and index():
-            sheet += "\n\n" + index()
+        if main and family(body["model"]) != "haiku" and books.get("enabled") and books.get("inject") and index():
+            sheet = sheet + "\n\n" + index() if sheet else index()
         if lean:  # every thread, whatever the model: the lean rules come first, the model's own sheet after them
             sheet = lean + "\n\n" + sheet if sheet else lean
         system = body.get("system")
