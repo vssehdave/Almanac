@@ -237,8 +237,8 @@ class RoutingLayer:
         kind = ctx.thread if ctx.thread in ("main", "sub") else None  # a fork stays on its parent's model
         if kind is None or not isinstance(body.get("model"), str):
             return
-        if kind == "main" and ctx.store.get(f"route:main:{ctx.session}") != body["model"]:
-            ctx.store.put(f"route:main:{ctx.session}", body["model"])  # what a sub-agent's model is compared with, see _decide
+        if kind == "main":
+            ctx.store.merge(f"main:{ctx.session}", sent=body["model"])  # what a sub-agent's model is compared with, see _decide
         tier_now = _tier_of(cfg, body["model"])
         if not tier_now:  # the person chose some other model on purpose
             if ctx.store.get("route:outside") != body["model"]:
@@ -313,7 +313,7 @@ class RoutingLayer:
             tier = cur
         failed_text = why == FAILED_WHY
         if kind == "sub" and pin not in TIERS:  # the model the agent starts on is a floor; `route_inherited` lifts it for one that only inherited the parent's
-            parent = store.get(f"route:main:{ctx.session}")
+            parent = (store.get(f"main:{ctx.session}") or {}).get("sent")
             if (not cfg["route_inherited"] or parent and parent != body["model"]) and TIERS.index(tier) < TIERS.index(tier_now):
                 tier, why = tier_now, why + f"; kept at the {tier_now} model the agent starts on"
         if pin not in TIERS and TIERS.index(tier) > top:

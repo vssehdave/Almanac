@@ -60,6 +60,13 @@ class Store:
                  "on conflict(key) do update set value = excluded.value, ts = excluded.ts",
                  (key, json.dumps(value), time.time()))
 
+    def merge(self, key, **fields):
+        """Set some fields of a dict value and keep the others; writes only when one changes."""
+        with self.lock:
+            now = self.get(key) or {}
+            if any(now.get(k) != v for k, v in fields.items()):
+                self.put(key, {**now, **fields})
+
     def frozen(self, key, compute):
         """A decision made once per key and returned unchanged afterwards."""
         with self.lock:

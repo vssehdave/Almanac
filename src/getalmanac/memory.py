@@ -830,9 +830,10 @@ class Memory:
     def gate(self, session, holds=2) -> str:
         """The reason to keep an Opus main thread from ending its turn while its sub-agents' work is unreviewed, or "".
         Each conversation is held at most `holds` times, so a model that cannot review is never stuck."""
-        lane = self.store.get(f"mainlane:{session}") or ""
+        main = self.store.get(f"main:{session}") or {}
+        lane = main.get("lane") or ""
         own = self.convo_of(lane)
-        if not own or "opus" not in (self.store.get(f"mainmodel:{session}") or ""):
+        if not own or "opus" not in (main.get("answered") or ""):
             return ""
         pending = self.store.run("select id, title from convo where parent = ? and review = 'pending' order by id", (own["id"],))
         held = self.store.get(f"gateheld:{lane}") or 0
@@ -1174,14 +1175,14 @@ class MemoryLayer:
 
     def _parent(self, ctx) -> dict:
         """The conversation a sub-agent belongs to, {"id", "project"}, or {} while it is not stored yet (nothing is kept then).
-        Its session's main thread leaves its lane in `mainlane:` when it sends a request; the sub-agent keeps the lane it
+        Its session's main thread leaves its lane in `main:` when it sends a request; the sub-agent keeps the lane it
         found on its first request, so a later /clear cannot move it, and the id once the conversation is stored."""
         store, key = ctx.store, f"subparent:{ctx.lane}"
         with store.lock:
             kept = store.get(key)
             if kept:
                 return kept
-            lane = store.get(f"subparentlane:{ctx.lane}") or store.get(f"mainlane:{ctx.session}") or ""
+            lane = store.get(f"subparentlane:{ctx.lane}") or (store.get(f"main:{ctx.session}") or {}).get("lane") or ""
             if not lane:
                 return {}
             store.put(f"subparentlane:{ctx.lane}", lane)
@@ -1204,8 +1205,8 @@ class MemoryLayer:
             return
         messages = body.get("messages") or []
         main = self._main_thread(body, ctx)
-        if main and ctx.store.get(f"mainlane:{ctx.session}") != ctx.lane:  # before the reply is stored (that is queued), so a sub-agent that starts at once can find this conversation
-            ctx.store.put(f"mainlane:{ctx.session}", ctx.lane)
+        if main:  # before the reply is stored (that is queued), so a sub-agent that starts at once can find this conversation
+            ctx.store.merge(f"main:{ctx.session}", lane=ctx.lane)
         if not cfg["recall"]:
             return
         if self._sub_thread(body, ctx):
@@ -1272,7 +1273,7 @@ class MemoryLayer:
             return
         if not self._main_thread(orig, ctx):
             return
-        self.memory.store.put(f"mainmodel:{ctx.session}", self._model(ctx, orig))  # what the review gate checks
+        self.memory.store.merge(f"main:{ctx.session}", answered=self._model(ctx, orig))  # what the review gate checks
         self.memory.index(ctx.lane, ctx.session, ctx.project, orig["messages"], reply)
         if reply.get("stop_reason") == "tool_use":  # a long turn: keep what it has done so far searchable
             self.memory.index_partial(ctx.lane, ctx.project, orig["messages"], reply)
