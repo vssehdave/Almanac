@@ -22,6 +22,7 @@ import json
 import os
 import re
 import shutil
+import sys
 from pathlib import Path
 
 from . import config
@@ -73,6 +74,9 @@ def curated_settings(user: dict, cfg, md_path: str = "") -> dict:
     out["skillOverrides"] = {**out.get("skillOverrides", {}), **{name: "off" for name in p["off_skills"]}}
     if "hooks" in out:
         out["hooks"] = strip_hooks(out["hooks"], cfg)
+    if (cfg.get("memory") or {}).get("enabled") and cfg["memory"].get("review_gate", True):  # Opus reviews sub-agent work before a turn ends
+        gate = {"type": "command", "command": f'"{Path(sys.executable).as_posix()}" -m getalmanac review-gate', "timeout": 10}
+        out["hooks"] = {**out.get("hooks", {}), "Stop": [*out.get("hooks", {}).get("Stop", []), {"hooks": [gate]}]}
     if md_path:  # the filtered CLAUDE.md is read from the profile folder instead: do not read the original too
         out["claudeMdExcludes"] = [*out.get("claudeMdExcludes", []), md_path]
         out["env"] = {**out.get("env", {}), MD_FROM_ADDED_DIR: "1"}

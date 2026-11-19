@@ -65,6 +65,7 @@ DEFAULTS = {
         "always_load": False,  # list the memory tools in every session start instead of behind ToolSearch (adds their schemas, about 1,000 tokens)
         "auto_import": True,  # while the proxy runs: import new Claude Code transcripts of stored projects, once an hour, then summarize them and make their vectors (autoimport.py)
         "auto_import_days": 14,  # transcripts older than this are not imported
+        "review_gate": True,  # an Opus main thread may not end its turn while its sub-agents' work is unreviewed (a Stop hook; at most 2 holds per conversation)
         "semantic": True,  # search by meaning when the optional packages and model are installed (see semantic.py)
     },
     "library": {
