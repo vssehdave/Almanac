@@ -129,17 +129,38 @@ class BannerTest(unittest.TestCase):
         self.assertIn("<system-reminder>kept</system-reminder>", out[0]["text"])
         self.assertEqual(out[1]["text"], "fix the bug")
 
-    def test_a_block_that_was_only_a_banner_goes_whole_and_its_cache_mark_moves_back(self):
-        # an empty text block with a cache mark is a 400 upstream, and the proxy then sends the request unstripped
+    def _strip(self, messages):
         cfg = copy.deepcopy(CFG)
         cfg["profile"]["off_hook_text"] = ["ZED MODE"]
-        cc = {"type": "ephemeral", "ttl": "1h"}
-        body = {"model": "m", "messages": [
-            {"role": "user", "content": [{"type": "text", "text": "fix the bug"}]},
-            {"role": "system", "content": [{"type": "text", "text": "UserPromptSubmit hook success: ZED MODE CHANGED level full",
-                                            "cache_control": cc}]}]}
+        body = {"model": "m", "messages": messages}
         StripLayer().transform(body, mock.Mock(cfg=cfg))
-        self.assertEqual(body["messages"], [{"role": "user", "content": [{"type": "text", "text": "fix the bug", "cache_control": cc}]}])
+        return body["messages"]
+
+    BANNER = "UserPromptSubmit hook success: ZED MODE CHANGED level full"
+    CC = {"type": "ephemeral", "ttl": "1h"}
+
+    def test_an_emptied_first_block_hands_its_cache_mark_to_the_next_text_block_of_its_message(self):
+        # an empty text block with a cache mark is a 400 upstream, and the proxy then sends the request unstripped
+        tool = {"type": "tool_addition", "tool": {"type": "tool_definition", "definition": {"name": "mcp__other__x"}}}
+        out = self._strip([{"role": "user", "content": [{"type": "text", "text": self.BANNER, "cache_control": self.CC}, tool,
+                                                         {"type": "text", "text": "fix the bug"}]}])
+        self.assertEqual(out, [{"role": "user", "content": [tool, {"type": "text", "text": "fix the bug", "cache_control": self.CC}]}])
+
+    def test_a_message_that_was_only_a_banner_stays_as_a_placeholder_that_keeps_the_mark_and_the_order(self):
+        msgs = [{"role": "user", "content": [{"type": "text", "text": "fix the bug"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "ok"}]},
+                {"role": "user", "content": [{"type": "text", "text": self.BANNER, "cache_control": self.CC}]}]
+        out = self._strip(msgs)
+        self.assertEqual([m["role"] for m in out], ["user", "assistant", "user"])  # never two in a row, never ends on the assistant
+        block = out[2]["content"][0]
+        self.assertTrue(block["text"].strip())
+        self.assertNotIn("ZED MODE", block["text"])
+        self.assertEqual(block["cache_control"], self.CC)
+
+    def test_a_string_message_that_was_only_a_banner_is_not_left_empty(self):
+        out = self._strip([{"role": "user", "content": self.BANNER}])
+        self.assertTrue(out[0]["content"].strip())
+        self.assertNotIn("ZED MODE", out[0]["content"])
 
     def test_other_hook_text_and_the_skill_listing_stay(self):
         text = ("SessionStart:startup hook success: hello from a hook\n\n" + startup.SKILL_MARK + "\n\n- zed:core: Does things.\n\nEnd.")

@@ -10,6 +10,7 @@ from . import request as rq
 from .profile import off_names
 from .startup import AGENT_MARK, SKILL_MARK, parse_listing
 
+PLACEHOLDER = "."  # what a message holds when everything in it was cut: a message is never dropped
 _HOOK = re.compile(r"(?:\w+:)?\w+ hook (?:additional context|success): ")
 # shortcut: hook text has no closing mark, so it is cut at the next thing Claude Code writes after it. If a
 # future version adds a new section type, that section is cut with the hook text until one of these ends it.
@@ -83,40 +84,41 @@ class StripLayer:
                 block["text"] = _cut_instructions(block["text"], names)
         if isinstance(system, str):
             body["system"] = _cut_instructions(system, names)
-        # A text block the cut left empty goes (upstream refuses an empty one, and the proxy then sends the request
-        # unstripped), and its cache mark moves to the block before it.
-        last, gone = None, []
+        # A text block the cut left empty goes, because upstream refuses an empty one (and the proxy then sends the
+        # request unstripped). Its cache mark moves to the next text or tool_result block of the message; with none
+        # left, a placeholder carries it. A message is never dropped: that could put two of one role in a row, or
+        # end the request on an assistant turn.
         for msg in body.get("messages") or []:
             if not isinstance(msg, dict):
                 continue
             if isinstance(msg.get("content"), str):
                 was = msg["content"]
-                msg["content"] = self._text(was, names, tool_prefix, markers)
+                msg["content"] = self._text(was, names, tool_prefix, markers) if was.strip() else was
                 if was.strip() and not msg["content"].strip():
-                    gone.append(msg)
+                    msg["content"] = PLACEHOLDER
                 continue
-            kept = []
+            kept, mark = [], None
             for block in rq.blocks(msg):
                 if block.get("type") == "text" and isinstance(block.get("text"), str):
                     was = block["text"]
                     block["text"] = self._text(was, names, tool_prefix, markers)
                     if was.strip() and not block["text"].strip():
-                        if last is not None and "cache_control" in block and "cache_control" not in last:
-                            last["cache_control"] = block["cache_control"]
+                        mark = mark or block.get("cache_control")
                         continue
                 elif block.get("type") == "tool_addition":
                     tool = block.get("tool") or {}
                     name = (tool.get("definition") or {}).get("name") or tool.get("name") or ""
                     if str(name).startswith(tool_prefix):
                         continue
+                if mark and block.get("type") in ("text", "tool_result"):
+                    if "cache_control" not in block:
+                        block["cache_control"] = mark
+                    mark = None
                 kept.append(block)
-                last = block
             if isinstance(msg.get("content"), list):
-                if msg["content"] and not kept:
-                    gone.append(msg)
+                if msg["content"] and (not kept or mark):
+                    kept.append({"type": "text", "text": PLACEHOLDER, **({"cache_control": mark} if mark else {})})
                 msg["content"] = kept
-        if gone:
-            body["messages"] = [m for m in body["messages"] if not any(m is g for g in gone)]
 
     @staticmethod
     def _text(text, names, tool_prefix, markers):
