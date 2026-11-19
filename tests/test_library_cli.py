@@ -100,11 +100,10 @@ class ListShowForgetTest(CliCase):
 
 
 class ToolTest(CliCase):
-    def test_library_find_is_the_last_tool_and_the_others_keep_their_places(self):
+    def test_library_find_comes_after_the_older_tools_which_keep_their_places(self):
         names = [t["name"] for t in mcp.TOOLS]
-        self.assertEqual(names[-1], "library_find")
+        self.assertEqual(names[-2:], ["library_find", "memory_review"])
         self.assertEqual(names[:3], ["memory_search", "memory_read", "memory_projects"])
-        self.assertEqual(names[:-1], [n for n in names if n != "library_find"])
 
     def test_it_returns_up_to_three_current_entries_with_the_quoted_sentence(self):
         for lane, asked in (("a", "Make the test pass in the proxy server"), ("b", "Make the test pass in the memory module"),

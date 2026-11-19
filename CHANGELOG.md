@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Sub-agents recall the project, by agent type, with a review status.** A new sub-agent
+  now gets the project recall note (earlier conversations and earlier sub-agents
+  alike, on its own prompt) next to its pointer to the parent, frozen with it so
+  the text stays the same on every request. Sub-agent conversations store their
+  agent type, and recall lists work of the same type first. They also store a
+  review status: `pending` (shown as "(unreviewed)" in recall and search) until an
+  Opus model calls the new `memory_review` tool; the proxy, which sees the model,
+  files the verdict, so a call from any other model changes nothing. New convo
+  columns `agent_type`, `review` and `review_note` are added to older databases.
+
 - **A clean profile for `almanac` sessions, and `almanac sandbox`.** `almanac` now
   starts Claude Code with your settings minus `profile.off_plugins` (claude-mem,
   Logbook, Pocketbook), the hooks matching `profile.off_hooks` (`getlogbook`) and the
