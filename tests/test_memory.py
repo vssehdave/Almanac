@@ -404,6 +404,19 @@ class SubagentTest(Case):
         self.assertNotIn(child[0]["id"], [r["id"] for r in self.memory.recent(project=self.key, limit=10)])  # it is not a conversation of its own
         self.assertEqual(self.memory.status_counts()["open"], 0)
 
+    def test_a_subagent_exchange_writes_a_library_row_that_no_search_shows(self):
+        from getalmanac import library
+        prompt = "Search the code for the retry helper and report where it lives"
+        body = self.body(prompt)
+        for n in range(5):
+            body["messages"] += [{"role": "assistant", "content": [{"type": "tool_use", "id": f"u{n}", "name": "Read", "input": {"file_path": f"/a/{n}.py"}}]},
+                                 {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"u{n}", "content": "ok"}]}]
+        self.sub(body)
+        self.rig.records()
+        child = self.store.run("select id from convo where parent = ?", (self.parent,))[0]["id"]
+        self.assertEqual([(r["convo"], r["calls"]) for r in self.store.run("select convo, calls from library")], [(child, 5)])
+        self.assertEqual((library.search(self.store, prompt, self.key), library.listing(self.store), library.candidates(self.store)), ([], [], []))
+
     def test_a_model_summary_cannot_reopen_a_subagent_exchange(self):
         self.sub(self.body())
         self.rig.records()

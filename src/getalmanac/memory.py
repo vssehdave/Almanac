@@ -1008,7 +1008,7 @@ class Memory:
     # ---- upkeep ----------------------------------------------------------------
 
     def _remove(self, row):
-        """One conversation, and every copy of its text: nodes, and the per-conversation rows in `state` and `used`."""
+        """One conversation, and every copy of its text: nodes, library rows, and the per-conversation rows in `state`."""
         from . import library
         for child in self.store.run("select id, lane from convo where parent = ?", (row["id"],)):  # a sub-agent's work goes with its parent
             self._remove(child)
@@ -1019,7 +1019,6 @@ class Memory:
 
     def _drop_lane(self, lane):
         self.store.run("delete from state where key like ?", ("%:" + lane,))  # compact:, recall:, project:, usage: ...
-        self.store.run("delete from used where lane = ?", (lane,))
         self.store.run("delete from raw where lane = ?", (lane,))
 
     def _cap_raw(self):
@@ -1087,9 +1086,7 @@ class Memory:
                 for r in self.store.run("select key from state where key not like 'summary:%'"):
                     if r["key"].rpartition(":")[2] not in lanes:
                         self.store.run("delete from state where key = ?", (r["key"],))
-                for r in self.store.run("select distinct lane from used"):
-                    if r["lane"] not in lanes:
-                        self.store.run("delete from used where lane = ?", (r["lane"],))
+                self.store.run("delete from library where convo < 0")  # the usage carried over from before the conversations were kept
                 for r in self.store.run("select distinct lane from raw"):  # results kept for stubs of lanes with no conversation row
                     if r["lane"] not in lanes:
                         self.store.run("delete from raw where lane = ?", (r["lane"],))
@@ -1107,6 +1104,7 @@ class Memory:
                 self._remove(row)
             if days and days > 0:  # results kept for lanes with no conversation row (subagents) age out the same way
                 self.store.run("delete from raw where ts < ? and lane not in (select lane from convo)", (time.time() - days * 86400,))
+                self.store.run("delete from library where convo < 0 and updated < ?", (time.time() - days * 86400,))
             if self._cap_raw() or old:
                 self._scrub()
         return len(old)
@@ -1117,7 +1115,6 @@ class Memory:
             self.store.run("update node set project = ? where project = ?", (target, source))
             self.store.run("update convo set project = ? where project = ?", (target, source))
             self.store.run("update library set project = ? where project = ?", (target, source))
-            self.store.run("update used set project = ? where project = ?", (target, source))
 
 
 class ProjectLayer:
@@ -1246,6 +1243,8 @@ class MemoryLayer:
             if parent and (handed or reply.get("stop_reason") != "tool_use"):  # filed when it has answered; nothing is stored while it works
                 reply = handed or reply
                 self.memory.index(ctx.lane, ctx.session, parent["project"], orig["messages"], reply, parent=parent["id"], agent_type=ctx.agent_type[:40])
+                from . import library
+                library.observe(self.memory, ctx, orig["messages"], reply)  # the row only feeds usage counts: no search shows it
                 self.memory.embed_pending()
             return
         if not self._main_thread(orig, ctx):

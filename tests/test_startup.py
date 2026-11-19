@@ -7,7 +7,7 @@ from unittest import mock
 
 from helpers import Rig, sse
 
-from getalmanac import config, startup
+from getalmanac import config, library, startup
 from getalmanac.match import Index, tokens
 from getalmanac.store import Store
 
@@ -84,6 +84,13 @@ class LayerCase(unittest.TestCase):
         self.rig = Rig(layers=[startup.SkillsLayer(), startup.AgentsLayer(), startup.ToolsLayer()], store=self.store)
         self.addCleanup(self.rig.close)
         self.addCleanup(self.store.close)
+        library.setup(self.store)
+
+    def used(self, kind, name, *convos, project="/repo/demo"):
+        """Library rows of exchanges in these conversations that used `name`: what the pinning reads."""
+        for convo in convos:
+            self.store.run(f"insert into library (convo, seq, project, prompt, {kind}s, calls, created, updated) values (?, ?, ?, 'p', ?, 1, 1, 1)",
+                           (convo, len(self.store.run("select 1 from library where convo = ?", (convo,))), project, json.dumps([name])))
 
 
 class SkillsLayerTest(LayerCase):
@@ -108,8 +115,7 @@ class SkillsLayerTest(LayerCase):
         first = body("make a slide deck for the board")
         self.rig.messages(first)
         one = self.rig.upstream.requests[-1]["body"]
-        self.store.mark_used("skill", "pdf-tools", "/repo/demo", "x1")  # history changes mid-conversation
-        self.store.mark_used("skill", "pdf-tools", "/repo/demo", "x2")
+        self.used("skill", "pdf-tools", 1, 2)  # history changes mid-conversation
         self.rig.messages(first)
         self.assertEqual(self.rig.upstream.requests[-1]["body"], one)
 
@@ -137,8 +143,7 @@ class SkillsLayerTest(LayerCase):
         self.assertEqual(self.rig.records()[-1]["skills"]["first_full"], 0)
 
     def test_recently_used_skills_stay_full(self):
-        self.store.mark_used("skill", "charts", "/repo/demo", "x1")
-        self.store.mark_used("skill", "charts", "/repo/demo", "x2")
+        self.used("skill", "charts", 1, 2)
         self.rig.messages(body("fix the failing test"))
         self.assertEqual(listing_of(self.rig.sent())["charts"], SKILLS["charts"])
 
@@ -180,6 +185,14 @@ class AgentsLayerTest(LayerCase):
         self.assertTrue(text.endswith("Today's date is 2026-01-01."))
         self.assertGreater(self.rig.records()[-1]["agents"]["saved_chars"], 400)
         self.assertTrue(listing_of(self.rig.sent())["slides"].endswith("…"))  # the skills layer still ran
+
+    def test_agents_used_in_two_conversations_stay_full_in_a_new_one(self):
+        self.used("agent", "infra-planner", 1, 2)
+        self.used("agent", "crew:db-reviewer", 3)  # one conversation is not a habit
+        self.rig.messages(body("fix the failing test in parser.py"))
+        sent = self.agents()
+        self.assertEqual(sent["infra-planner"], AGENTS["infra-planner"])
+        self.assertTrue(sent["crew:db-reviewer"].endswith("…"))
 
     def test_matched_agent_is_shown_in_full_next_to_the_message(self):
         self.rig.messages(body("review this database migration query"))
@@ -291,19 +304,14 @@ class ToolsLayerTest(LayerCase):
         self.assertEqual(self.deferred(), ["ScheduleWakeup"])
 
     def test_use_in_two_conversations_promotes_a_tool(self):
-        self.rig.upstream.respond = lambda req: (200, {"content-type": "text/event-stream"},
-                                                 sse(tool=("ScheduleWakeup", {"delaySeconds": 60})))
-        self.rig.messages(body("first conversation"))
-        self.rig.messages(body("second conversation"))
-        self.rig.records()
+        self.used("tool", "ScheduleWakeup", 1, 2)
         with mock.patch.object(startup, "_today", return_value="2099-01-01"):  # the project's snapshot is taken per day
             self.rig.messages(body("third conversation"))
         self.assertEqual(self.deferred(), ["PowerShell"])
 
     def test_new_conversations_of_a_project_get_identical_tools(self):
         self.rig.messages(body("fix the failing test"), session="s1")
-        self.store.mark_used("tool", "ScheduleWakeup", "/repo/demo", "x1")  # usage changes between them
-        self.store.mark_used("tool", "ScheduleWakeup", "/repo/demo", "x2")
+        self.used("tool", "ScheduleWakeup", 1, 2)  # usage changes between them
         self.rig.messages(body("run this in powershell please"), session="s2")
         a, b = (json.dumps(self.rig.sent(i)["tools"]) for i in (-2, -1))
         self.assertEqual(a, b)

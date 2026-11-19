@@ -97,10 +97,10 @@ whether or not the conversation will use them.
   Every skill stays listed and can be invoked by name at any time.
 - **Agents.** The list of agent types gets the same treatment: each description
   is cut to `startup.agent_chars` characters (60 by default, `0` turns this off),
-  and the `(Tools: ...)` part of a cut line is dropped. An agent whose
-  description matches your message gets its full line next to that message, as
-  skills do. Every
-  agent stays listed and can be used by name.
+  and the `(Tools: ...)` part of a cut line is dropped. An agent type that two
+  of the project's last ten conversations called keeps its full line, as a
+  skill does, and one whose description matches your message gets its full
+  line next to that message. Every agent stays listed and can be used by name.
 - **System prefix** (off by default, `startup.system_prefix`). Claude Code sends
   its session notes (MCP server instructions, advisor notes, the deferred tool
   names, the agent types and the skill list) in a message that comes after what

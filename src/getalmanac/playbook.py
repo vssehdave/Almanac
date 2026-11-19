@@ -640,7 +640,7 @@ class PlaybookLayer:
     def _entry(ctx, low) -> str:
         """The note for the prompt-library entry that best matches the typed text, or "" (decided once per turn, so counted once)."""
         cfg = ctx.cfg.get("library") or {}
-        hit = library.find(ctx.store, low, ctx.project or "", cfg.get("threshold", library.THRESHOLD))
+        hit = library.find(ctx.store, low, ctx.project or "", cfg.get("threshold", library.THRESHOLD), library.min_tools(ctx.cfg))
         if not hit:
             return ""
         entry, score = hit

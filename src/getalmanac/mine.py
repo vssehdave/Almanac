@@ -429,7 +429,7 @@ def mine(days=30, minimum=3, cfg=None, dirs=None, out=print, now=None) -> list:
             store = Store(config.home() / "almanac.db")
             try:
                 library.setup(store)
-                found = (found + library.candidates(store, found))[:KEEP]
+                found = (found + library.candidates(store, found, library.min_tools(cfg)))[:KEEP]
             finally:
                 store.close()
         except sqlite3.Error:  # a locked or damaged database costs the library candidates, not the transcript ones

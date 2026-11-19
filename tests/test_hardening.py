@@ -359,14 +359,15 @@ class ForgetTest(tm.Case):
         self.memory.index(lane, "s", self.key, [tm.human(text)], tm.reply("The answer."))
         for prefix in ("compact", "recall", "project", "usage", "nocompact", "fused", "skills", "tools"):
             self.store.put(f"{prefix}:{lane}", {"text": text})
-        self.store.mark_used("tool", "Cold", self.key, lane)
+        self.store.run("insert into library (convo, seq, project, prompt, tools, calls, created, updated) "
+                       "select id, 0, project, 'p', '[\"Cold\"]', 1, 1, 1 from convo where lane = ?", (lane,))  # the usage of this conversation
 
     def age(self):
         self.store.run("update convo set updated = updated - 7200")
 
     def left(self, lane):
         return ([r["key"] for r in self.store.run("select key from state where key like ?", ("%:" + lane,))],
-                self.store.run("select 1 from used where lane = ?", (lane,)))
+                self.store.run("select 1 from library where convo in (select id from convo where lane = ?)", (lane,)))
 
     def test_forget_deletes_the_saved_choices_and_usage_of_the_conversation(self):
         self.convo("aa11")
@@ -376,18 +377,21 @@ class ForgetTest(tm.Case):
         self.assertEqual(self.memory.forget(convo_id=self.store.run("select id from convo where lane = 'aa11'")[0]["id"]), 1)
         self.assertEqual(self.left("aa11"), ([], []))
         self.assertEqual(len(self.left("bb22")[0]), 8)
+        self.assertEqual(self.store.run("select count(*) n from library")[0]["n"], 1)
         self.assertEqual(self.memory.forget(project=self.key), 1)
         self.assertEqual(self.left("bb22"), ([], []))
+        self.assertEqual(self.store.run("select count(*) n from library")[0]["n"], 0)
         self.assertEqual(self.store.get("summary:day"), {"calls": 1})
 
     def test_forget_all_leaves_only_the_counters(self):
         self.convo("aa11")
         self.store.put("compact:orphan", {"text": "x"})  # a conversation that was never indexed
         self.store.put("summary:pause", 5)
+        self.store.run("insert into library (convo, seq, project, prompt, tools, created, updated) values (-1, -1, 'p', '', '[\"Cold\"]', 1, 1)")  # carried over usage
         self.age()
         self.memory.forget()
         self.assertEqual([r["key"] for r in self.store.run("select key from state")], ["summary:pause"])
-        self.assertEqual(self.store.run("select count(*) n from used")[0]["n"], 0)
+        self.assertEqual(self.store.run("select count(*) n from library")[0]["n"], 0)
 
     def test_an_open_conversation_is_kept_unless_forced(self):
         self.convo("aa11")
@@ -444,7 +448,6 @@ class ForgetTest(tm.Case):
         for lane, project in (("cc33", self.key), ("dd44", self.key), ("ee55", "dir:/other"), ("ff66", self.key)):
             self.store.put(f"project:{lane}", project)
             self.store.put(f"skills:{lane}", {"text": "zxqvortex"})
-            self.store.mark_used("tool", "Cold", project, lane)
         self.store.run("update state set ts = ts - 7200")
         self.store.put("usage:ff66", {"tokens": 1})  # written in the last hour: may be open
         self.memory.index("ab12", "s", "dir:/other", [tm.human("a question filed under another project")], tm.reply("ok"))

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **One record per finished exchange.** The prompt library row is now written for
+  every exchange that made a tool call (sub-agent exchanges too) and also holds the
+  distinct tool names and the call count. `library.min_tools` became a read-time
+  filter: searches, lists, merges and miner candidates show only rows with that many
+  calls, never a sub-agent's. What a project keeps using is read from these rows
+  (`library.recently_used`), so the separate `used` table is gone: an older database
+  is migrated on first open (one row per lane, shown nowhere, with its tools and
+  skills) and the table dropped. Agent types now count too: one that two of the
+  project's last ten conversations called keeps its full line in the agent listing.
+  Behaviour changes: usage is counted per finished exchange, not per request; with
+  memory off nothing is recorded, so only `always_full` pins; forgetting a
+  conversation forgets its usage.
+
 - **Sub-agents recall the project, by agent type, with a review status.** A new sub-agent
   now gets the project recall note (earlier conversations and earlier sub-agents
   alike, on its own prompt) next to its pointer to the parent, frozen with it so
