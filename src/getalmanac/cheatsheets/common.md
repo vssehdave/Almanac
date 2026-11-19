@@ -4,11 +4,7 @@
 - If the request can be read two ways and the readings lead to different work,
   ask one question. Otherwise pick the sensible reading, say which in one line,
   and go.
-- Read the code the change touches, and every caller of it, before editing.
-  List everything the change must reach: callers, tests, fixtures, config, docs.
-- Choose the smallest change that solves the whole problem. Reuse what the
-  codebase already has and follow its conventions. Add no option, abstraction,
-  file or feature nobody asked for.
+- The rules for scoping and sizing a change are under "Lean changes".
 - Plan the whole job first, then run it in as few steps as you can. Send
   independent tool calls together in one message. Fold a chain of shell steps
   into one command or one short script instead of one call per step. Go one

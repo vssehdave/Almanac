@@ -22,13 +22,29 @@ DEFAULTS = {
     },
     "skills": {
         "enabled": True,
-        "stub_chars": 90,  # characters of description kept for a collapsed skill
+        "stub_chars": 60,  # characters of description kept for a collapsed skill, cut at a word; 0 lists names only (the full text shows when a message matches)
         "max_full": 6,  # most skills shown in full per message on a match
         "always_full": [],  # skill names never collapsed
         "scan_on_launch": True,  # scan new or changed skills and plugins with SkillSpector in the background (skills.py)
     },
+    # What `almanac` loads Claude Code with: the user's own settings minus what is off here (see profile.py)
+    "profile": {
+        "enabled": True,
+        "off_plugins": ["claude-mem@thedotmack", "logbook@logbook", "pocketbook@pocketbook"],  # plugin ids switched off
+        "off_skills": ["logbook"],  # user skills switched off
+        # A user-settings hook is left out when its command contains one of these, or the name of anything in the two
+        # lists above (the part of a plugin id before the @), so a new plugin under development is one line in off_plugins.
+        "off_hooks": ["getlogbook"],
+        # Hook text of a plugin that is not off but whose job Almanac now does itself (a mode banner and its rules) is cut
+        # from requests when its first line contains one of these (the banner's own name, such as "ZED MODE": never a
+        # generic word, which would cut your own hooks too). The plugin stays installed. Empty: nothing is cut this way.
+        "off_hook_text": [],
+    },
     "startup": {
         "agent_chars": 60,  # characters of description kept for a listed agent type; 0 leaves the agent listing alone
+        "lean_rules": True,  # Almanac's own minimal-change rules, added to the main thread and every sub-agent (cheatsheet.py)
+        "lean_level": "full",  # lite: build what was asked and name the smaller option; full; ultra: also question the request
+        "lean_rules_text": "",  # your own wording instead of the packaged rules ("" keeps them)
         "system_prefix": False,  # move the stable startup sections to the end of the system prompt so a new conversation can read them from cache (sysprefix.py)
     },
     "tools": {
@@ -198,6 +214,8 @@ def load() -> dict:
             cfg["startup"]["agent_chars"] = 0
             cfg["startup"]["system_prefix"] = False
             cfg["cheatsheet"]["mode"] = "off"  # "all" means no change to the request at all
+            cfg["startup"]["lean_rules"] = False
+            cfg["profile"]["enabled"] = False
             cfg["playbooks"]["enabled"] = False
             cfg["library"]["inject"] = False
             cfg["accounts"]["fallback"] = []

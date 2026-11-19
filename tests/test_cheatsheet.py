@@ -27,9 +27,11 @@ def claude_system():
             {"type": "text", "text": "Main prompt.", "cache_control": CACHE}]
 
 
-def ctx(klass="main", agent="", agent_type="", mode="on"):
+def ctx(klass="main", agent="", agent_type="", mode="on", lean=False, **start):
     cfg = config.load()
     cfg["cheatsheet"]["mode"] = mode
+    cfg["startup"]["lean_rules"] = lean  # the other tests are about the model sheets; LeanTest turns it on
+    cfg["startup"].update(start)
     return SimpleNamespace(cfg=cfg, kind="messages", klass=klass, agent=agent, agent_type=agent_type)
 
 
@@ -137,6 +139,53 @@ class LayerTest(Fresh):
         self.assertEqual(run(LARGE, mode="off")["system"], claude_system())
 
 
+class LeanTest(Fresh):
+    def sheet(self, model, **kw):
+        return run(model, **{"lean": True, **kw})["system"][-1]["text"]
+
+    def test_main_thread_sub_agent_and_fork_all_get_the_rules_first(self):
+        lean = cheatsheet.lean_text(ctx(lean=True).cfg)
+        self.assertIn("Lean changes", lean)
+        for model in (LARGE, MEDIUM, SMALL):
+            self.assertEqual(self.sheet(model), "Main prompt.\n\n" + lean + "\n\n" + cheatsheet.text_for(model))
+            self.assertEqual(self.sheet(model, klass="subagent", agent="a1"),
+                             "Main prompt.\n\n" + lean + "\n\n" + cheatsheet.text_for(model, True))
+            self.assertEqual(self.sheet(model, klass="subagent", agent="a1", agent_type="fork"), self.sheet(model))
+
+    def test_every_model_gets_it_and_a_request_without_tools_does_not(self):
+        lean = cheatsheet.lean_text(ctx(lean=True).cfg)
+        self.assertTrue(self.sheet("some-model").endswith(lean))
+        self.assertTrue(self.sheet(LARGE, mode="off").endswith(lean))
+        self.assertEqual(run(MEDIUM, tools=[], lean=True)["system"], claude_system())
+
+    def test_the_cache_marks_stay_and_the_bytes_never_change_between_requests(self):
+        first, second = run(LARGE, lean=True), run(LARGE, lean=True)
+        self.assertEqual(json.dumps(first), json.dumps(second))
+        self.assertEqual(cache_marks(first), cache_marks(claude_system()))
+        once = copy.deepcopy(first)
+        CheatsheetLayer().transform(first, ctx(lean=True))
+        self.assertEqual(first, once)
+
+    def test_off_and_a_text_of_your_own(self):
+        self.assertEqual(run(LARGE, lean=False, mode="off")["system"], claude_system())
+        self.assertEqual(self.sheet("some-model", lean_rules_text="Keep it small."), "Main prompt.\n\nKeep it small.")
+
+    def test_levels(self):
+        full = cheatsheet.lean_text(ctx(lean=True).cfg)
+        lite = cheatsheet.lean_text(ctx(lean=True, lean_level="lite").cfg)
+        ultra = cheatsheet.lean_text(ctx(lean=True, lean_level="ultra").cfg)
+        self.assertTrue(lite.startswith(full) and "Level: lite" in lite)
+        self.assertTrue(ultra.startswith(full) and "question the request" in ultra)
+        self.assertEqual(cheatsheet.lean_text(ctx(lean=True, lean_level="nonsense").cfg), full)
+
+    def test_the_rules_say_things_once(self):
+        lean, common = cheatsheet.read("lean"), cheatsheet.read("common")
+        for line in common.splitlines():
+            if len(line) > 40:
+                self.assertNotIn(line.strip(), lean)
+        self.assertNotIn("smallest change that solves", common)
+
+
 class ProxyTest(Fresh):
     def setUp(self):
         super().setUp()
@@ -145,7 +194,7 @@ class ProxyTest(Fresh):
 
     def start(self, respond=None, mode="off"):
         self.rig = Rig(respond=respond, layers=[SetProject(), RoutingLayer(), CheatsheetLayer()], store=self.store,
-                       overrides={"routing.mode": mode})
+                       overrides={"routing.mode": mode, "startup.lean_rules": False})
         self.addCleanup(self.rig.close)
 
     def system_of(self, index):

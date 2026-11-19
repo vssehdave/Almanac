@@ -15,10 +15,12 @@ from .match import Index
 SKILL_MARK = "The following skills are available for use with the Skill tool:"
 SKILL_NOTE = ("Descriptions ending in … are shortened to save context. Every skill listed can be invoked by its "
               "name, and its full description is shown when a message calls for it.")
+SKILL_NOTE_NAMES = ("Only skill names are listed to save context. Every skill listed can be invoked by its name, "
+                    "and its full description is shown when a message calls for it.")
 AGENT_MARK = "Available agent types for the Agent tool:"
 AGENT_NOTE = ("Descriptions ending in … are shortened to save context. Every agent listed can still be used by its "
               "name, and its full description is shown when a message calls for it.")
-_ENTRY = re.compile(r"(?m)^- ([\w.\-/]+(?::[\w.\-/]+)*): ")
+_ENTRY = re.compile(r"(?m)^- ([\w.\-/]+(?::[\w.\-/]+)*)(?:: |[ ]*$)")  # `- name: text`, or a bare `- name`
 DEFER_MARK = "The following deferred tools are now available via ToolSearch."
 DEFER_TEXT = (DEFER_MARK + " Their schemas are NOT loaded — calling them directly will fail with "
               'InputValidationError. Use ToolSearch with query "select:<name>[,<name>...]" to load tool schemas '
@@ -71,7 +73,9 @@ def parse_listing(text: str, mark: str = SKILL_MARK):
 
 
 def stub(description: str, chars: int) -> str:
-    """The opening of a description, cut at a word, or all of it when it is already short."""
+    """The opening of a description, cut at a word, or all of it when it is already short. 0 chars keeps no description."""
+    if chars <= 0:
+        return ""
     flat = " ".join(description.split())
     if len(flat) <= chars + 24:
         return flat
@@ -91,6 +95,7 @@ def _insert_before_last(msg, text):
 class _ListingLayer:
     """Collapse a listing's descriptions to a stub; show the full text when a message matches."""
 
+    NOTE_NAMES = ""  # the note used when no description is kept at all
     MARK, NOTE, KEY, HEADER, GAP = "", "", "", "", "\n\n"  # GAP: what separates the note from the first entry
 
     def __init__(self):
@@ -153,9 +158,11 @@ class _ListingLayer:
         # What the first typed text matches goes next to it, so the listing is the same in every conversation.
         first_hits = _frozen(ctx, self.KEY + "-first",
                              lambda: [n for n, _ in index.search(first, limit=max_full) if n not in full])
-        lines = [f"- {name}: {desc if name in full else self.shorten(desc, chars)}" for name, desc in entries]
+        shown_text = [(name, desc if name in full else self.shorten(desc, chars)) for name, desc in entries]
+        lines = [f"- {name}: {desc}" if desc else f"- {name}" for name, desc in shown_text]  # no description, no separator
         text = block["text"]
-        listing = self.MARK + "\n" + self.NOTE + self.GAP + "\n".join(lines)
+        note = self.NOTE_NAMES if chars <= 0 and self.NOTE_NAMES else self.NOTE
+        listing = self.MARK + "\n" + note + self.GAP + "\n".join(lines)
         if len(listing) >= end - start:
             return  # nothing to gain: leave the request alone
         block["text"] = text[:start] + listing + text[end:]
@@ -183,6 +190,7 @@ class _ListingLayer:
 class SkillsLayer(_ListingLayer):
     MARK, NOTE, KEY = SKILL_MARK, SKILL_NOTE, "skills"
     HEADER = "Full descriptions of skills that may be relevant to this message:"
+    NOTE_NAMES = SKILL_NOTE_NAMES
 
     def settings(self, ctx):
         cfg = ctx.cfg["skills"]
