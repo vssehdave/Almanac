@@ -288,3 +288,39 @@ class SharedProxyTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StaleRetryTest(unittest.TestCase):
+    """A request goes upstream a second time only when a kept-alive connection was closed with no reply."""
+
+    def _run(self, error):
+        from getalmanac import proxy as px
+        sent = []
+
+        class Conn:
+            sock = object()
+            def putrequest(self, *a, **k): pass
+            def putheader(self, *a): pass
+            def endheaders(self, body=None): sent.append(body)
+            def getresponse(self):
+                if len(sent) == 1:
+                    raise error
+                return "ok"
+            def close(self): pass
+
+        h = px.Handler.__new__(px.Handler)
+        h.command, h.path, h.headers, h.hold = "POST", "/v1/messages", {}, None
+        h._conn = Conn()
+        h.server = type("S", (), {"proxy": type("P", (), {"base": "", "netloc": "x", "connect": lambda self: Conn()})()})()
+        try:
+            h._send(b"{}", False)
+        except Exception:
+            pass
+        return len(sent)
+
+    def test_a_timeout_is_not_sent_again(self):
+        self.assertEqual(self._run(TimeoutError("read timed out")), 1)
+
+    def test_a_closed_kept_alive_connection_is_retried(self):
+        import http.client
+        self.assertEqual(self._run(http.client.RemoteDisconnected("closed")), 2)
