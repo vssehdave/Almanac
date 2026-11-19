@@ -98,6 +98,7 @@ class Rig:
         self.upstream = Upstream(respond)
         cfg = config.load()
         cfg["upstream"] = self.upstream.url
+        cfg["memory"]["auto_import"] = False  # a test home with no config would otherwise read the real ~/.claude/projects
         for dotted, value in (overrides or {}).items():
             node = cfg
             parts = dotted.split(".")

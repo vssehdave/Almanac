@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 import test_import as ti
+from helpers import Rig
 
 from getalmanac import autoimport, config, summarize
 
@@ -104,6 +105,11 @@ class Round(Base):
         with mock.patch.object(autoimport, "run_once", lambda memory, cfg: ran.set()):
             autoimport.start(mock.Mock(cfg=self.cfg, store=self.store), first=0, every=3600)
             self.assertTrue(ran.wait(10))
+
+    def test_a_test_proxy_never_imports_the_real_transcripts(self):
+        with mock.patch.dict(os.environ, {"ALMANAC_HOME": self.tmp}):  # a home with no config: the defaults say auto_import is on
+            rig = Rig(store=self.store)
+        self.assertIsNone(rig.proxy.importing)
 
     def test_it_is_off_when_the_setting_is_off(self):
         proxy = mock.Mock(cfg={"memory": {"enabled": True, "auto_import": False}}, store=self.store)
