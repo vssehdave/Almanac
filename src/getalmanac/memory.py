@@ -31,7 +31,8 @@ create table if not exists convo (
     id integer primary key, lane text unique not null, session text not null, project text not null,
     title text not null default '', started real not null, updated real not null, turns integer not null default 0,
     summary text not null default '', sumturns integer not null default 0,
-    last_user text not null default '', last_reply text not null default '', parent integer not null default 0
+    last_user text not null default '', last_reply text not null default '', parent integer not null default 0,
+    agent_type text not null default '', review text not null default '', review_note text not null default ''
 );
 create table if not exists node (
     id integer primary key, convo integer not null, project text not null, parent integer,
@@ -264,6 +265,11 @@ def ended(convo, summary=220) -> str:
     return out
 
 
+def unreviewed(hit) -> str:
+    """The label for a hit from a sub-agent's work that no Opus review has signed off."""
+    return f" (unreviewed: memory_review conversation {hit['convo']})" if hit.get("cparent") and hit.get("creview") == "pending" else ""
+
+
 def snippet(text: str, terms: set, limit=230) -> str:
     """The stretch of `text` that holds the most query words."""
     pieces = [" ".join(p.split()) for p in re.split(r"(?<=[.!?])\s+|\n+", text) if p.strip()]
@@ -303,9 +309,14 @@ class Memory:
             have = {r["name"] for r in store.run("pragma table_info(convo)")}
             for column, ddl in (("summary", "text not null default ''"), ("sumturns", "integer not null default 0"),
                                 ("last_user", "text not null default ''"), ("last_reply", "text not null default ''"),
-                                ("parent", "integer not null default 0")):  # parent: the conversation a sub-agent's work is filed under
+                                ("parent", "integer not null default 0"),  # parent: the conversation a sub-agent's work is filed under
+                                ("agent_type", "text not null default ''"),
+                                ("review", "text not null default ''"),  # '' main thread; 'pending' sub-agent work; 'reviewed' once an Opus model signed it off
+                                ("review_note", "text not null default ''")):
                 if column not in have:  # a database written before conversation summaries
                     store.run(f"alter table convo add column {column} {ddl}")
+                    if column == "review":  # sub-agent work stored before reviews existed is unreviewed too
+                        store.run("update convo set review = 'pending' where parent != 0")
         from . import library  # imports this module, so not at the top
         with store.lock:
             library.setup(store)
@@ -319,10 +330,11 @@ class Memory:
         """The time to store for exchange `seq`: its transcript time when importing, else now."""
         return self.stamps[min(seq, len(self.stamps) - 1)] if self.stamps else time.time()
 
-    def _convo(self, lane, session, project, title, parent=0) -> dict:
+    def _convo(self, lane, session, project, title, parent=0, agent_type="") -> dict:
         now = self._at(0)
-        self.store.run("insert or ignore into convo (lane, session, project, title, started, updated, parent) values (?, ?, ?, ?, ?, ?, ?)",
-                       (lane, session, project, title, now, now, parent))
+        self.store.run("insert or ignore into convo (lane, session, project, title, started, updated, parent, agent_type, review) "
+                       "values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                       (lane, session, project, title, now, now, parent, agent_type if parent else "", "pending" if parent else ""))
         return dict(self.store.run("select * from convo where lane = ?", (lane,))[0])
 
     def _drop_nodes(self, ids):
@@ -559,7 +571,7 @@ class Memory:
             self.store.put(f"partial:{lane}", {"seq": seq, "size": size})
             return True
 
-    def index(self, lane, session, project, messages, reply=None, finished=False, assign=None, stamps=None, parent=0) -> int:
+    def index(self, lane, session, project, messages, reply=None, finished=False, assign=None, stamps=None, parent=0, agent_type="") -> int:
         """Store the finished exchanges of a conversation. Returns how many were written.
 
         The last exchange counts as finished when `reply` ended the turn, or when the
@@ -567,16 +579,16 @@ class Memory:
         `assign(group, previous project)` replaces the project rule and `stamps` (one time per human turn) the
         clock: both are for importing a transcript written earlier (see importer.py).
         `parent` is a conversation's id when this lane is a sub-agent's: it is stored as a conversation of its own,
-        linked to that one, left out of the lists of conversations and never open.
+        linked to that one, left out of the lists of conversations and never open. `agent_type` is that sub-agent's kind.
         """
         with self.store.lock:
             self.stamps = stamps
             try:
-                return self._index(lane, session, project, messages, reply, finished, assign, parent)
+                return self._index(lane, session, project, messages, reply, finished, assign, parent, agent_type)
             finally:
                 self.stamps = None
 
-    def _index(self, lane, session, project, messages, reply, finished, assign, parent=0) -> int:
+    def _index(self, lane, session, project, messages, reply, finished, assign, parent=0, agent_type="") -> int:
         turns = rq.human_turns(messages)
         if not turns:
             return 0
@@ -594,7 +606,7 @@ class Memory:
         with self.store.lock:
             if carried and done and not self.store.run("select 1 from convo where lane = ?", (lane,)):
                 self._resumed(lane, session, group, done)
-            convo = self._convo(lane, session, project, _first_line(clean(rq.human_text(messages[turns[0]]))), parent)
+            convo = self._convo(lane, session, project, _first_line(clean(rq.human_text(messages[turns[0]]))), parent, agent_type)
             stale = [r["id"] for r in self.store.run(
                 "select id from node where convo = ? and kind = 'leaf' and seq >= ?", (convo["id"], len(turns)))]
             touched = {r["parent"] for r in self.store.run(
@@ -674,7 +686,7 @@ class Memory:
     def _deep(self, words, terms, need, project, exclude_lane, known, lane=None, convo=None, roots=False) -> list:
         """Exchanges the title-and-text search missed whose transcript (tool output included) holds the query, best first,
         each with the matching line as its snippet."""
-        sql = ("select n.id, n.kind, n.title, n.text, n.ts, n.project, n.convo, c.title ctitle, c.parent cparent, detail_fts.text dtext "
+        sql = ("select n.id, n.kind, n.title, n.text, n.ts, n.project, n.convo, c.title ctitle, c.parent cparent, c.review creview, c.agent_type cagent, detail_fts.text dtext "
                "from detail_fts join node n on n.id = detail_fts.rowid join convo c on c.id = n.convo "
                "where detail_fts match ? and n.kind = 'leaf'")
         args = [" OR ".join(f'"{w}"' for w in words)]
@@ -740,7 +752,7 @@ class Memory:
         near = self._near(query, project, exclude_lane, lane, convo, roots) if kind == "leaf" else []
         if (not words or not terms) and not near:
             return []
-        sql = ("select n.id, n.kind, n.title, n.text, n.ts, n.vec, n.project, n.convo, c.title ctitle, c.parent cparent, "
+        sql = ("select n.id, n.kind, n.title, n.text, n.ts, n.vec, n.project, n.convo, c.title ctitle, c.parent cparent, c.review creview, c.agent_type cagent, "
                "bm25(node_fts, 3.0, 1.0) rank from node_fts join node n on n.id = node_fts.rowid "
                "join convo c on c.id = n.convo where node_fts match ? and n.kind = ?")
         args = [" OR ".join(f'"{w}"' for w in words), kind]
@@ -785,7 +797,7 @@ class Memory:
         hits += deep
         known = {hit["id"] for hit in hits}
         extra = [n for n in dict.fromkeys([n for n, _ in near] + list(said)) if n not in known]
-        for row in self.store.run("select n.id, n.kind, n.title, n.text, n.ts, n.project, n.convo, c.title ctitle, c.parent cparent "
+        for row in self.store.run("select n.id, n.kind, n.title, n.text, n.ts, n.project, n.convo, c.title ctitle, c.parent cparent, c.review creview, c.agent_type cagent "
                                   "from node n join convo c on c.id = n.convo "
                                   f"where n.id in ({','.join('?' * len(extra))})", extra) if extra else []:
             hits.append(dict(row, snippet=snippet(row["text"], terms)))
@@ -807,7 +819,7 @@ class Memory:
     def within(self, convo_id, limit=20) -> list:
         """The exchanges stored under one conversation, its sub-agents' work included, newest first, shaped like search hits."""
         return [dict(r, snippet=snippet(r["text"], set())) for r in self.store.run(
-            "select n.id, n.title, n.text, n.ts, c.parent cparent from node n join convo c on c.id = n.convo "
+            "select n.id, n.convo, n.title, n.text, n.ts, c.parent cparent, c.review creview, c.agent_type cagent from node n join convo c on c.id = n.convo "
             "where n.kind = 'leaf' and (c.id = ? or c.parent = ?) order by n.ts desc, n.id desc limit ?", (convo_id, convo_id, limit))]
 
     def convo_of(self, lane):
@@ -940,15 +952,19 @@ class Memory:
         key = lambda x: (-x[1], x[0])  # noqa: E731
         return sorted(decisions, key=key), sorted(open_work, key=key)
 
-    def recall(self, project, first_text, lane, limit_chars, tools_hint=True) -> str:
+    def recall(self, project, first_text, lane, limit_chars, tools_hint=True, agent_type=None) -> str:
         """The note added to a new conversation's first message, or "" when nothing is worth adding.
 
         One budget (limit_chars) is shared in order: the standing decisions of the project's recent conversations, its
         open work, the exchanges related to this message, then the recent conversations themselves. A section that
-        does not fit what is left is cut short, so the note never passes the budget."""
+        does not fit what is left is cut short, so the note never passes the budget.
+        `agent_type` is set for a sub-agent's note: earlier sub-agents' work is then searched too, and that of the same type comes first."""
         if not project:
             return ""
-        hits = self.search(first_text, project=project, exclude_lane=lane, limit=6, deep=False, roots=True)  # a sub-agent's prompt is not the person's request
+        sub = agent_type is not None
+        hits = self.search(first_text, project=project, exclude_lane=lane, limit=12 if sub else 6, deep=False, roots=not sub)  # a sub-agent's prompt is not the person's request
+        if sub:  # a boost, not a filter: other work stays, in its own order
+            hits = sorted(hits, key=lambda h: not (agent_type and h.get("cagent") == agent_type))[:6]
         recent = self.recent(project=project, exclude_lane=lane)
         decisions, open_work = self._standing(project, lane)
         if not hits and not recent:
@@ -980,7 +996,7 @@ class Memory:
                 [f"- [{i}] {day(ts)} {one(text, 150)}" for i, ts, title, text in decisions[:6]], 520)
         section("Open work:", [f"- [{i}] {day(ts)} {one(title, 70)}: {one(text, 90)}" for i, ts, title, text in open_work[:6]], 520)
         section("Earlier exchanges related to this message:",
-                [f"- [{h['id']}] {day(h['ts'])} {h['title']}: {one(h['snippet'], 170)}" for h in hits if h["id"] not in shown], 900)
+                [f"- [{h['id']}] {day(h['ts'])} {h['title']}{unreviewed(h)}: {one(h['snippet'], 170)}" for h in hits if h["id"] not in shown], 900)
         section("Most recent conversations:",
                 [f"- {day(c['updated'])} {c['title']} ({c['turns']} exchange{'s' if c['turns'] != 1 else ''})" + ended(c, 120) for c in recent], room)
         if len(lines) == 1:
@@ -1184,9 +1200,13 @@ class MemoryLayer:
             parent = self._parent(ctx)
             if parent:  # the note's words are kept with the parent: turning the tools off later does not change them
                 def compose():
-                    return (f'<system-reminder>\nYou are a subagent of conversation {parent["id"]}; search its memory with memory_search '
-                            f'{{"conversation": {parent["id"]}}} before re-deriving earlier findings.\n</system-reminder>'
-                            if cfg.get("tools", True) else "")  # the note names a tool: no tool, no note
+                    tools = cfg.get("tools", True)
+                    pointer = (f'<system-reminder>\nYou are a subagent of conversation {parent["id"]}; search its memory with memory_search '
+                               f'{{"conversation": {parent["id"]}}} before re-deriving earlier findings.\n</system-reminder>'
+                               if tools else "")  # the note names a tool: no tool, no note
+                    recalled = self.memory.recall(parent["project"], rq.human_text(messages[rq.human_turns(messages)[0]]), ctx.lane,
+                                                  cfg["recall_chars"], tools_hint=tools, agent_type=ctx.agent_type)
+                    return "\n".join(part for part in (pointer, recalled) if part)
                 note = ctx.store.frozen(f"subnote:{ctx.lane}", compose)
                 if note:
                     self._add(messages[rq.human_turns(messages)[0]], note)
@@ -1202,15 +1222,30 @@ class MemoryLayer:
         self._add(first, note)
         ctx.stats["memory"] = {"recall_chars": len(note)}
 
+    def _review(self, ctx, orig, reply):
+        """File the verdict of a memory_review call in the reply, when the model that was asked is an Opus one. The tool
+        itself only acknowledges: this is the one place that knows the model. Only pending sub-agent work changes."""
+        if "opus" not in str((getattr(ctx, "after", None) or orig).get("model") or "").lower():
+            return
+        for block in reply.get("content") or []:
+            if not (isinstance(block, dict) and block.get("type") == "tool_use" and str(block.get("name") or "").endswith("memory_review")
+                    and isinstance(block.get("input"), dict)):
+                continue
+            number, verdict = block["input"].get("conversation"), str(block["input"].get("verdict") or "")[:500]
+            if isinstance(number, int) and not isinstance(number, bool):
+                self.memory.store.run("update convo set review = 'reviewed', review_note = ? "
+                                      "where id = ? and parent != 0 and review = 'pending'", (verdict, number))
+
     def observe(self, ctx, orig, reply):
         if not ctx.cfg["memory"]["enabled"]:
             return
+        self._review(ctx, orig, reply)
         if self._sub_thread(orig, ctx):
             parent = self._parent(ctx)
             handed = self._handback(reply)
             if parent and (handed or reply.get("stop_reason") != "tool_use"):  # filed when it has answered; nothing is stored while it works
                 reply = handed or reply
-                self.memory.index(ctx.lane, ctx.session, parent["project"], orig["messages"], reply, parent=parent["id"])
+                self.memory.index(ctx.lane, ctx.session, parent["project"], orig["messages"], reply, parent=parent["id"], agent_type=ctx.agent_type[:40])
                 self.memory.embed_pending()
             return
         if not self._main_thread(orig, ctx):

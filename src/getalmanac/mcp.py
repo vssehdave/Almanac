@@ -8,7 +8,7 @@ import sys
 import time
 
 from . import __version__, config, library, playbook
-from .memory import _BREAK, QUOTED, READ_CHARS, READ_LINES, Memory, _quote, ended
+from .memory import _BREAK, QUOTED, READ_CHARS, READ_LINES, Memory, _quote, ended, unreviewed
 from .store import Store
 
 TOOLS = [
@@ -84,6 +84,13 @@ TOOLS = [
                     "done already, and read the exchange named in an entry with memory_read.",
      "inputSchema": {"type": "object", "required": ["query"], "properties": {
          "query": {"type": "string", "description": "The request, or the words that describe it"}}}},
+    {"name": "memory_review",
+     "description": "Record your review of a sub-agent's stored work (memory_search and the recall note mark it "
+                    "\"(unreviewed: memory_review conversation N)\"; pass that N). Check the work against the code first. It counts as "
+                    "reviewed only when an Opus model makes the call.",
+     "inputSchema": {"type": "object", "required": ["conversation", "verdict"], "properties": {
+         "conversation": {"type": "integer", "minimum": 1, "description": "The sub-agent's conversation number"},
+         "verdict": {"type": "string", "description": "Short: what was checked and whether the work holds"}}}},
 ]
 
 
@@ -105,7 +112,7 @@ def _day(ts) -> str:
 def render_hits(hits) -> str:
     if not hits:
         return "Nothing stored matches."
-    tag = lambda h: f" (sub-agent of conversation {h['cparent']})" if h.get("cparent") else ""  # noqa: E731
+    tag = lambda h: f" (sub-agent of conversation {h['cparent']})" + unreviewed(h) if h.get("cparent") else ""  # noqa: E731
     return "\n".join(f"[{h['id']}] {_day(h['ts'])} {h['title']}{tag(h)}\n    {h['snippet']}" for h in hits) + "\n" + QUOTED
 
 
@@ -301,6 +308,8 @@ def call(memory, name, args, cwd) -> str:
         return text
     if name == "library_find":
         return library.render_found(library.search(memory.store, str(args.get("query") or ""), memory.projects.see(cwd, touch=False) or "", limit=3))
+    if name == "memory_review":  # the proxy files the review: it sees the model, this process does not
+        return "Review noted. It counts only if an Opus model made this call."
     if name == "playbook_run":
         return playbook.run(str(args.get("name") or ""), args.get("args") or [], cwd)
     raise KeyError(name)

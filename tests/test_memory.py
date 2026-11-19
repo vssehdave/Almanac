@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -521,6 +522,88 @@ class SubagentTest(Case):
         self.assertIn("needs", mcp.call(self.memory, "memory_search", {}, self.alpha))
 
 
+    def seed(self, lane, agent_type, prompt, answer):
+        self.memory.index(lane, SESSION, self.key, [human(prompt)], reply(answer), parent=self.parent, agent_type=agent_type)
+        return self.store.run("select n.id from node n join convo c on c.id = n.convo where c.lane = ?", (lane,))[0]["id"]
+
+    def test_a_new_subagent_is_told_what_earlier_subagents_learned_and_the_note_stays_byte_stable(self):
+        earlier = self.seed("old-sub", "Explore", "Where does the retry helper live in the code", "The retry helper lives in net.py.")
+        first = self.sub(self.body())
+        text = self.note_of(first)[0]
+        self.assertIn(f"You are a subagent of conversation {self.parent}", text)
+        self.assertIn("Almanac memory for this project", text)
+        self.assertIn(f"[{earlier}]", text)
+        own = self.store.run("select id from convo where lane = 'old-sub'")[0]["id"]
+        self.assertIn(f"(unreviewed: memory_review conversation {own})", text)  # the number a reviewer must pass
+        self.assertEqual(len(self.note_of(first)), 1)
+        self.assertEqual(self.rig.records()[-1]["memory"]["subnote_chars"], len(text))
+        self.seed("old-sub-2", "Explore", "The retry helper code also lives in the report module", "Found the retry helper there too.")
+        self.sub(self.body())
+        self.assertEqual(self.rig.sent()["messages"][0], first["messages"][0])  # frozen: later memory does not change it
+
+    def test_recall_ranks_the_same_agent_type_first_without_dropping_the_rest(self):
+        other = self.seed("sub-a", "general-purpose", "Find the retry helper and the retry delay in the code", "The retry helper and retry delay are in net.py.")
+        mine = self.seed("sub-b", "Explore", "Find the retry helper", "It is in net.py.")
+        def order(kind):
+            note = self.memory.recall(self.key, "Find the retry helper and the retry delay", "new-lane", 4000, agent_type=kind)
+            return [i for _, i in sorted((note.find(f"[{i}]"), i) for i in (other, mine) if f"[{i}]" in note)]
+
+        self.assertEqual(order("Explore")[0], mine)
+        self.assertEqual(order("general-purpose")[0], other)
+        self.assertEqual(sorted(order("Explore")), sorted([other, mine]))  # a boost, not a filter
+        main = self.memory.recall(self.key, "Find the retry helper and the retry delay", "new-lane", 4000)
+        self.assertNotIn(f"[{other}]", main)  # the main thread's note still leaves sub-agent work out
+
+    def test_a_stored_subagent_is_pending_with_its_type_and_only_an_opus_review_of_it_counts(self):
+        self.sub(self.body())
+        self.rig.records()
+        child = dict(self.store.run("select * from convo where parent = ?", (self.parent,))[0])
+        self.assertEqual((child["agent_type"], child["review"], child["review_note"]), ("general-purpose", "pending", ""))
+        self.assertEqual(self.store.run("select review from convo where id = ?", (self.parent,))[0]["review"], "")
+        hit = self.memory.search("retry helper net.py", project=self.key)[0]
+        self.assertIn(f"(unreviewed: memory_review conversation {child['id']})", mcp.render_hits([hit]))
+        self.assertIn(f"(unreviewed: memory_review conversation {child['id']})",
+                      mcp.render_hits(self.memory.within(self.parent)))  # the conversation listing shows it too
+
+        def review(model, number, verdict="holds up"):
+            self.rig.upstream.respond = lambda req: (200, {"content-type": "text/event-stream"}, sse(
+                "ok", tool=("mcp__almanac__memory_review", {"conversation": number, "verdict": verdict})))
+            self.rig.messages(dict(self.body("Review the stored sub-agent work"), model=model))
+            self.rig.records()
+            return dict(self.store.run("select review, review_note from convo where id = ?", (number,))[0])
+
+        self.assertEqual(review("claude-sonnet-5", child["id"])["review"], "pending")  # a non-Opus caller changes nothing
+        self.assertEqual(review("claude-opus-5", self.parent)["review"], "")  # a main-thread conversation is never reviewed
+        self.assertEqual(review("claude-opus-5", child["id"]), {"review": "reviewed", "review_note": "holds up"})
+        self.assertEqual(review("claude-opus-5", child["id"], "changed my mind")["review_note"], "holds up")  # only pending changes
+        hit = self.memory.search("retry helper net.py", project=self.key)[0]
+        self.assertNotIn("unreviewed", mcp.render_hits([hit]))
+        self.assertIn("sub-agent of conversation", mcp.render_hits([hit]))
+
+    def test_the_review_tool_only_acknowledges(self):
+        self.sub(self.body())
+        self.rig.records()
+        child = self.store.run("select id from convo where parent = ?", (self.parent,))[0]["id"]
+        self.assertIn("Review noted", mcp.call(self.memory, "memory_review", {"conversation": child, "verdict": "ok"}, self.alpha))
+        self.assertEqual(self.store.run("select review from convo where id = ?", (child,))[0]["review"], "pending")
+
+    def test_a_database_from_before_reviews_gains_the_columns_and_marks_old_subagent_work_pending(self):
+        path = os.path.join(self.tmp, "old.db")
+        old = sqlite3.connect(path)
+        old.executescript("""
+            create table convo (id integer primary key, lane text unique not null, session text not null, project text not null,
+                title text not null default '', started real not null, updated real not null, turns integer not null default 0,
+                parent integer not null default 0);
+            insert into convo (id, lane, session, project, started, updated, parent) values (1, 'main', 's', 'p', 1, 1, 0), (2, 'sub', 's', 'p', 1, 1, 1);
+        """)
+        old.commit()
+        old.close()
+        memory = Memory(Store(path))
+        self.addCleanup(memory.store.close)
+        rows = {r["id"]: (r["agent_type"], r["review"], r["review_note"]) for r in memory.store.run("select * from convo")}
+        self.assertEqual(rows, {1: ("", "", ""), 2: ("", "pending", "")})
+
+
 class McpTest(Case):
     def ask(self, method, params=None, ident=1):
         return mcp.handle(self.memory, {"jsonrpc": "2.0", "id": ident, "method": method, "params": params or {}}, self.alpha)
@@ -529,7 +612,7 @@ class McpTest(Case):
         self.assertEqual(self.ask("initialize", {"protocolVersion": "2025-06-18"})["result"]["protocolVersion"], "2025-06-18")
         self.assertEqual([t["name"] for t in self.ask("tools/list")["result"]["tools"]],
                          ["memory_search", "memory_read", "memory_projects", "playbook_find", "playbook_save", "playbook_run",
-                          "memory_list", "memory_handover", "memory_user_messages", "library_find"])
+                          "memory_list", "memory_handover", "memory_user_messages", "library_find", "memory_review"])
         self.assertIsNone(mcp.handle(self.memory, {"jsonrpc": "2.0", "method": "notifications/initialized"}, self.alpha))
         self.assertEqual(self.ask("nope")["error"]["code"], -32601)
 

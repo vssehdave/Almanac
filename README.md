@@ -242,7 +242,7 @@ the parent (`convo.parent`): `memory_search` with that `conversation` includes i
 but it is not listed among the project's conversations and its status is never
 `open`, so it does not add to the parent's open work. Its prompt is not offered
 as something you asked: recall and `memory_user_messages` leave it out, and a
-search hit from it is marked "(sub-agent of conversation N)". A sub-agent's thread is
+search hit from it is marked "(sub-agent of conversation N)". The sub-agent's note also carries the project's recall (the same note the main thread gets, on the sub-agent's own prompt, with earlier sub-agents' work searched too and that of the same agent type listed first), frozen with the line above. Each sub-agent conversation stores its agent type and is `pending` (marked "(unreviewed)" in recall and search) until an Opus model calls the `memory_review` tool for it: the tool itself only acknowledges, and the proxy files the verdict when it sees that call in a reply to a request made with an Opus model. A call from any other model changes nothing. A sub-agent's thread is
 stored only when it ends, with no partial record and no model summary. A sub-agent
 that ends by calling `SubagentHandback` (a plugin's hand-back tool, after which no
 request follows) counts as ended: its report is stored as the answer.
