@@ -258,6 +258,11 @@ def asked(text: str) -> str:
     return text[len("Asked: "):].split("\n\nAnswer: ", 1)[0] if text.startswith("Asked: ") else text
 
 
+def said(text: str) -> str:
+    """How the answer began, from a stored exchange's text: its rule-written Answer paragraph, or ""."""
+    return text.split("\n\nAnswer: ", 1)[1].split("\n\n", 1)[0] if "\n\nAnswer: " in text else ""
+
+
 def ended(convo, summary=220) -> str:
     """A conversation's summary and how it ended, as the end of one line."""
     out = (": " + convo["summary"][:summary]) if convo.get("summary") else ""
@@ -875,7 +880,7 @@ class Memory:
                                 "on c.id = n.convo where n.convo = ? and n.kind = 'leaf' order by n.seq", (convo_id,)):
             shown = self.statuses(r["lane"]).get(r["seq"], r["status"])
             out.append({"id": r["id"], "number": r["seq"] + 1, "ts": r["ts"], "status": shown, "summary": r["summary"], "title": r["title"],
-                        "asked": asked(r["text"])})
+                        "asked": asked(r["text"]), "said": said(r["text"])})
         return out
 
     def user_messages(self, project=None, convo_id=None, since=None, until=None, query="", limit=30) -> list:

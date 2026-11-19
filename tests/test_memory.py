@@ -249,6 +249,14 @@ class IndexTest(Case):
         self.assertEqual(self.memory.prune(365), 1)
         self.assertEqual(self.memory.counts()["convos"], 1)
 
+    def test_exchanges_carry_the_answer_paragraph_even_behind_a_model_summary(self):
+        key = self.memory.projects.see(self.alpha)
+        self.memory.index("lane-1", "s1", key, self.convo(), reply("Added it.\n\nMore detail after."))
+        convo = self.store.run("select id from convo")[0]["id"]
+        self.assertEqual([e["said"] for e in self.memory.exchanges(convo)][-1], "Added it.")
+        self.store.run("update node set text = 'Summary: a model wrote this' || char(10) || char(10) || text where kind = 'leaf'")
+        self.assertEqual([e["said"] for e in self.memory.exchanges(convo)][-1], "Added it.")
+
     def test_forget(self):
         key = self.memory.projects.see(self.alpha)
         self.memory.index("lane-1", "s1", key, self.convo(), reply("Added it."))
