@@ -691,5 +691,33 @@ class FrozenBytesTest(tc.LayerCase):
         self.assertNotIn("quoted record", json.dumps(rig.sent()))
 
 
+class BusyTimeoutTest(unittest.TestCase):
+    def test_the_store_sets_its_own_busy_timeout(self):
+        seen, real = [], sqlite3.connect
+
+        class Spy:
+            def __init__(self, db):
+                object.__setattr__(self, "db", db)
+
+            def __getattr__(self, name):
+                return getattr(self.db, name)
+
+            def __setattr__(self, name, value):
+                setattr(self.db, name, value)
+
+            def execute(self, sql, *args):
+                seen.append(sql)
+                return self.db.execute(sql, *args)
+
+            def executescript(self, sql):
+                return self.db.executescript(sql)
+
+        path = os.path.join(tempfile.mkdtemp(prefix="almanac-busy-"), "almanac.db")
+        with mock.patch("getalmanac.store.sqlite3.connect", lambda *a, **k: Spy(real(*a, **k))):
+            store = Store(path)
+        self.assertIn("pragma busy_timeout=5000", seen)
+        self.assertEqual(store.run("pragma busy_timeout")[0][0], 5000)
+
+
 if __name__ == "__main__":
     unittest.main()
