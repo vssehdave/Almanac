@@ -283,6 +283,9 @@ class Server(http.server.ThreadingHTTPServer):
                               "error": f"{type(exc).__name__}: {exc}"[:300]})
 
 
+STALE = (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)  # RemoteDisconnected is a reset
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     timeout = 960  # an idle or stalled local client must not hold a thread for ever
@@ -404,9 +407,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     conn.putheader("Content-Length", str(len(body)))
                 conn.endheaders(body or None)
                 return conn.getresponse()
-            except (OSError, http.client.HTTPException):
+            except (OSError, http.client.HTTPException) as err:
                 self._drop()
-                if not reused or attempt:  # only a stale kept-alive connection is retried
+                # Only a kept-alive connection the server closed with no reply is retried. A timeout or any other
+                # error may come after upstream read the body, and a resend would run (and bill) the request twice.
+                if not reused or attempt or not isinstance(err, STALE):
                     raise
 
     def _account(self, ctx):
