@@ -133,6 +133,14 @@ class NoteTest(NoteCase):
             self.assertLessEqual(len(text), cap)
             self.assertTrue(text.endswith("</system-reminder>"), cap)
 
+    def test_the_note_names_no_tool_when_the_memory_tools_are_off(self):
+        self.solved()
+        (on,) = notes(self.send(self.rig(), human(TYPED)))
+        (off,) = notes(self.send(self.rig(**{"memory.tools": False}), human(TYPED)))
+        self.assertIn("memory_read", on)
+        self.assertNotIn("memory_read", off)
+        self.assertTrue(off.endswith("</system-reminder>"))
+
     def test_the_threshold_decides(self):
         self.solved("Fix the failing parser test in the proxy module after the cache refactor")
         near = "fix the parser test in the proxy and update the docs"  # 4 of the stored prompt's 8 words: 0.5

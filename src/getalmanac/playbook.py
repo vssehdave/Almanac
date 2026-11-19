@@ -646,7 +646,7 @@ class PlaybookLayer:
         entry, score = hit
         entry["uses"] = library.bump(ctx.store, entry["id"])
         ctx.stats["library"] = {"id": entry["id"], "score": score}
-        return library.note(entry, cfg.get("note_chars", library.NOTE_CHARS))
+        return library.note(entry, cfg.get("note_chars", library.NOTE_CHARS), (ctx.cfg.get("memory") or {}).get("tools", True))
 
     @classmethod
     def _first(cls, ctx, low, key, books=True, entries=False) -> str:

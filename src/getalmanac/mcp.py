@@ -315,6 +315,12 @@ def call(memory, name, args, cwd) -> str:
     raise KeyError(name)
 
 
+def listed(cfg) -> list:
+    """The tools to offer: memory_* and library_find only while memory.tools is on, playbook_* only while playbooks are."""
+    memory, books = cfg["memory"].get("tools", True), cfg["playbooks"].get("enabled", True)
+    return [t for t in TOOLS if (books if t["name"].startswith("playbook_") else memory)]
+
+
 def handle(memory, message, cwd):
     """Answer one JSON-RPC message. Returns the reply, or None for a notification."""
     method, ident = message.get("method"), message.get("id")
@@ -326,7 +332,7 @@ def handle(memory, message, cwd):
                   "serverInfo": {"name": "almanac", "version": __version__},
                   "instructions": INSTRUCTIONS}
     elif method == "tools/list":
-        result = {"tools": TOOLS}
+        result = {"tools": listed(config.load())}
     elif method == "tools/call":
         params = message.get("params") or {}
         try:

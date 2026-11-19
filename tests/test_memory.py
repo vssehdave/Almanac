@@ -4,6 +4,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from unittest import mock
 from contextlib import redirect_stdout
 
 from helpers import Rig, SESSION, sse
@@ -661,6 +662,19 @@ class McpTest(Case):
                           "memory_list", "memory_handover", "memory_user_messages", "library_find", "memory_review"])
         self.assertIsNone(mcp.handle(self.memory, {"jsonrpc": "2.0", "method": "notifications/initialized"}, self.alpha))
         self.assertEqual(self.ask("nope")["error"]["code"], -32601)
+
+    def test_the_tool_list_follows_the_memory_and_playbook_switches(self):
+        def names(**sections):
+            cfg = config.load()
+            for section, over in sections.items():
+                cfg[section].update(over)
+            with mock.patch.object(config, "load", return_value=cfg):
+                return [t["name"] for t in self.ask("tools/list")["result"]["tools"]]
+        self.assertEqual([n for n in names(memory={"tools": False}) if not n.startswith("playbook_")], [])
+        self.assertEqual(len(names(memory={"tools": False})), 3)
+        self.assertEqual([n for n in names(playbooks={"enabled": False}) if n.startswith("playbook_")], [])
+        self.assertIn("library_find", names(playbooks={"enabled": False}))
+        self.assertNotIn("library_find", names(memory={"tools": False}))
 
     def test_initialize_carries_constant_instructions(self):
         first, second = (self.ask("initialize", {"protocolVersion": "2025-06-18"}, ident=n)["result"] for n in (1, 2))
