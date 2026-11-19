@@ -239,7 +239,22 @@ def _store_run(memory, lane, session, key, messages, stamps):
     cut = memory_mod.BACKFILL - 1
     for end in range(cut, len(turns), cut) if len(turns) > memory_mod.BACKFILL else ():
         written += memory.index(lane, session, key, messages[:turns[end]], finished=True, assign=lambda g, p: key, stamps=stamps)
-    return written + memory.index(lane, session, key, messages, finished=True, assign=lambda g, p: key, stamps=stamps)
+    written += memory.index(lane, session, key, messages, finished=True, assign=lambda g, p: key, stamps=stamps)
+    _record_library(memory, lane, messages)
+    return written
+
+
+def _record_library(memory, lane, messages):
+    """The prompt-library row of each finished exchange, as the live path writes them, so an imported session counts
+    for usage pinning and library_find. The last exchange is skipped while it still ends on a tool call (the file is
+    still being written): a row is written once and never updated."""
+    from . import library
+    turns, low = rq.human_turns(messages), library.min_tools()
+    for seq, start in enumerate(turns):
+        group = messages[start:turns[seq + 1] if seq + 1 < len(turns) else len(messages)]
+        if seq + 1 == len(turns) and (group[-1].get("role") != "assistant" or any(b.get("type") == "tool_use" for b in rq.blocks(group[-1]))):
+            continue
+        library.record(memory, lane, group, seq, low)
 
 
 def _restatus_last(memory, lane, messages, following, newest):

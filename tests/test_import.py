@@ -110,6 +110,19 @@ class ImportBase(unittest.TestCase):
         return "\n".join(parts)
 
 
+class LibraryRows(ImportBase):
+    def test_an_imported_session_leaves_a_library_row_per_exchange_with_calls(self):
+        self.session().turn(stamp(3), "fix the parser", "Fixed it.", tool=("Skill", {"skill": "pdf"}))             .turn(stamp(3, 5), "ask a helper", "Done.", tool=("Agent", {"subagent_type": "Plan", "prompt": "x"}))             .turn(stamp(3, 9), "just chat", "Hello.").write()
+        self.run_import()
+        rows = [dict(r) for r in self.store.run("select seq, tools, skills, agents from library order by seq")]
+        self.assertEqual([r["seq"] for r in rows], [0, 1])  # the exchange with no call has no row
+        self.assertEqual(json.loads(rows[0]["skills"]), ["pdf"])
+        self.assertEqual(json.loads(rows[1]["agents"]), ["Plan"])
+        self.assertEqual(json.loads(rows[0]["tools"]), ["Skill"])
+        self.run_import()  # imported again: nothing doubles
+        self.assertEqual(self.store.run("select count(*) n from library")[0]["n"], 2)
+
+
 class ProjectPerExchange(ImportBase):
     def test_file_path_decides_the_project(self):
         t = self.session().turn(stamp(2), "look at it", "done", tool=("Read", {"file_path": self.b + "/src/x.py"}))
