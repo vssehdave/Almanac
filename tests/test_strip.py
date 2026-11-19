@@ -129,6 +129,18 @@ class BannerTest(unittest.TestCase):
         self.assertIn("<system-reminder>kept</system-reminder>", out[0]["text"])
         self.assertEqual(out[1]["text"], "fix the bug")
 
+    def test_a_block_that_was_only_a_banner_goes_whole_and_its_cache_mark_moves_back(self):
+        # an empty text block with a cache mark is a 400 upstream, and the proxy then sends the request unstripped
+        cfg = copy.deepcopy(CFG)
+        cfg["profile"]["off_hook_text"] = ["ZED MODE"]
+        cc = {"type": "ephemeral", "ttl": "1h"}
+        body = {"model": "m", "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "fix the bug"}]},
+            {"role": "system", "content": [{"type": "text", "text": "UserPromptSubmit hook success: ZED MODE CHANGED level full",
+                                            "cache_control": cc}]}]}
+        StripLayer().transform(body, mock.Mock(cfg=cfg))
+        self.assertEqual(body["messages"], [{"role": "user", "content": [{"type": "text", "text": "fix the bug", "cache_control": cc}]}])
+
     def test_other_hook_text_and_the_skill_listing_stay(self):
         text = ("SessionStart:startup hook success: hello from a hook\n\n" + startup.SKILL_MARK + "\n\n- zed:core: Does things.\n\nEnd.")
         body = {"model": "m", "messages": [{"role": "user", "content": [{"type": "text", "text": text}]}]}

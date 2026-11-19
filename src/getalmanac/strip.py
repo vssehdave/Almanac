@@ -83,24 +83,40 @@ class StripLayer:
                 block["text"] = _cut_instructions(block["text"], names)
         if isinstance(system, str):
             body["system"] = _cut_instructions(system, names)
+        # A text block the cut left empty goes (upstream refuses an empty one, and the proxy then sends the request
+        # unstripped), and its cache mark moves to the block before it.
+        last, gone = None, []
         for msg in body.get("messages") or []:
             if not isinstance(msg, dict):
                 continue
             if isinstance(msg.get("content"), str):
-                msg["content"] = self._text(msg["content"], names, tool_prefix, markers)
+                was = msg["content"]
+                msg["content"] = self._text(was, names, tool_prefix, markers)
+                if was.strip() and not msg["content"].strip():
+                    gone.append(msg)
                 continue
             kept = []
             for block in rq.blocks(msg):
                 if block.get("type") == "text" and isinstance(block.get("text"), str):
-                    block["text"] = self._text(block["text"], names, tool_prefix, markers)
+                    was = block["text"]
+                    block["text"] = self._text(was, names, tool_prefix, markers)
+                    if was.strip() and not block["text"].strip():
+                        if last is not None and "cache_control" in block and "cache_control" not in last:
+                            last["cache_control"] = block["cache_control"]
+                        continue
                 elif block.get("type") == "tool_addition":
                     tool = block.get("tool") or {}
                     name = (tool.get("definition") or {}).get("name") or tool.get("name") or ""
                     if str(name).startswith(tool_prefix):
                         continue
                 kept.append(block)
+                last = block
             if isinstance(msg.get("content"), list):
+                if msg["content"] and not kept:
+                    gone.append(msg)
                 msg["content"] = kept
+        if gone:
+            body["messages"] = [m for m in body["messages"] if not any(m is g for g in gone)]
 
     @staticmethod
     def _text(text, names, tool_prefix, markers):
