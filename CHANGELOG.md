@@ -30,7 +30,7 @@
   the store already holds. It then runs the summary pass (personal login,
   within `memory.summary_daily_calls`) and makes a vector for every exchange and
   fact that lacks one, with the local model (no API tokens; it says so when no
-  model is installed). `memory.auto_import` (default on) turns it off. The
+  model is installed). `memory.auto_import` (default on) turns it off. It also stays off when `ALMANAC_HOME` points anywhere but `~/.almanac`, unless that home's `config.json` sets `memory.auto_import` to `true`, so a scratch copy of the store never imports real transcripts. The
   summary call now also returns up to 5 short facts per exchange (about 170
   more output tokens), with hidden thinking off and a 1,500-token cap so no
   reply is cut off; each is a searchable row (words and meaning) linked to

@@ -12,6 +12,7 @@ Claude Code saved for the other sessions, a little after the proxy starts and th
 Only ~/.claude is read. Other config folders (a work account, a sandbox) are never imported, whatever
 CLAUDE_CONFIG_DIR says. Everything here is idempotent: a file is read again only when its size or time changed.
 """
+import os
 import threading
 import time
 from pathlib import Path
@@ -28,6 +29,12 @@ LAST = "autoimport:last"  # the report of the last round, for `almanac status`
 
 def source() -> Path:
     return Path.home() / ".claude" / "projects"
+
+
+def _own_home() -> bool:
+    """True when ALMANAC_HOME is unset or names the default ~/.almanac."""
+    custom = os.environ.get("ALMANAC_HOME")
+    return not custom or Path(custom).resolve() == (Path.home() / ".almanac").resolve()
 
 
 def _known(memory) -> set:
@@ -88,6 +95,8 @@ def start(proxy, first=FIRST, every=EVERY):
     cfg = proxy.cfg
     if not (cfg["memory"]["enabled"] and cfg["memory"]["auto_import"]) or proxy.store is None:
         return None
+    if not _own_home() and config._file().get("memory", {}).get("auto_import") is not True:
+        return None  # a scratch or eval home (often a copy of the real store) must not import the real transcripts or spend the login's summary calls
 
     def loop():
         time.sleep(first)

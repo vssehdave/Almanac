@@ -99,12 +99,36 @@ class Round(Base):
         self.assertIn(report["vectors"], (None, 0))
         self.assertIn("2 summarized", autoimport.line(self.store))
 
-    def test_start_runs_a_round_in_the_background(self):
+    def start(self, config_json=None, home=None):
+        """autoimport.start over a home that is not ~/.almanac (or `home`), with `config_json` written there. Returns (thread, ran)."""
         ran = threading.Event()
         self.cfg["memory"]["auto_import"] = True
-        with mock.patch.object(autoimport, "run_once", lambda memory, cfg: ran.set()):
-            autoimport.start(mock.Mock(cfg=self.cfg, store=self.store), first=0, every=3600)
-            self.assertTrue(ran.wait(10))
+        folder = home or os.path.join(self.tmp, "almanac-home")
+        os.makedirs(folder, exist_ok=True)
+        if config_json:
+            with open(os.path.join(folder, "config.json"), "w") as handle:
+                handle.write(config_json)
+        with mock.patch.dict(os.environ, {"ALMANAC_HOME": folder}),                 mock.patch.object(autoimport, "run_once", lambda memory, cfg: ran.set()):
+            thread = autoimport.start(mock.Mock(cfg=self.cfg, store=self.store), first=0, every=3600)
+            return thread, ran.wait(3 if thread else 0.2)
+
+    def test_start_runs_a_round_in_the_background(self):
+        thread, ran = self.start('{"memory": {"auto_import": true}}')
+        self.assertTrue(thread and ran)
+
+    def test_a_scratch_home_does_not_import_unless_it_says_so(self):
+        for text in (None, '{"memory": {"semantic": false}}', '{"memory": {"auto_import": "yes"}}'):
+            self.assertEqual(self.start(text), (None, False), text)
+
+    def test_only_the_default_home_counts_as_the_users_own(self):
+        default = str(Path.home() / ".almanac")
+        with mock.patch.dict(os.environ, {"ALMANAC_HOME": default}):
+            self.assertTrue(autoimport._own_home())
+        with mock.patch.dict(os.environ, {"ALMANAC_HOME": self.tmp}):
+            self.assertFalse(autoimport._own_home())
+        with mock.patch.dict(os.environ):
+            os.environ.pop("ALMANAC_HOME", None)
+            self.assertTrue(autoimport._own_home())
 
     def test_a_test_proxy_never_imports_the_real_transcripts(self):
         with mock.patch.dict(os.environ, {"ALMANAC_HOME": self.tmp}):  # a home with no config: the defaults say auto_import is on
