@@ -154,6 +154,7 @@ folder (the generated settings set `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD
 `claudeMdExcludes` stops the original being read twice). A `CLAUDE.md` reaches sub-agents;
 a system prompt addition would reach only the main thread. Login, the plugins that stay on, MCP servers and history are not settings
 sources and are untouched. Nothing in `~/.claude` is edited.
+A side effect of the profile: a folder you pass with `--add-dir` now loads its own `CLAUDE.md` too.
 
 What it does not do: hooks written into a repository's own `.claude/settings.json` or
 `settings.local.json` (`logbook setup` writes some) still run. `almanac` says so at

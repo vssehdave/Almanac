@@ -145,6 +145,11 @@ def _link(src: Path, dst: Path):
         shutil.copy2(src, dst)
 
 
+def _tmp(path: Path) -> Path:
+    """A temp name of this process: two launches at once never write the same one."""
+    return path.with_name(f"{path.name}.{os.getpid()}.tmp")
+
+
 def _put(path: Path, text: str):
     """Write `text` to `path` only when it differs, and by replacing the file whole: a running session never reads half of it."""
     try:
@@ -152,19 +157,51 @@ def _put(path: Path, text: str):
             return
     except OSError:
         pass
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = _tmp(path)
     tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    try:
+        os.replace(tmp, path)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        try:
+            if path.read_text(encoding="utf-8") == text:  # another launch won the race with the same text
+                return
+        except OSError:
+            pass
+        raise
+
+
+def _same_tree(a: Path, b: Path) -> bool:
+    d = filecmp.dircmp(a, b)
+    return not (d.left_only or d.right_only or d.diff_files or d.funny_files) and all(_same_tree(a / n, b / n) for n in d.common_dirs)
 
 
 def _current(src: Path, dst: Path) -> bool:
-    """True when `dst` already is what `_link(src, dst)` makes (a link to the folder, or a file with the same bytes)."""
+    """True when `dst` already is what `_link(src, dst)` makes: a link to the folder, a copy of it, or a file with the same bytes."""
     try:
-        if src.is_dir():  # shortcut: a copy made where no link can be made is always rebuilt, as it cannot be compared cheaply
-            return (dst.is_symlink() or getattr(os.path, "isjunction", lambda _: False)(dst)) and os.path.samefile(src, dst)
+        if src.is_dir():
+            if dst.is_symlink() or getattr(os.path, "isjunction", lambda _: False)(dst):
+                return os.path.samefile(src, dst)
+            return dst.is_dir() and _same_tree(src, dst)  # the copy made where no link can be made
         return dst.is_file() and not dst.is_symlink() and filecmp.cmp(src, dst, shallow=False)
     except OSError:  # a link whose target is gone
         return False
+
+
+def _swap(src: Path, dst: Path):
+    """Put a fresh link or copy of `src` where `dst` is, under a temp name first, so `dst` is missing only for one rename.
+
+    shortcut: the rename is not atomic with the removal of the old `dst`; a reader can miss it for that instant."""
+    tmp = _tmp(dst)
+    if os.path.lexists(tmp):
+        _remove(tmp)
+    if src.is_dir():
+        _link(src, tmp)
+        _remove(dst)
+        os.replace(tmp, dst)
+    else:
+        shutil.copy2(src, tmp)
+        os.replace(tmp, dst)
 
 
 def mirror(source: Path, dest: Path, cfg):
@@ -182,21 +219,19 @@ def mirror(source: Path, dest: Path, cfg):
                 if not (item.name.startswith(".") or (kind == "skills" and stem in skip)):
                     want[item.name] = item
         for old in folder.iterdir():
-            if old.name not in want:
+            if old.name not in want and not old.name.endswith(".tmp"):  # a .tmp is another launch at work
                 _remove(old)
         for name, item in want.items():
             target = folder / name
             if os.path.lexists(target):
-                if _current(item, target):
-                    continue
-                if item.is_dir() or target.is_dir() or target.is_symlink():
-                    _remove(target)
-                else:  # a changed file: replaced whole
-                    tmp = target.with_name(target.name + ".tmp")
-                    shutil.copy2(item, tmp)
-                    os.replace(tmp, target)
-                    continue
-            _link(item, target)
+                if not _current(item, target):
+                    _swap(item, target)
+                continue
+            try:
+                _link(item, target)
+            except FileExistsError:  # another launch linked it between our check and our link
+                if not _current(item, target):
+                    raise
 
 
 def leaks(cwd, cfg) -> list:

@@ -186,6 +186,57 @@ class PrepareTest(unittest.TestCase):
         self.assertEqual((self.dir / ".claude" / "agents" / "editor.md").read_text(encoding="utf-8"), "agent v2")
         self.assertEqual([p.name for p in (self.dir / ".claude" / "skills").iterdir()], ["council"])
 
+    def test_a_write_goes_through_a_temp_file_of_its_own(self):
+        target = self.home / "x.txt"
+        with mock.patch("os.getpid", return_value=4242), mock.patch("os.replace", wraps=os.replace) as replace:
+            profile._put(target, "text")
+        self.assertIn("4242", replace.call_args[0][0].name)  # two launches never share a temp name
+        self.assertEqual(target.read_text(encoding="utf-8"), "text")
+
+    def test_a_lost_replace_race_is_not_an_error_but_a_real_failure_is(self):
+        target = self.home / "y.txt"
+
+        def lost(src, dst):
+            Path(dst).write_text("text", encoding="utf-8")  # the other launch wrote the same text first
+            raise OSError("held")
+
+        with mock.patch("os.replace", side_effect=lost):
+            profile._put(target, "text")
+        self.assertEqual([p.name for p in self.home.glob("y.txt*")], ["y.txt"])  # and no temp file is left
+        with mock.patch("os.replace", side_effect=OSError("held")):
+            with self.assertRaises(OSError):
+                profile._put(target, "other")
+
+    def test_a_link_another_launch_made_first_is_accepted(self):
+        self.prep([])
+        shutil.rmtree(self.dir / ".claude")
+        real = profile._link
+
+        def late(src, dst):
+            real(src, dst)
+            raise FileExistsError(str(dst))  # the other launch got there between our check and our link
+
+        with mock.patch.object(profile, "_link", side_effect=late):
+            self.prep([])
+        self.assertTrue((self.dir / ".claude" / "skills" / "keep" / "SKILL.md").exists())
+
+    def test_a_copied_skill_is_current_and_is_not_copied_again(self):
+        # where no link can be made, the profile holds copies: an unchanged one must stay put
+        def no_links(f):
+            with mock.patch("os.symlink", side_effect=OSError), mock.patch("_winapi.CreateJunction", side_effect=OSError, create=True):
+                return f()
+
+        no_links(lambda: self.prep([]))
+        kept = self.dir / ".claude" / "skills" / "keep"
+        self.assertFalse(kept.is_symlink())
+        with mock.patch.object(profile, "_remove") as remove, mock.patch("shutil.copytree") as copytree:
+            no_links(lambda: self.prep([]))
+        remove.assert_not_called()
+        copytree.assert_not_called()
+        (self.user / "skills" / "keep" / "SKILL.md").write_text("changed", encoding="utf-8")
+        no_links(lambda: self.prep([]))
+        self.assertEqual((kept / "SKILL.md").read_text(encoding="utf-8"), "changed")
+
     def test_off_for_the_run_when_the_user_sets_their_own_settings(self):
         for flag in (["--settings", "x.json"], ["--setting-sources=user"], ["--bare"]):
             flags, notes = self.prep(flag, self.home)
