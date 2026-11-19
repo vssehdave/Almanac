@@ -31,8 +31,9 @@
   within `memory.summary_daily_calls`) and makes a vector for every exchange and
   fact that lacks one, with the local model (no API tokens; it says so when no
   model is installed). `memory.auto_import` (default on) turns it off. The
-  summary call now also returns up to 5 short facts per exchange (about 100
-  more output tokens); each is a searchable row (words and meaning) linked to
+  summary call now also returns up to 5 short facts per exchange (about 170
+  more output tokens), with hidden thinking off and a 1,500-token cap so no
+  reply is cut off; each is a searchable row (words and meaning) linked to
   its exchange, shown as the hit's snippet. `almanac memory summarize --facts`
   adds facts to exchanges summarized before. The recall note keeps its
   `memory.recall_chars` budget and now lists the standing decisions and open
