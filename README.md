@@ -1409,8 +1409,9 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `upstream_ca` | `""` | Extra certificate file to trust for the upstream |
 
 For one run, `ALMANAC_DISABLE=skills,agents,tools,memory,compaction` turns those
-layers off (`all` turns off every change to a request, the cheatsheet and
-playbooks included), and `ALMANAC_HOME` moves the files.
+layers off. The other names are `playbooks`, `library`, `profile`, `bundle`,
+`routing`, `cheatsheet`, `cloud`, `accounts` and `startup`; `all` is every one
+of them, so the request goes through unchanged. `ALMANAC_HOME` moves the files.
 
 ## What is stored, and where
 

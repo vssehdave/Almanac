@@ -245,6 +245,18 @@ class AgentsLayerTest(LayerCase):
             cfg = config.load()
         self.assertEqual([cfg[name]["enabled"] for name in ("skills", "tools", "memory", "compaction", "playbooks")], [False] * 5)
         self.assertEqual((cfg["startup"]["agent_chars"], cfg["cheatsheet"]["mode"]), (0, "off"))
+        self.assertEqual((cfg["routing"]["mode"], cfg["cloud"]["auto"], cfg["bundle"]["enabled"], cfg["library"]["enabled"]),
+                         ("off", False, False, False))
+
+    def test_a_named_switch_that_is_not_called_enabled_still_works(self):
+        on = {"routing": {"mode": "all"}, "cheatsheet": {"mode": "on"}, "cloud": {"auto": True}}
+        for name, check in (("routing", lambda c: c["routing"]["mode"]), ("cheatsheet", lambda c: c["cheatsheet"]["mode"]),
+                            ("cloud", lambda c: c["cloud"]["auto"])):
+            with mock.patch.object(config, "_file", return_value=on):
+                self.assertNotIn(check(config.load()), ("off", False))  # without the switch each one is on
+                with mock.patch.dict(os.environ, {"ALMANAC_DISABLE": name}):
+                    self.assertIn(check(config.load()), ("off", False))
+        self.assertTrue(config.DEFAULTS["library"]["enabled"])
 
     def test_a_malformed_block_fails_open(self):
         request = body("hello")
