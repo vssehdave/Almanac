@@ -307,7 +307,7 @@ def call(memory, name, args, cwd) -> str:
             text += f" It is a draft and is not offered until the owner approves it with `almanac playbook approve {pb['name']}`."
         return text
     if name == "library_find":
-        return library.render_found(library.search(memory.store, str(args.get("query") or ""), memory.projects.see(cwd, touch=False) or "", limit=3))
+        return library.render_found(library.search(memory.store, str(args.get("query") or ""), memory.projects.see(cwd, touch=False) or "", limit=3, min_tools=library.min_tools()))
     if name == "memory_review":  # the proxy files the review: it sees the model, this process does not
         return "Review noted. It counts only if an Opus model made this call."
     if name == "playbook_run":

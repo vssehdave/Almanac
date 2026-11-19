@@ -68,11 +68,25 @@ class WriterTest(LibraryCase):
         self.assertTrue(done["outcome"].startswith("done: "), done["outcome"])
         self.assertTrue(asked["outcome"].startswith("open: "), asked["outcome"])
 
-    def test_fewer_tool_calls_than_min_tools_writes_nothing(self):
-        self.finish("Look at the proxy", self.calls()[:4])
-        self.assertEqual(self.rows(), [])
-        self.finish("Look at the proxy again", self.calls()[:4], min_tools=4, lane="lane-2")
+    def test_fewer_tool_calls_than_min_tools_is_kept_but_not_shown(self):
+        self.finish("Look at the proxy request handling code", self.calls()[:2])
+        (row,) = self.rows()
+        self.assertEqual((row["calls"], json.loads(row["tools"])), (2, ["Bash", "Read"]))
+        self.assertIsNone(library.find(self.store, "Look at the proxy request handling code"))
+        self.assertEqual(library.listing(self.store), [])
+        self.assertEqual(library.find(self.store, "Look at the proxy request handling code", min_tools=2)[0]["id"], row["id"])
+        self.finish("No tools here", [], lane="lane-2")
         self.assertEqual(len(self.rows()), 1)
+
+    def test_an_entry_written_before_calls_were_kept_is_backfilled_and_found(self):
+        self.finish("Make the x test pass in the proxy", self.calls())
+        self.store.run("drop table library_fts")
+        self.store.run("alter table library drop column calls")
+        self.store.run("alter table library drop column tools")
+        library.setup(self.store)
+        (row,) = self.rows()
+        self.assertEqual((row["calls"], row["tools"]), (5, "[]"))
+        self.assertEqual(library.find(self.store, "Make the x test pass in the proxy")[0]["id"], row["id"])
 
     def test_a_sub_agent_exchange_writes_nothing(self):
         self.finish("Make the x test pass", self.calls(), agent="agent-1")
@@ -175,8 +189,9 @@ class MergeTest(LibraryCase):
     def test_dropped_steps_and_uses_carry_to_the_current_entry(self):
         self.finish("Make the x test pass in the proxy", self.calls())
         self.store.run("update library set uses = 3")
-        self.finish("Make the x test pass in the proxy", self.calls()[:1] + self.calls()[3:] + [("Bash", {"command": "ruff check"}, "ok", False)],
-                    lane="lane-2", min_tools=4)
+        self.finish("Make the x test pass in the proxy", self.calls()[:1] + self.calls()[3:] + [("Bash", {"command": "ruff check"}, "ok", False),
+                                                                              ("Bash", {"command": "ruff format"}, "ok", False)],
+                    lane="lane-2")
         old, new = self.rows()
         self.assertEqual(new["uses"], 3)
         self.assertIn("dropped step: Read", json.loads(new["changes"]))

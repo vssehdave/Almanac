@@ -1,8 +1,8 @@
 """Prompt library: how each solved prompt was worked, written by code and kept current.
 
-When an exchange of the main conversation ends after at least `library.min_tools` tool calls, one entry is
-written from it: the typed request, the route (the miner's step signatures, repeats collapsed), the files
-touched, the fixes (a failed step and what recovered it) and how it ended. No model is called. Text is
+When an exchange ends after at least one tool call, one entry is written from it (searches and lists show
+it once it has `library.min_tools` calls): the typed request, the route (the miner's step signatures, repeats
+collapsed), the tools and skills and agents it used, the files touched, the fixes (a failed step and what recovered it) and how it ended. No model is called. Text is
 redacted and tag-stripped like the rest of memory. When a later entry in the same project asks for the same
 thing by nearly the same route, it replaces the older one as the current entry, which is kept and linked
 under `superseded_by`; the newer one lists what changed. Rows go with their conversation (forget, prune).
@@ -15,7 +15,7 @@ import re
 import sqlite3
 import time
 
-from . import mine
+from . import config, mine
 from . import request as rq
 from .match import STOP, tokens
 from .memory import QUOTED, _first_line, clean, exchange, redact
@@ -29,12 +29,14 @@ create table if not exists library (
     prompt text not null, route text not null default '[]', skills text not null default '[]',
     agents text not null default '[]', files text not null default '[]', fixes text not null default '[]',
     outcome text not null default '', changes text not null default '[]', uses integer not null default 0,
+    tools text not null default '[]', calls integer not null default 0,
     created real not null, updated real not null, superseded_by integer not null default 0
 );
 create unique index if not exists library_exchange on library (convo, seq);
 create index if not exists library_project on library (project, superseded_by, updated);
 create virtual table if not exists library_fts using fts5(prompt, route, tokenize='porter unicode61');
 """
+MIN_TOOLS = 5  # fewer tool calls than this keeps an exchange out of searches and lists (config library.min_tools)
 PROMPT_CHARS = 600
 MAX_FILES = 20
 MAX_FIXES = 8
@@ -56,19 +58,30 @@ _ERROR = re.compile(r"(?i)error|fail|exception|denied|not found|rejected|cannot|
 _EXIT_ONLY = re.compile(r"(?i)^exit code[: ]*\d+$")
 
 
+def min_tools(cfg=None) -> int:
+    """The configured minimum of tool calls for an entry to be shown."""
+    return ((cfg if cfg is not None else config.load()).get("library") or {}).get("min_tools", MIN_TOOLS)
+
+
 def setup(store):
     """Create the tables. The search table of a store written before it existed is filled from the current entries."""
     with store.lock:
         store.db.executescript(SCHEMA)
-        if not store.run("select 1 from library_fts limit 1") and store.run("select 1 from library where superseded_by = 0 limit 1"):
-            store.run("insert into library_fts (rowid, prompt, route) select id, prompt, route from library where superseded_by = 0")
+        have = {r["name"] for r in store.run("pragma table_info(library)")}
+        for column, ddl in (("tools", "text not null default '[]'"), ("calls", "integer not null default 0")):
+            if column not in have:  # a store written before every exchange was kept
+                store.run(f"alter table library add column {column} {ddl}")
+                if column == "calls":  # the entries it holds were written at the old minimum: they stay shown
+                    store.run("update library set calls = max(5, json_array_length(route))")
+        if not store.run("select 1 from library_fts limit 1") and store.run("select 1 from library where superseded_by = 0 and prompt != '' limit 1"):
+            store.run("insert into library_fts (rowid, prompt, route) select id, prompt, route from library where superseded_by = 0 and prompt != ''")
 
 
 def _sync(store, ids):
     """Only current entries are searchable: bring the search rows of `ids` in line with the table."""
     for entry in ids:
         store.run("delete from library_fts where rowid = ?", (entry,))
-        store.run("insert into library_fts (rowid, prompt, route) select id, prompt, route from library where id = ? and superseded_by = 0", (entry,))
+        store.run("insert into library_fts (rowid, prompt, route) select id, prompt, route from library where id = ? and superseded_by = 0 and prompt != ''", (entry,))
 
 
 def _short(path) -> str:
@@ -147,11 +160,13 @@ def _fix_key(fix) -> str:
     return fix.split(" failed (")[0]
 
 
-def _merge(store, new_id, project, prompt, route, fixes):
+def _merge(store, new_id, project, prompt, route, fixes, min_tools=MIN_TOOLS):
     """Make the new entry the current one when it is the same task as a current entry of the project."""
+    if not store.run("select 1 from library l where l.id = ? and " + SHOWN, (new_id, min_tools)):  # an entry no search shows replaces nothing
+        return
     words, steps, best = set(tokens(prompt)), set(route), None
-    for old in store.run("select id, prompt, route, fixes, uses from library where project = ? and superseded_by = 0 "
-                         "and id != ? order by updated desc limit ?", (project, new_id, COMPARE)):
+    for old in store.run("select l.id, l.prompt, l.route, l.fixes, l.uses from library l where l.project = ? and l.superseded_by = 0 "
+                         "and l.id != ? and " + SHOWN + " order by l.updated desc limit ?", (project, new_id, min_tools, COMPARE)):
         old_route = json.loads(old["route"])
         same, similar = _jaccard(words, set(tokens(old["prompt"]))), _jaccard(steps, set(old_route))
         if same >= PROMPT_SAME and similar >= ROUTE_SAME and (best is None or same + similar > best[0]):
@@ -168,7 +183,7 @@ def _merge(store, new_id, project, prompt, route, fixes):
     _sync(store, [old["id"]])
 
 
-def record(memory, lane, group, seq, min_tools, now=None) -> int:
+def record(memory, lane, group, seq, min_tools=MIN_TOOLS, now=None) -> int:
     """Write the entry for `group`, the exchange just finished as number `seq` of conversation `lane`. Returns 1 when written."""
     store = memory.store
     leaf = store.run("select n.convo, n.project from node n join convo c on c.id = n.convo "
@@ -180,7 +195,7 @@ def record(memory, lane, group, seq, min_tools, now=None) -> int:
         _delete(store, [r["id"] for r in store.run("select id from library where convo = ? and seq = ? and prompt != ?",
                                                    (leaf[0]["convo"], seq, prompt))])
     calls = _calls(group)
-    if len(calls) < min_tools:
+    if not calls:
         return 0
     steps = [s for call in calls for s in call["steps"]]
     route = _collapse(steps)[:MAX_ROUTE]
@@ -197,14 +212,14 @@ def record(memory, lane, group, seq, min_tools, now=None) -> int:
            json.dumps(list(dict.fromkeys(s[7:] for s in steps if s.startswith("Skill: ")))),
            json.dumps(list(dict.fromkeys(s[7:] for s in steps if s.startswith("Agent: ")))),
            json.dumps([clean(f) for f in files[:MAX_FILES]], ensure_ascii=False),
-           json.dumps(fixes, ensure_ascii=False), outcome, now, now)
+           json.dumps(fixes, ensure_ascii=False), outcome, now, now, json.dumps(list(dict.fromkeys(c["name"] for c in calls))), len(calls))
     with store.lock:
         cursor = store.db.execute("insert or ignore into library (convo, seq, project, prompt, route, skills, agents, files, fixes, "
-                                  "outcome, created, updated) values (?,?,?,?,?,?,?,?,?,?,?,?)", row)
+                                  "outcome, created, updated, tools, calls) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
         if not cursor.rowcount:  # this exchange already has its entry
             return 0
         _sync(store, [cursor.lastrowid])
-        _merge(store, cursor.lastrowid, row[2], prompt, route, fixes)
+        _merge(store, cursor.lastrowid, row[2], prompt, route, fixes, min_tools)
     return 1
 
 
@@ -215,7 +230,7 @@ def observe(memory, ctx, messages, reply):
         if not turns or reply.get("stop_reason") == "tool_use":  # nothing finished yet
             return 0
         group = messages[turns[-1]:] + [{"role": "assistant", "content": reply["content"]}]
-        written = record(memory, ctx.lane, group, len(turns) - 1, (ctx.cfg.get("library") or {}).get("min_tools", 5))
+        written = record(memory, ctx.lane, group, len(turns) - 1, min_tools(ctx.cfg))
         if written:  # `almanac report` counts these; the lane keeps the record shaped like the request records
             ctx.proxy.log.write({"ts": time.time(), "kind": "library", "lane": ctx.lane, "written": written})
         return written
@@ -264,9 +279,10 @@ def drop_from(store, convo_id, seq):
 
 # ---- finding and showing ---------------------------------------------------------------------------------
 
+SHOWN = "l.calls >= ? and l.prompt != ''"  # what a search or a list shows: enough tool calls, and not a usage-only row
 _SQL = ("select l.*, n.id node from library_fts f join library l on l.id = f.rowid "
         "join node n on n.convo = l.convo and n.kind = 'leaf' and n.seq = l.seq "  # an entry whose exchange is gone cannot be read back: skipped
-        "where library_fts match ? and l.superseded_by = 0")
+        "where library_fts match ? and l.superseded_by = 0 and " + SHOWN)
 
 
 def _score(query, prompt) -> float:
@@ -278,7 +294,7 @@ def _score(query, prompt) -> float:
     return round(shared / len(words), 3) if words and shared >= (MIN_SHARED_LONG if len(words) > LONG else MIN_SHARED) else 0.0
 
 
-def search(store, text, project="", limit=3, floor=0.0) -> list:
+def search(store, text, project="", limit=3, floor=0.0, min_tools=MIN_TOOLS) -> list:
     """Current entries that match `text`, as (score, entry) best first: those of `project` before any other project's,
     then by score, then the newer. The score is the word overlap of the text with the entry's request. Deterministic."""
     query = set(tokens(text))
@@ -289,7 +305,7 @@ def search(store, text, project="", limit=3, floor=0.0) -> list:
     try:
         for scope in ([project] if project else []) + [None]:
             rows = store.run(_SQL + (" and l.project = ?" if scope else "") + " order by bm25(library_fts), l.id limit ?",
-                             (match, *([scope] if scope else []), CANDIDATES))
+                             (match, min_tools, *([scope] if scope else []), CANDIDATES))
             found.update({r["id"]: dict(r) for r in rows})
     except sqlite3.OperationalError:  # a store opened without the library tables
         return []
@@ -299,9 +315,9 @@ def search(store, text, project="", limit=3, floor=0.0) -> list:
     return scored[:limit]
 
 
-def find(store, text, project="", floor=0.0):
+def find(store, text, project="", floor=0.0, min_tools=MIN_TOOLS):
     """The best current entry for `text` as (entry, score): in `project` first, then in any project. None when nothing scores."""
-    best = search(store, text, project, 1, floor)
+    best = search(store, text, project, 1, floor, min_tools)
     return (best[0][1], best[0][0]) if best else None
 
 
@@ -368,10 +384,10 @@ def render_found(found) -> str:
     return "\n\n".join("\n".join([f"Asked: {_piece(entry['prompt'], 200)}", *lines(entry, NOTE_CHARS)]) for _, entry in found) + "\n\n" + QUOTED
 
 
-def listing(store, project=None) -> list:
+def listing(store, project=None, min_tools=MIN_TOOLS) -> list:
     """Current entries, oldest first, of one project or of all."""
-    return [dict(r) for r in store.run("select * from library where superseded_by = 0" + (" and project = ?" if project else "") + " order by id",
-                                       (project,) if project else ())]
+    return [dict(r) for r in store.run("select * from library l where l.superseded_by = 0 and " + SHOWN + (" and l.project = ?" if project else "")
+                                       + " order by l.id", (min_tools, *([project] if project else [])))]
 
 
 def _found(route, prompt, found) -> bool:
@@ -389,15 +405,15 @@ def _found(route, prompt, found) -> bool:
     return False
 
 
-def candidates(store, found=()) -> list:
+def candidates(store, found=(), min_tools=MIN_TOOLS) -> list:
     """Miner candidates from the current entries used at least MIN_USES times whose route is all commands, most used first.
 
     Entries of one route make one candidate. Work the transcript miner already found (`found`), a route a stored playbook's
     triggers already match, and one already compiled are left out: the existing compile step takes it from here.
     """
     done, names, made, convos = mine._state()["compiled"], Projects(store), {}, {}
-    for e in store.run("select convo, project, prompt, route, uses from library where superseded_by = 0 and uses >= ? "
-                       "order by uses desc, id", (MIN_USES,)):
+    for e in store.run("select l.convo, l.project, l.prompt, l.route, l.uses from library l where l.superseded_by = 0 and l.uses >= ? and "
+                       + SHOWN + " order by l.uses desc, l.id", (MIN_USES, min_tools)):
         route = tuple(_list(e["route"]))
         if not mine.mechanical(route) or _found(route, e["prompt"], found) or mine._matched([{"text": e["prompt"]}]):
             continue

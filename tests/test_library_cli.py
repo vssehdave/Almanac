@@ -42,7 +42,8 @@ class CliCase(tl.LibraryCase, Home):
     def twice(self):
         """The same task done twice: an old, superseded entry and the current one that lists the changes."""
         self.finish(PROMPT, self.calls(), lane="lane-a")
-        self.finish(PROMPT, self.calls()[:1] + self.calls()[3:] + [("Bash", {"command": "ruff check"}, "ok", False)], lane="lane-b", min_tools=4)
+        self.finish(PROMPT, self.calls()[:1] + self.calls()[3:] + [("Bash", {"command": "ruff check"}, "ok", False),
+                                                          ("Bash", {"command": "ruff format"}, "ok", False)], lane="lane-b")
         return self.rows()
 
 
@@ -137,7 +138,7 @@ class ToolTest(CliCase):
 class ReportTest(CliCase):
     def test_the_writer_logs_each_entry_it_writes(self):
         self.finish(PROMPT, self.calls())
-        self.finish("Look at it", self.calls()[:2], lane="lane-b")  # too few tool calls: no entry, no record
+        self.finish("Look at it", [], lane="lane-b")  # no tool call: no entry, no record
         self.assertEqual([(r["kind"], r["written"]) for r in self.logged], [("library", 1)])
 
     def test_report_has_one_line_with_entries_written_and_notes_shown_in_the_last_day(self):

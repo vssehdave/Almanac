@@ -68,7 +68,7 @@ DEFAULTS = {
         "semantic": True,  # search by meaning when the optional packages and model are installed (see semantic.py)
     },
     "library": {
-        "min_tools": 5,  # an exchange with at least this many tool calls leaves an entry in the prompt library (no model call; deleted with its conversation)
+        "min_tools": 5,  # every exchange with a tool call leaves an entry in the prompt library (no model call; deleted with its conversation); searches and lists show those with at least this many calls
         "inject": True,  # tell Claude how an earlier, matching prompt was solved, when no playbook matches (see library.py)
         "threshold": 0.6,  # share (0 to 1) of a stored prompt's words the typed text must contain before that note is shown
         "note_chars": 800,  # most characters of that note

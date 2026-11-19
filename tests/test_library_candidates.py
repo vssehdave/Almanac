@@ -24,8 +24,8 @@ class LibraryCandidateTest(tm.Home):
         for key, name in dict(names).items():
             store.run("insert into project (key, name, first_seen, last_seen) values (?,?,1,1)", (key, name))
         for n, (prompt, route, uses, newer) in enumerate(rows, 1):
-            store.run("insert into library (convo, seq, project, prompt, route, uses, created, updated, superseded_by) "
-                      "values (?,?,?,?,?,?,?,?,?)", (n, 0, project if isinstance(project, str) else project[n - 1], prompt, json.dumps(route),
+            store.run("insert into library (convo, seq, project, prompt, route, uses, created, updated, superseded_by, calls) "
+                      "values (?,?,?,?,?,?,?,?,?,5)", (n, 0, project if isinstance(project, str) else project[n - 1], prompt, json.dumps(route),
                                                       uses, 1.0, 1.0, newer))
         store.close()
 
@@ -67,7 +67,7 @@ class LibraryCandidateTest(tm.Home):
     def test_the_step_form_of_a_found_candidate_is_compared_with_the_step_form(self):
         store = Store(self.alm / "almanac.db")
         library.setup(store)
-        store.run("insert into library (convo, seq, project, prompt, route, uses, created, updated) values (1,0,'p','ship it',?,2,1,1)",
+        store.run("insert into library (convo, seq, project, prompt, route, uses, created, updated, calls) values (1,0,'p','ship it',?,2,1,1,5)",
                   (json.dumps(FORMS),))
         found = [{"tools": ["Bash: rtk git", "Bash: python -m", "Bash: npm run"], "steps": FORMS + ["Bash: git push"], "examples": ["something else"]}]
         self.assertEqual(library.candidates(store, found), [])

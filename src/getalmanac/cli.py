@@ -659,7 +659,7 @@ def _library(rest):
             if not key:
                 print(f"almanac: no project is called {args.project!r}; see `almanac projects`", file=sys.stderr)
                 return 2
-        entries = library.listing(memory.store, key)
+        entries = library.listing(memory.store, key, library.min_tools())
         for e in entries:
             _print(f"{e['id']:>5}  {time.strftime('%Y-%m-%d', time.localtime(e['created']))}  {e['uses']:>4}  {e['prompt'][:70]}")
         if not entries:

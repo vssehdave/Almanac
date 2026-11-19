@@ -194,8 +194,8 @@ class FindTest(NoteCase):
 
     def test_this_project_before_any_other_then_other_projects_and_ties_by_id(self):
         self.solved()
-        self.store.run("insert into library (convo, seq, project, prompt, created, updated) "
-                       "select convo, 5, 'other', prompt, 1, 1 from library")
+        self.store.run("insert into library (convo, seq, project, prompt, created, updated, calls) "
+                       "select convo, 5, 'other', prompt, 1, 1, 5 from library")
         self.store.run("insert into node (convo, project, kind, seq, ts, title, text) select convo, 'other', 'leaf', 5, 1, 't', 'x' from library limit 1")
         library._sync(self.store, [r["id"] for r in self.rows()])
         mine, other = self.rows()
