@@ -641,7 +641,7 @@ class PlaybookLayer:
         """The note for the prompt-library entry that best matches the typed text, or "" (decided once per turn, so counted once)."""
         cfg = ctx.cfg.get("library") or {}
         hit = library.find(ctx.store, low, ctx.project or "", cfg.get("threshold", library.THRESHOLD), library.min_tools(ctx.cfg))
-        if not hit:
+        if not hit or f"[{hit[0]['node']}]" in (ctx.store.get(f"recall:{ctx.lane}") or ""):  # the recall note already cites it
             return ""
         entry, score = hit
         entry["uses"] = library.bump(ctx.store, entry["id"])
