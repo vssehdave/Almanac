@@ -9,7 +9,7 @@ from contextlib import redirect_stdout
 
 from helpers import Rig, SESSION, sse
 
-from getalmanac import config, embed, mcp, project
+from getalmanac import cheatsheet, config, embed, mcp, project
 from getalmanac.memory import Memory, MemoryLayer, ProjectLayer, exchange, redact
 from getalmanac.store import Store
 
@@ -624,6 +624,10 @@ class SubagentTest(Case):
         child = self.store.run("select id from convo where parent = ?", (self.parent,))[0]["id"]
         self.store.merge(f"main:{SESSION}", answered="claude-sonnet-5")
         self.assertEqual(self.memory.gate(SESSION), "")  # a model whose review would not count is never held
+        with mock.patch.dict(cheatsheet.ALIASES, {"zenith": "opus"}):  # the one rule for "is this Opus" knows aliases
+            self.store.merge(f"main:{SESSION}", answered="zenith-1")
+            self.assertIn(f"{child}:", self.memory.gate(SESSION))
+        self.store.run("delete from state where key = 'gateheld:main-lane'")
         self.store.merge(f"main:{SESSION}", answered="claude-opus-5")
         self.assertIn(f"{child}:", self.memory.gate(SESSION))
         self.assertIn("memory_review", self.memory.gate(SESSION))

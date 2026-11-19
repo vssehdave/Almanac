@@ -21,6 +21,7 @@ import time
 import zlib
 
 from . import embed, semantic
+from .cheatsheet import family
 from . import request as rq
 from .match import STOP, tokens
 from .project import Projects, tool_paths
@@ -833,7 +834,7 @@ class Memory:
         main = self.store.get(f"main:{session}") or {}
         lane = main.get("lane") or ""
         own = self.convo_of(lane)
-        if not own or "opus" not in (main.get("answered") or ""):
+        if not own or family(main.get("answered") or "") != "opus":
             return ""
         pending = self.store.run("select id, title from convo where parent = ? and review = 'pending' order by id", (own["id"],))
         held = self.store.get(f"gateheld:{lane}") or 0
@@ -1243,7 +1244,7 @@ class MemoryLayer:
     def _review(self, ctx, orig, reply):
         """File the verdict of a memory_review call in the reply, when the model that was asked is an Opus one. The tool
         itself only acknowledges: this is the one place that knows the model. Only pending sub-agent work changes."""
-        if "opus" not in self._model(ctx, orig):
+        if family(self._model(ctx, orig)) != "opus":
             return
         for block in reply.get("content") or []:
             if not (isinstance(block, dict) and block.get("type") == "tool_use" and str(block.get("name") or "").endswith("memory_review")

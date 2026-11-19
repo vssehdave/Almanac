@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from . import config
+from .cheatsheet import family
 
 LOG_LIMIT = 20 * 1024 * 1024
 
@@ -282,7 +283,7 @@ def agents(records) -> dict:
         now += step
         peak = max(peak, now)
     # shortcut: a build job is spotted by words in the first task text; a task worded differently is missed
-    building = [t["agent"] for t in threads if "opus" in t["model"].lower() and not AUDIT.search(t["agent"]) and BUILD.search(t["task"])]
+    building = [t["agent"] for t in threads if family(t["model"]) == "opus" and not AUDIT.search(t["agent"]) and BUILD.search(t["task"])]
     return {"threads": threads, "peak": peak, "building": building}
 
 
