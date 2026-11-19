@@ -771,15 +771,17 @@ class Memory:
         fused = {hit["id"]: 1 / (RRF_K + rank) for rank, hit in enumerate(hits, 1)}
         for rank, (node_id, _) in enumerate(near, 1):
             fused[node_id] = fused.get(node_id, 0) + 1 / (RRF_K + rank)
-        said = {}  # exchange id -> the facts of it that matched, by words first
-        for found in facts:  # a fact is a finer record of its exchange: its rank counts for the exchange
-            for rank, node_id in enumerate(dict.fromkeys(n for n, _ in found), 1):
-                fused[node_id] = fused.get(node_id, 0) + 1 / (RRF_K + rank)
+        for rank, hit in enumerate(deep, 1):  # exchanges only their transcript matches (an id or error inside tool output)
+            fused[hit["id"]] = fused.get(hit["id"], 0) + 1 / (RRF_K + rank)
+        said, late = {}, {}  # said: exchange id -> its facts that matched, by words first; late: exchanges only a fact finds
+        for found in facts:
             for node_id, text in found:
                 if text not in said.setdefault(node_id, []):
                     said[node_id].append(text)
-        for rank, hit in enumerate(deep, 1):  # exchanges only their transcript matches (an id or error inside tool output)
-            fused[hit["id"]] = fused.get(hit["id"], 0) + 1 / (RRF_K + rank)
+                if node_id not in fused:  # a fact adds no score to an exchange found another way (most have no facts): it only adds one
+                    late.setdefault(node_id, len(late))
+        for node_id, n in late.items():
+            fused[node_id] = 1e-3 / (1 + n)  # below any rank-fusion score (at least 1/(RRF_K + 60)), in the order the facts came
         hits += deep
         known = {hit["id"] for hit in hits}
         extra = [n for n in dict.fromkeys([n for n, _ in near] + list(said)) if n not in known]
@@ -789,8 +791,9 @@ class Memory:
             hits.append(dict(row, snippet=snippet(row["text"], terms)))
         for hit in hits:
             hit["score"] = round(fused[hit["id"]], 5)
-            if hit["id"] in said:  # the matching fact says it better than a stretch of the text
-                hit["snippet"] = ("Facts: " + "; ".join(said[hit["id"]][:3]))[:260]
+            if hit["id"] in said:  # a matching fact is shown; the stretch of text that holds the query words stays when there is one
+                facts_said = "Facts: " + "; ".join(said[hit["id"]][:3])
+                hit["snippet"] = (hit["snippet"] + " | " + facts_said[:140] if terms & set(tokens(hit["snippet"])) else facts_said)[:400]
         hits.sort(key=lambda h: (-h["score"], -h["ts"], h["id"]))
         return hits[:limit]
 

@@ -41,6 +41,23 @@ class Facts(Base):
         self.assertTrue(hit["snippet"].startswith("Facts: "))
         self.assertIn("staging credential", hit["snippet"])
 
+    def test_a_fact_adds_no_score_to_an_exchange_found_another_way(self):
+        t = self.session()
+        for i in range(3):
+            t.turn(ti.stamp(2, i), f"question {i} about the parser", f"answer {i}", tool=("Edit", {"file_path": self.a + "/a.py"}))
+        t.turn(ti.stamp(2, 3), "an unrelated chore", "done", tool=("Edit", {"file_path": self.a + "/b.py"}))
+        self.run_import(t.write())
+        ids = [r["id"] for r in self.store.run("select id from node where kind = 'leaf' order by seq, id")]
+        before = [h["id"] for h in self.memory.search("question about the parser", limit=8)]
+        self.assertEqual(sorted(before), sorted(ids[:3]))
+        self.memory.set_summary(before[-1], "T", "S", "done", ["question about the parser"])  # a fact on the last-ranked hit
+        self.memory.set_summary(ids[3], "T", "S", "done", ["question about the parser"])  # a fact on an exchange nothing else finds
+        after = [h["id"] for h in self.memory.search("question about the parser", limit=8)]
+        self.assertEqual(after, before + [ids[3]])  # the order holds; the fact-only exchange comes last
+        shown = {h["id"]: h["snippet"] for h in self.memory.search("question about the parser", limit=8)}
+        self.assertIn(" | Facts: ", shown[before[-1]])  # a text match is kept and the fact added
+        self.assertTrue(shown[ids[3]].startswith("Facts: "))  # no text match: the fact is the snippet
+
     def test_a_summary_without_facts_still_works(self):
         self.stored()
         node = self.leaf()
