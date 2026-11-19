@@ -181,6 +181,20 @@ class AgentsLayerTest(LayerCase):
         self.assertGreater(self.rig.records()[-1]["agents"]["saved_chars"], 400)
         self.assertTrue(listing_of(self.rig.sent())["slides"].endswith("…"))  # the skills layer still ran
 
+    def test_recently_used_agents_stay_full(self):
+        self.store.mark_used("agent", "infra-planner", "/repo/demo", "x1")
+        self.store.mark_used("agent", "infra-planner", "/repo/demo", "x2")
+        self.rig.messages(body("fix the failing test"))
+        self.assertEqual(self.agents()["infra-planner"], AGENTS["infra-planner"])
+        self.assertTrue(self.agents()["crew:db-reviewer"].endswith("…"))
+
+    def test_an_agent_call_is_remembered_as_used(self):
+        self.rig.upstream.respond = lambda req: (200, {"content-type": "text/event-stream"}, sse(
+            "ok", tool=("Agent", {"subagent_type": "infra-planner", "prompt": "plan it"})))
+        self.rig.messages(body("plan the infrastructure"))
+        self.rig.records()
+        self.assertEqual(self.store.recently_used("agent", "/repo/demo"), {"infra-planner": 1})
+
     def test_matched_agent_is_shown_in_full_next_to_the_message(self):
         self.rig.messages(body("review this database migration query"))
         sent = self.agents()

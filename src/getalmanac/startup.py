@@ -221,6 +221,10 @@ class AgentsLayer(_ListingLayer):
     def searchable(self, description: str) -> str:
         return _untooled(description)
 
+    def pinned(self, ctx) -> list:
+        used = ctx.store.recently_used("agent", _project(ctx)) if ctx.store is not None else {}
+        return sorted(name for name, count in used.items() if count >= 2)
+
 
 class ToolsLayer:
     """Defer the schemas of rarely used tools until the model asks for them."""
@@ -287,7 +291,7 @@ class ToolsLayer:
                 msg["content"].insert(0, note)
 
     def observe(self, ctx, orig, reply):
-        """Remember which tools and skills this conversation used, to keep them loaded next time."""
+        """Remember which tools, skills and agent types this conversation used, to keep them loaded next time."""
         if ctx.store is None:
             return
         for block in reply["content"]:
@@ -298,3 +302,7 @@ class ToolsLayer:
                 skill = (block.get("input") or {}).get("skill")
                 if skill:
                     ctx.store.mark_used("skill", str(skill), _project(ctx), ctx.lane)
+            if block.get("name") in ("Agent", "Task"):
+                kind = (block.get("input") or {}).get("subagent_type")
+                if kind:
+                    ctx.store.mark_used("agent", str(kind), _project(ctx), ctx.lane)
