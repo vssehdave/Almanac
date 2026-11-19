@@ -58,6 +58,9 @@ are the method, in the order a task runs.
   Opus does one narrow, read-only audit at a time. Never more than two agents
   at once. You keep the decisions, the specs, the review of what comes back,
   the merge and the report. Small edits and config you do yourself.
+- Review every sub-agent's finished work before you use or report it: check its
+  claims against the code or output, then call memory_review with a one-line
+  verdict (no number covers all of this conversation's sub-agents).
 - An agent starts knowing nothing. Its brief holds everything it needs: the
   exact folder and branch, what already exists, what to build, the commands to
   run and how to run them, the rules it must keep (commit format, what never to

@@ -111,7 +111,7 @@ class _ListingLayer:
         return set()
 
     def pinned(self, ctx) -> list:
-        """Names the project keeps using (two of its last ten conversations): shown in full, snapshotted once a day."""
+        """Names the project keeps using (two of its last thirty main conversations): shown in full, snapshotted once a day."""
         if not self.KIND or ctx.store is None:
             return []
         from . import library  # library imports the layer that imports this module
@@ -244,11 +244,12 @@ class ToolsLayer:
 
         def promoted():
             from . import library  # library imports the layer that imports this module
-            used = library.recently_used(ctx.store, "tool", _project(ctx)) if ctx.store is not None else {}
+            used = library.recently_used(ctx.store, "tool", _project(ctx), agent_type=sub) if ctx.store is not None else {}
             return sorted(name for name, count in used.items() if count >= cfg["promote_after"])
 
+        sub = ctx.agent_type if ctx.agent and ctx.agent_type.lower() != "fork" else None  # a sub-agent keeps what its own type used
         def decide():
-            keep = set(_daily(ctx, "tools", promoted))  # a tool the message names is loaded by ToolSearch, not kept here
+            keep = set(_daily(ctx, "tools" if sub is None else f"tools:{sub}", promoted))  # a tool the message names is loaded by ToolSearch, not kept here
             for msg in messages:  # a tool this conversation already called must stay loaded
                 for b in rq.blocks(msg):
                     if b.get("type") == "tool_use":

@@ -9,6 +9,7 @@ from helpers import Rig, sse
 
 from getalmanac import config, library, startup
 from getalmanac.match import Index, tokens
+from getalmanac.memory import Memory
 from getalmanac.store import Store
 
 LONG = " It also covers many adjacent situations and edge cases that take a lot of words to describe in full."
@@ -84,7 +85,7 @@ class LayerCase(unittest.TestCase):
         self.rig = Rig(layers=[startup.SkillsLayer(), startup.AgentsLayer(), startup.ToolsLayer()], store=self.store)
         self.addCleanup(self.rig.close)
         self.addCleanup(self.store.close)
-        library.setup(self.store)
+        Memory(self.store)  # the tables a real store has: conversations and the library
 
     def used(self, kind, name, *convos, project="/repo/demo"):
         """Library rows of exchanges in these conversations that used `name`: what the pinning reads."""
@@ -308,6 +309,20 @@ class ToolsLayerTest(LayerCase):
         with mock.patch.object(startup, "_today", return_value="2099-01-01"):  # the project's snapshot is taken per day
             self.rig.messages(body("third conversation"))
         self.assertEqual(self.deferred(), ["PowerShell"])
+
+    def test_a_tool_a_subagent_type_uses_stays_loaded_for_that_type_only(self):
+        for convo in (7, 8):
+            self.store.run("insert into convo (id, lane, session, project, started, updated, parent, agent_type) "
+                           "values (?, ?, 's', '/repo/demo', 1, 1, 1, 'Explore')", (convo, f"sub-{convo}"))
+        self.used("tool", "ScheduleWakeup", 7, 8)
+        sub = {"x-claude-code-agent-id": "a1", "x-claude-code-agent-type": "Explore", "x-claude-code-request-class": "subagent"}
+        with mock.patch.object(startup, "_today", return_value="2099-01-01"):
+            self.rig.messages(body("main thread"))
+            self.assertEqual(self.deferred(), ["PowerShell", "ScheduleWakeup"])  # the main thread does not inherit it
+            self.rig.messages(body("explore it"), extra=sub)
+            self.assertEqual(self.deferred(), ["PowerShell"])
+            self.rig.messages(body("plan it"), extra=dict(sub, **{"x-claude-code-agent-id": "a2", "x-claude-code-agent-type": "Plan"}))
+            self.assertEqual(self.deferred(), ["PowerShell", "ScheduleWakeup"])  # nor does another type
 
     def test_new_conversations_of_a_project_get_identical_tools(self):
         self.rig.messages(body("fix the failing test"), session="s1")

@@ -52,7 +52,7 @@ DEFAULTS = {
         # deferred unless the conversation or the project's history calls for them
         "cold": ["Artifact", "ListAgents", "PowerShell", "ReportFindings", "ScheduleWakeup", "SendFeedback"],
         "hot": [],  # tool names never deferred
-        "promote_after": 2,  # conversations in the last 10 that used a cold tool before it stays loaded
+        "promote_after": 2,  # conversations in the last 30 (of the same kind: main, or one sub-agent type) that used a cold tool before it stays loaded
     },
     "memory": {
         "enabled": True,
