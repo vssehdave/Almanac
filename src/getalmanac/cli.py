@@ -10,7 +10,7 @@ import sys
 import time
 from urllib.parse import urlsplit
 
-from . import __version__, accounts, config, launcher, report, summarize, upstream
+from . import __version__, accounts, autoimport, config, launcher, report, summarize, upstream
 
 USAGE = """almanac: a local proxy for Claude Code
 
@@ -22,7 +22,7 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac memory search WORDS  search stored conversations (--project NAME, --all)
   almanac memory show ID       read one stored exchange or topic in full
   almanac memory recent        the latest conversations, by project
-  almanac memory summarize     model summaries for imported exchanges (--project NAME, --limit N, --dry-run)
+  almanac memory summarize     model summaries for imported exchanges (--project NAME, --limit N, --dry-run, --facts)
   almanac memory import PATH... store past Claude Code transcripts (a ~/.claude/projects folder name, folder or .jsonl; --days N, --dry-run)
   almanac memory forget        delete stored conversations (--project NAME | --conversation ID | --all; --force for open ones)
   almanac cloud packet         print the hand-off packet for a Claude Code cloud session (--conversation ID)
@@ -130,6 +130,7 @@ def _status(_rest):
     counts = memory.counts()
     print(f"  memory     {counts['convos']} conversation(s), {counts['exchanges']} exchange(s), {counts['topics']} topic(s)")
     print(f"  summaries  {summarize.line(memory, cfg)}")
+    print(f"  auto import {autoimport.line(memory.store) if cfg['memory']['auto_import'] else 'off (memory.auto_import)'}")
     print(f"  statuses   {_status_counts(memory)}")
     seen = report.render_routing(records)
     if seen:
@@ -242,6 +243,7 @@ def _memory(rest):
     refine.add_argument("--project")
     refine.add_argument("--limit", type=int, help="most calls (default: what is left of memory.summary_daily_calls today)")
     refine.add_argument("--dry-run", action="store_true", help="make no calls; print how many exchanges would be summarized")
+    refine.add_argument("--facts", action="store_true", help="instead, add searchable facts to exchanges that were summarized before facts existed")
     forget = sub.add_parser("forget")
     group = forget.add_mutually_exclusive_group(required=True)
     group.add_argument("--project")
@@ -272,9 +274,13 @@ def _memory(rest):
             print(f"almanac: {error}", file=sys.stderr)
             return 2
         _print(importer.render(report, args.dry_run))
+        if not args.dry_run:
+            left = memory.embed_all()
+            print("vectors: no embedding model installed (almanac semantic install)" if left is None
+                  else f"vectors: {left} exchange(s) and fact(s) still wait for one" if left else "vectors: every exchange and fact has one")
     elif args.cmd == "summarize":
         summarize.refine(memory, config.load(), project=project_key(args.project) if args.project else None,
-                         limit=args.limit, dry_run=args.dry_run)
+                         limit=args.limit, dry_run=args.dry_run, facts=args.facts)
     elif args.cmd == "recent":
         _print(mcp.render_projects(memory))
         print(f"exchanges by status: {_status_counts(memory)}")

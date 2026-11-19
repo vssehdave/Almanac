@@ -1305,7 +1305,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac memory search WORDS` | Search stored conversations (`--project NAME`, `--all`) |
 | `almanac memory show ID` | Read one stored exchange or topic |
 | `almanac memory recent` | The latest conversations, by project |
-| `almanac memory summarize` | Ask the summary model (`memory.summary_model`) for a title, summary and status for imported exchanges that have none, newest first. Uses the login in `~/.claude` only, sent to api.anthropic.com only. `--project NAME`, `--limit N` (default: what is left of `memory.summary_daily_calls` today; an explicit number may pass it), `--dry-run`. Stops when the API answers 401, 403, 429 or 529 |
+| `almanac memory summarize` | Ask the summary model (`memory.summary_model`) for a title, summary and status for imported exchanges that have none, newest first. Uses the login in `~/.claude` only, sent to api.anthropic.com only. `--project NAME`, `--limit N` (default: what is left of `memory.summary_daily_calls` today; an explicit number may pass it), `--dry-run`, `--facts` (add searchable facts to exchanges summarized before facts existed). Stops when the API answers 401, 403, 429 or 529 |
 | `almanac memory import PATH...` | Store past Claude Code transcripts (a folder name under `~/.claude/projects`, a folder or a `.jsonl`), grouped by the project each exchange worked on. `--days N`, `--dry-run` |
 | `almanac memory forget` | Delete conversations and their saved choices (`--project NAME`, `--conversation ID`, `--all`). Keeps any changed in the last hour unless you add `--force` |
 | `almanac cloud packet` | Print the hand-off packet for a cloud session (`--conversation ID`). Sends nothing |
@@ -1363,6 +1363,8 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `memory.keep_days` | `365` | Delete conversations untouched this long (`0` keeps all) |
 | `memory.summary_model` | `claude-haiku-5-5` | Model that writes exchange summaries in the background (`""` turns it off) |
 | `memory.summary_daily_calls` | `300` | Most summary calls per day |
+| `memory.auto_import` | `true` | While the proxy runs, import new Claude Code transcripts (from `~/.claude` only) of projects already stored, once an hour; then summarize them and make their vectors |
+| `memory.auto_import_days` | `14` | Transcripts older than this many days are not imported |
 | `memory.always_load` | `false` | List the memory tools in every session start (adds their schemas) instead of loading them through ToolSearch |
 | `memory.semantic` | `true` | Search by meaning when the packages and the model are installed |
 | `library.min_tools` | `5` | Tool calls an exchange needs before it leaves an entry in the prompt library |

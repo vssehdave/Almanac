@@ -32,6 +32,7 @@ class Store:
         self.db.row_factory = sqlite3.Row
         config.private(self.path, 0o600)  # before the log files are made: they take this file's mode
         with self.lock:
+            self.db.execute("pragma busy_timeout=5000")  # wait up to 5 s for another connection's write (the background import has its own)
             self.db.execute("pragma secure_delete=on")  # deleted text is overwritten, not left in the file
             self.db.execute("pragma journal_mode=wal")
             self.db.execute("pragma synchronous=normal")

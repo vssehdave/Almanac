@@ -99,7 +99,7 @@ class SummaryTest(Case):
         self.assertFalse([k for k in call["headers"] if k.startswith("x-claude-code")])
         self.assertEqual(call["path"], "/v1/messages?beta=true")
         self.assertEqual(sent["system"], [{"type": "text", "text": IDENTITY}, {"type": "text", "text": summarize.INSTRUCTION}])
-        self.assertEqual((sent["model"], sent["max_tokens"], "stream" in sent, "tools" in sent), (MODEL, 1000, False, False))
+        self.assertEqual((sent["model"], sent["max_tokens"], "stream" in sent, "tools" in sent), (MODEL, 1500, False, False))
         self.assertIn("retry helper", sent["messages"][0]["content"])
         used = summarize.today(self.store)
         self.assertEqual((used["calls"], used["in"], used["out"]), (1, 50, 20))
@@ -207,7 +207,7 @@ class SummaryTest(Case):
         self.ask("From now on keep retries at five in the fetch module")
         self.assertEqual(self.leaves()[2]["status"], "decision")
         self.assertEqual(self.leaves()[2]["mstatus"], "noise")  # the model's word is kept, the rule's wins
-        self.assertEqual(summarize._parse(json.loads(message('{"title": "a", "summary": "b"}')[2])), ("a", "b", ""))
+        self.assertEqual(summarize._parse(json.loads(message('{"title": "a", "summary": "b"}')[2])), ("a", "b", "", None))
 
     def test_the_model_cannot_make_an_exchange_a_standing_decision(self):
         self.verdict = message(json.dumps({"title": TITLE, "summary": SUMMARY, "status": "decision"}))

@@ -22,6 +22,24 @@
   installed, and a plugin added to `profile.off_plugins` now also drops its
   user-settings hooks by name.
 
+- **Memory: complete without a command, finer records, a fuller recall note.**
+  While the proxy runs, a background thread imports new or grown Claude Code
+  transcripts from `~/.claude/projects` (never any other config folder) about
+  30 seconds after start and then once an hour: sessions at most
+  `memory.auto_import_days` (14) old, not written to for an hour, for projects
+  the store already holds. It then runs the summary pass (personal login,
+  within `memory.summary_daily_calls`) and makes a vector for every exchange and
+  fact that lacks one, with the local model (no API tokens; it says so when no
+  model is installed). `memory.auto_import` (default on) turns it off. It also stays off when `ALMANAC_HOME` points anywhere but `~/.almanac`, unless that home's `config.json` sets `memory.auto_import` to `true`, so a scratch copy of the store never imports real transcripts. The
+  summary call now also returns up to 5 short facts per exchange (about 170
+  more output tokens), with hidden thinking off and a 1,500-token cap so no
+  reply is cut off; each is a searchable row (words and meaning) linked to
+  its exchange, shown as the hit's snippet. `almanac memory summarize --facts`
+  adds facts to exchanges summarized before. The recall note keeps its
+  `memory.recall_chars` budget and now lists the standing decisions and open
+  work of the project's recent conversations first, then related hits.
+  `almanac status` shows the last import round.
+
 - **Memory: sub-agents know their parent conversation, and their work is
   indexed.** A sub-agent's first message gets one frozen line naming the
   conversation it belongs to and the call `memory_search {"conversation": id}`

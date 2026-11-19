@@ -123,6 +123,29 @@ class Refine(ti.ImportBase):
         self.assertIn("1 summarized", out)
         self.assertEqual(summarize.today(self.store)["calls"], 1)
 
+    def test_the_call_asks_for_facts_and_stores_them(self):
+        self.stored(n=1)
+        with mock.patch.dict(ANSWER, {"facts": ["Trigger is 100k tokens", "parser.py: fix off-by-one"]}):
+            self.refine()
+        self.assertIn("facts", FakeConn.sent[0]["body"]["system"][1]["text"])
+        self.assertEqual(FakeConn.sent[0]["body"]["thinking"], {"type": "disabled"})
+        row = self.store.run("select id, facts from node where kind = 'leaf'")[0]
+        self.assertEqual(row["facts"], 1)
+        self.assertEqual([r["text"] for r in self.store.run("select text from fact where node = ?", (row["id"],))],
+                         ["Trigger is 100k tokens", "parser.py: fix off-by-one"])
+
+    def test_facts_backfill_touches_only_the_facts(self):
+        self.stored(n=2)
+        first = self.store.run("select id from node where kind = 'leaf' order by seq")[0]["id"]
+        self.memory.set_summary(first, "Old title", "Old summary.", "done")  # summarized before facts existed
+        with mock.patch.dict(ANSWER, {"facts": ["A new fact"]}):
+            report, _ = self.refine(facts=True)
+        self.assertEqual(report["summarized"], 1)  # only the exchange that has a summary and no facts yet
+        row = self.store.run("select title, summary, facts from node where id = ?", (first,))[0]
+        self.assertEqual((row["title"], row["summary"], row["facts"]), ("Old title", "Old summary.", 1))
+        self.assertEqual(self.memory.search("new fact")[0]["id"], first)
+        self.assertEqual(self.refine(facts=True)[0]["pending"], 0)
+
     def test_old_work_is_never_reopened(self):
         self.stored(days=30, n=1)  # the fake model says "open"
         self.refine()

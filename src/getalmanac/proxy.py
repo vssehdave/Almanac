@@ -23,7 +23,7 @@ import threading
 import time
 from urllib.parse import parse_qs, urlsplit
 
-from . import accounts, config
+from . import accounts, autoimport, config
 from . import request as rq
 from . import sse
 from . import upstream
@@ -123,6 +123,7 @@ class Proxy:
         self.fused = {}  # lane -> why its rewrites were switched off
         self.tls = None  # a tls.Session when running as an HTTPS proxy
         self.started, self.count = time.time(), 0
+        self.importing = None  # the background import thread (autoimport.py), once serve() has started it
         self._jobs = queue.Queue()
         threading.Thread(target=self._work, daemon=True).start()
 
@@ -258,6 +259,8 @@ class Proxy:
     def serve(self, host="127.0.0.1", port=0):
         server = Server((host, port), Handler)
         server.proxy = self
+        if not self.importing:  # once per proxy, whatever serves it
+            self.importing = autoimport.start(self)
         return server
 
 

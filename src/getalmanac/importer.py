@@ -268,9 +268,11 @@ def _held(memory, lanes, messages, turns) -> bool:
     return False
 
 
-def _import(memory, files, days, idle, now) -> dict:
+def _import(memory, files, days, idle, now, only=None) -> dict:
+    """`only`: a set of project keys; a run of any other project is left out (see autoimport.py)."""
     report = {"projects": {}, "conversations": 0, "exchanges": 0, "statuses": {},
-              "skipped": Counter({"already stored": 0, "still open": 0, "older than --days": 0, "no exchanges": 0})}
+              "skipped": Counter({"already stored": 0, "still open": 0, "older than --days": 0, "no exchanges": 0,
+                                  "project not stored yet": 0})}
     before = memory.status_counts()
     loaded = []
     for path in files:
@@ -299,6 +301,9 @@ def _import(memory, files, days, idle, now) -> dict:
             report["skipped"]["already stored"] += 1  # the proxy (or an earlier import) kept all of it already
             continue
         for n, (lane, root, msgs, stamps) in enumerate(pieces):
+            if only is not None and (not root or memory.projects.resolve(describe(root)[0]) not in only):
+                report["skipped"]["project not stored yet"] += 1
+                continue
             new = not memory.store.run("select 1 from convo where lane = ?", (lane,))
             key = memory.projects.see(root, touch=False) if root else ""
             written = _store_run(memory, lane, session, key, msgs, stamps)
@@ -319,13 +324,13 @@ def _import(memory, files, days, idle, now) -> dict:
     return report
 
 
-def run(memory, words, days=None, dry_run=False, idle=OPEN_SECONDS) -> dict:
+def run(memory, words, days=None, dry_run=False, idle=OPEN_SECONDS, only=None) -> dict:
     """Import the transcripts named by `words`. With `dry_run` the same work is done on a copy of the store and
     thrown away, so the report is exactly what a real run would store."""
     files = transcripts(words)
     now = time.time()
     if not dry_run:
-        return _import(memory, files, days, idle, now)
+        return _import(memory, files, days, idle, now, only)
     scratch = tempfile.mkdtemp(prefix="almanac-dry-")
     store = None
     try:
@@ -333,7 +338,7 @@ def run(memory, words, days=None, dry_run=False, idle=OPEN_SECONDS) -> dict:
         memory.store.db.backup(target)
         target.close()
         store = Store(os.path.join(scratch, "almanac.db"))
-        return _import(Memory(store), files, days, idle, now)
+        return _import(Memory(store), files, days, idle, now, only)
     finally:
         if store:
             store.db.close()

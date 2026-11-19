@@ -12,7 +12,7 @@ warnings.simplefilter("ignore", ResourceWarning)
 if "ALMANAC_HOME" not in os.environ:  # tests search by words; the ones for search by meaning say otherwise
     os.environ["ALMANAC_HOME"] = tempfile.mkdtemp(prefix="almanac-test-")
     with open(os.path.join(os.environ["ALMANAC_HOME"], "config.json"), "w") as _handle:
-        json.dump({"memory": {"semantic": False}, "profile": {"enabled": False}}, _handle)  # no test reads the real ~/.claude
+        json.dump({"memory": {"semantic": False, "auto_import": False}, "profile": {"enabled": False}}, _handle)  # no test reads the real ~/.claude
 for _name in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy", "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS"):
     os.environ.pop(_name, None)  # the machine's own proxy must not change what the tests connect to
 
@@ -98,6 +98,7 @@ class Rig:
         self.upstream = Upstream(respond)
         cfg = config.load()
         cfg["upstream"] = self.upstream.url
+        cfg["memory"]["auto_import"] = False  # a test home with no config would otherwise read the real ~/.claude/projects
         for dotted, value in (overrides or {}).items():
             node = cfg
             parts = dotted.split(".")
