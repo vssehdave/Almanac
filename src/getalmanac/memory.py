@@ -267,7 +267,7 @@ def ended(convo, summary=220) -> str:
 
 def unreviewed(hit) -> str:
     """The label for a hit from a sub-agent's work that no Opus review has signed off."""
-    return " (unreviewed)" if hit.get("cparent") and hit.get("creview") == "pending" else ""
+    return f" (unreviewed: memory_review conversation {hit['convo']})" if hit.get("cparent") and hit.get("creview") == "pending" else ""
 
 
 def snippet(text: str, terms: set, limit=230) -> str:
@@ -819,7 +819,7 @@ class Memory:
     def within(self, convo_id, limit=20) -> list:
         """The exchanges stored under one conversation, its sub-agents' work included, newest first, shaped like search hits."""
         return [dict(r, snippet=snippet(r["text"], set())) for r in self.store.run(
-            "select n.id, n.title, n.text, n.ts, c.parent cparent, c.review creview, c.agent_type cagent from node n join convo c on c.id = n.convo "
+            "select n.id, n.convo, n.title, n.text, n.ts, c.parent cparent, c.review creview, c.agent_type cagent from node n join convo c on c.id = n.convo "
             "where n.kind = 'leaf' and (c.id = ? or c.parent = ?) order by n.ts desc, n.id desc limit ?", (convo_id, convo_id, limit))]
 
     def convo_of(self, lane):

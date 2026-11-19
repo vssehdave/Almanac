@@ -85,8 +85,8 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["query"], "properties": {
          "query": {"type": "string", "description": "The request, or the words that describe it"}}}},
     {"name": "memory_review",
-     "description": "Record your review of a sub-agent's stored work (its conversation number is in memory_search results marked "
-                    "\"sub-agent of conversation N\" and \"(unreviewed)\"). Check the work against the code first. It counts as "
+     "description": "Record your review of a sub-agent's stored work (memory_search and the recall note mark it "
+                    "\"(unreviewed: memory_review conversation N)\"; pass that N). Check the work against the code first. It counts as "
                     "reviewed only when an Opus model makes the call.",
      "inputSchema": {"type": "object", "required": ["conversation", "verdict"], "properties": {
          "conversation": {"type": "integer", "minimum": 1, "description": "The sub-agent's conversation number"},

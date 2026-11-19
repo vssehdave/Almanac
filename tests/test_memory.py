@@ -533,7 +533,8 @@ class SubagentTest(Case):
         self.assertIn(f"You are a subagent of conversation {self.parent}", text)
         self.assertIn("Almanac memory for this project", text)
         self.assertIn(f"[{earlier}]", text)
-        self.assertIn("(unreviewed)", text)
+        own = self.store.run("select id from convo where lane = 'old-sub'")[0]["id"]
+        self.assertIn(f"(unreviewed: memory_review conversation {own})", text)  # the number a reviewer must pass
         self.assertEqual(len(self.note_of(first)), 1)
         self.assertEqual(self.rig.records()[-1]["memory"]["subnote_chars"], len(text))
         self.seed("old-sub-2", "Explore", "The retry helper code also lives in the report module", "Found the retry helper there too.")
@@ -560,7 +561,9 @@ class SubagentTest(Case):
         self.assertEqual((child["agent_type"], child["review"], child["review_note"]), ("general-purpose", "pending", ""))
         self.assertEqual(self.store.run("select review from convo where id = ?", (self.parent,))[0]["review"], "")
         hit = self.memory.search("retry helper net.py", project=self.key)[0]
-        self.assertIn("(unreviewed)", mcp.render_hits([hit]))
+        self.assertIn(f"(unreviewed: memory_review conversation {child['id']})", mcp.render_hits([hit]))
+        self.assertIn(f"(unreviewed: memory_review conversation {child['id']})",
+                      mcp.render_hits(self.memory.within(self.parent)))  # the conversation listing shows it too
 
         def review(model, number, verdict="holds up"):
             self.rig.upstream.respond = lambda req: (200, {"content-type": "text/event-stream"}, sse(
@@ -574,7 +577,7 @@ class SubagentTest(Case):
         self.assertEqual(review("claude-opus-5", child["id"]), {"review": "reviewed", "review_note": "holds up"})
         self.assertEqual(review("claude-opus-5", child["id"], "changed my mind")["review_note"], "holds up")  # only pending changes
         hit = self.memory.search("retry helper net.py", project=self.key)[0]
-        self.assertNotIn("(unreviewed)", mcp.render_hits([hit]))
+        self.assertNotIn("unreviewed", mcp.render_hits([hit]))
         self.assertIn("sub-agent of conversation", mcp.render_hits([hit]))
 
     def test_the_review_tool_only_acknowledges(self):
