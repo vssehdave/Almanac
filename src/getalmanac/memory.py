@@ -827,6 +827,22 @@ class Memory:
         rows = self.store.run("select id, project from convo where lane = ? and parent = 0", (lane,)) if lane else []
         return dict(rows[0]) if rows else None
 
+    def gate(self, session, holds=2) -> str:
+        """The reason to keep an Opus main thread from ending its turn while its sub-agents' work is unreviewed, or "".
+        Each conversation is held at most `holds` times, so a model that cannot review is never stuck."""
+        lane = self.store.get(f"mainlane:{session}") or ""
+        own = self.convo_of(lane)
+        if not own or "opus" not in (self.store.get(f"mainmodel:{session}") or ""):
+            return ""
+        pending = self.store.run("select id, title from convo where parent = ? and review = 'pending' order by id", (own["id"],))
+        held = self.store.get(f"gateheld:{lane}") or 0
+        if not pending or held >= holds:
+            return ""
+        self.store.put(f"gateheld:{lane}", held + 1)
+        names = "; ".join(f"{r['id']}: {r['title'][:60]}" for r in pending)
+        return (f"Sub-agent work in this conversation is not reviewed yet ({names}). Check it against the code or output, "
+                "then call memory_review with a one-line verdict (no number covers all of them) before you finish.")
+
     def recent(self, project=None, exclude_lane=None, limit=3, since=None, until=None) -> list:
         sql, args = "select * from convo where turns > 0 and parent = 0", []
         if since:
@@ -1219,10 +1235,15 @@ class MemoryLayer:
         self._add(first, note)
         ctx.stats["memory"] = {"recall_chars": len(note)}
 
+    @staticmethod
+    def _model(ctx, orig) -> str:
+        """The model that really answered, after routing."""
+        return str((getattr(ctx, "after", None) or orig).get("model") or "").lower()
+
     def _review(self, ctx, orig, reply):
         """File the verdict of a memory_review call in the reply, when the model that was asked is an Opus one. The tool
         itself only acknowledges: this is the one place that knows the model. Only pending sub-agent work changes."""
-        if "opus" not in str((getattr(ctx, "after", None) or orig).get("model") or "").lower():
+        if "opus" not in self._model(ctx, orig):
             return
         for block in reply.get("content") or []:
             if not (isinstance(block, dict) and block.get("type") == "tool_use" and str(block.get("name") or "").endswith("memory_review")
@@ -1252,6 +1273,7 @@ class MemoryLayer:
             return
         if not self._main_thread(orig, ctx):
             return
+        self.memory.store.put(f"mainmodel:{ctx.session}", self._model(ctx, orig))  # what the review gate checks
         self.memory.index(ctx.lane, ctx.session, ctx.project, orig["messages"], reply)
         if reply.get("stop_reason") == "tool_use":  # a long turn: keep what it has done so far searchable
             self.memory.index_partial(ctx.lane, ctx.project, orig["messages"], reply)

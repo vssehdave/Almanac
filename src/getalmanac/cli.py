@@ -697,6 +697,21 @@ def _sandbox(rest):
     return sandbox.run(rest)
 
 
+def _review_gate(_rest):
+    """Claude Code's Stop hook: hold the turn open while an Opus main thread has unreviewed sub-agent work. Never fails."""
+    try:
+        cfg = config.load()
+        if not (cfg["memory"]["enabled"] and cfg["memory"].get("review_gate", True)):
+            return 0
+        session = str((json.loads(sys.stdin.read() or "{}") or {}).get("session_id") or "")
+        reason = _memory_handle().gate(session) if session else ""
+        if reason:
+            print(json.dumps({"decision": "block", "reason": reason}))
+    except Exception:  # a broken gate must never stop Claude Code from finishing
+        pass
+    return 0
+
+
 def _version(_rest):
     print(f"almanac {__version__}")
     return 0
@@ -705,7 +720,7 @@ def _version(_rest):
 COMMANDS = {"sandbox": _sandbox, "serve": _serve, "report": _report, "status": _status, "doctor": _doctor, "config": _config,
             "version": _version, "memory": _memory, "projects": _projects, "route": _route, "cheatsheet": _cheatsheet, "mcp": _mcp,
             "semantic": _semantic, "cloud": _cloud, "skill": _skill, "pack": _pack,
-            "playbook": _playbook, "library": _library}
+            "playbook": _playbook, "library": _library, "review-gate": _review_gate}
 
 
 def main(argv=None):

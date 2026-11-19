@@ -10,6 +10,7 @@ from unittest import mock
 from getalmanac import config, profile
 
 CFG = copy.deepcopy(config.DEFAULTS)
+CFG["memory"]["review_gate"] = False  # these tests are about the user's own hooks
 USER = {
     "model": "opus",
     "enabledPlugins": {"keeper@market": True, "claude-mem@thedotmack": True, "logbook@logbook": True},
@@ -47,6 +48,15 @@ class SettingsTest(unittest.TestCase):
         out = profile.curated_settings(USER, CFG, "C:/u/.claude/CLAUDE.md")
         self.assertEqual(json.dumps(USER), before)
         self.assertEqual(out["claudeMdExcludes"], ["C:/u/.claude/CLAUDE.md"])
+
+    def test_the_review_gate_is_added_as_a_stop_hook(self):
+        cfg = copy.deepcopy(CFG)
+        cfg["memory"]["review_gate"] = True
+        stop = profile.curated_settings(USER, cfg)["hooks"]["Stop"]
+        self.assertEqual(len(stop), 1)  # the user's Logbook Stop hook is still left out
+        self.assertTrue(stop[0]["hooks"][0]["command"].endswith("-m getalmanac review-gate"))
+        cfg["memory"]["enabled"] = False
+        self.assertNotIn("hooks", profile.curated_settings({"model": "x"}, cfg))
 
     def test_a_setting_without_hooks_gets_none(self):
         self.assertNotIn("hooks", profile.curated_settings({"model": "x"}, CFG))

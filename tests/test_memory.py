@@ -603,6 +603,21 @@ class SubagentTest(Case):
         self.assertEqual(self.store.run("select review from convo where id = ?", (child["id"],))[0]["review"], "reviewed")  # no number: all of them
         self.assertIn("sub-agent of conversation", mcp.render_hits([hit]))
 
+    def test_the_gate_holds_an_opus_turn_while_subagent_work_is_unreviewed(self):
+        self.sub(self.body())
+        self.rig.records()
+        child = self.store.run("select id from convo where parent = ?", (self.parent,))[0]["id"]
+        self.store.put(f"mainmodel:{SESSION}", "claude-sonnet-5")
+        self.assertEqual(self.memory.gate(SESSION), "")  # a model whose review would not count is never held
+        self.store.put(f"mainmodel:{SESSION}", "claude-opus-5")
+        self.assertIn(f"{child}:", self.memory.gate(SESSION))
+        self.assertIn("memory_review", self.memory.gate(SESSION))
+        self.assertEqual(self.memory.gate(SESSION), "")  # held twice at most: never stuck
+        self.store.run("delete from state where key = 'gateheld:main-lane'")
+        self.store.run("update convo set review = 'reviewed' where id = ?", (child,))
+        self.assertEqual(self.memory.gate(SESSION), "")
+        self.assertEqual(self.memory.gate("unknown-session"), "")
+
     def test_the_review_tool_only_acknowledges(self):
         self.sub(self.body())
         self.rig.records()
