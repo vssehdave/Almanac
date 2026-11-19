@@ -282,6 +282,14 @@ class RecallTest(Case):
         self.assertIn("Most recent conversations:", note)
         self.assertEqual(self.rig.records()[-1]["memory"]["recall_chars"], len(note))
 
+    def test_memory_and_routing_classify_a_request_alike(self):
+        odd = {"x-claude-code-request-class": "classifier"}  # neither main nor sub: no note, no stored lane
+        self.rig.messages(self.body("the proxy cache drops again after loading a tool"), extra=odd)
+        self.assertNotIn("memory", self.rig.records()[-1])
+        self.assertIsNone(self.store.get(f"mainlane:{SESSION}"))
+        self.rig.messages(self.body("the proxy cache drops again after loading a tool"))
+        self.assertIn("memory", self.rig.records()[-1])
+
     def test_recall_is_frozen_even_as_memory_grows(self):
         request = self.body("the proxy cache drops again after loading a tool")
         self.rig.messages(request)

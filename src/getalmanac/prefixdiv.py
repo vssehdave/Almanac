@@ -11,7 +11,6 @@ import time
 
 from .compact import CHARS_PER_TOKEN
 from .report import _spans
-from .routing import RoutingLayer
 
 
 def _entry(label, value):
@@ -76,7 +75,7 @@ class PrefixLayer:
         messages = body.get("messages")
         if ctx.kind != "messages" or ctx.store is None or not isinstance(messages, list):
             return
-        if RoutingLayer._kind(ctx, body) != "main" or any(isinstance(m, dict) and m.get("role") == "assistant" for m in messages):
+        if ctx.thread != "main" or any(isinstance(m, dict) and m.get("role") == "assistant" for m in messages):
             return
         project = ctx.project or ctx.cwd
         if not project:

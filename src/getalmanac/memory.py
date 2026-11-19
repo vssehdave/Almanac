@@ -1154,13 +1154,12 @@ class MemoryLayer:
 
     @staticmethod
     def _main_thread(body, ctx) -> bool:
-        return not ctx.agent and rq.has_client_tools(body) and bool(rq.human_turns(body.get("messages") or []))
+        return ctx.thread == "main" and rq.has_client_tools(body) and bool(rq.human_turns(body.get("messages") or []))
 
     @staticmethod
     def _sub_thread(body, ctx) -> bool:
         """A sub-agent's own thread. A fork is not one: it shares its parent's prefix and is left alone."""
-        from .routing import RoutingLayer  # routing imports this module
-        return bool(ctx.agent) and RoutingLayer._kind(ctx, body) == "sub" and rq.has_client_tools(body) \
+        return ctx.thread == "sub" and rq.has_client_tools(body) \
             and bool(rq.human_turns(body.get("messages") or []))
 
     @staticmethod

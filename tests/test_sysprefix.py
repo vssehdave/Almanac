@@ -9,7 +9,7 @@ import tempfile
 from helpers import Rig, config
 from test_startup import body as startup_body
 
-from getalmanac import report, startup
+from getalmanac import report, request as rq, startup
 from getalmanac.memory import Memory
 from getalmanac.store import Store
 from getalmanac.sysprefix import SysPrefixLayer
@@ -42,11 +42,12 @@ def request(typed="fix the bug", hook=HOOK, parts=ALL, cc=True, extra=()):
 
 
 def run(body, on=True, stats=None, **over):
-    over = {"klass": "", "agent": "", **over}
+    over = {"klass": "", "agent": "", "agent_type": "", **over}
     cfg = config.load()
     cfg["startup"]["system_prefix"] = on
-    ctx = SimpleNamespace(cfg=cfg, kind="messages", agent_type="", stats=stats or {}, **over)
+    ctx = SimpleNamespace(cfg=cfg, kind="messages", stats=stats or {}, **over)
     out = copy.deepcopy(body)
+    ctx.thread = rq.thread(ctx, out)
     SysPrefixLayer().transform(out, ctx)
     return out, ctx
 
@@ -158,6 +159,12 @@ class SysPrefixTest(unittest.TestCase):
     def test_sub_agent_untouched(self):
         body = request()
         self.assertEqual(dump(run(body, klass="subagent", agent="a1")[0]), dump(body))
+
+    def test_fork_gets_its_parents_system_prompt(self):
+        body = request()
+        fork, _ = run(body, klass="subagent", agent="a1", agent_type="fork")
+        self.assertEqual(dump(fork["system"]), dump(run(body)[0]["system"]))
+        self.assertEqual(len(fork["system"]), 4)
 
     def test_user_block_quoting_a_marker_is_never_cut(self):
         body = request()

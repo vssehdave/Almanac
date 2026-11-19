@@ -11,7 +11,7 @@ from unittest import mock
 from helpers import Rig, sse
 from test_routing import LARGE, MAIN, MEDIUM, SMALL, SetProject, body, convo, sub_headers
 
-from getalmanac import cheatsheet, cli, config, playbook, proxy as proxy_mod
+from getalmanac import cheatsheet, cli, config, playbook, proxy as proxy_mod, request as rq
 from getalmanac.cheatsheet import CheatsheetLayer
 from getalmanac.routing import RoutingLayer
 from getalmanac.store import Store
@@ -35,9 +35,14 @@ def ctx(klass="main", agent="", agent_type="", mode="on", lean=False, **start):
     return SimpleNamespace(cfg=cfg, kind="messages", klass=klass, agent=agent, agent_type=agent_type)
 
 
+def transform(work, there):
+    there.thread = rq.thread(there, work)
+    CheatsheetLayer().transform(work, there)
+
+
 def run(model, system=None, tools=None, **kw):
     work = body(convo([{"text": "hello"}]), model, tools=tools, system=claude_system() if system is None else system)
-    CheatsheetLayer().transform(work, ctx(**kw))
+    transform(work, ctx(**kw))
     return work
 
 
@@ -98,7 +103,7 @@ class LayerTest(Fresh):
         for system in (claude_system(), IDENTITY):
             work = run(LARGE, system=system)
             once = copy.deepcopy(work)
-            CheatsheetLayer().transform(work, ctx())
+            transform(work, ctx())
             self.assertEqual(work, once)
 
     def test_threads_get_it_and_other_requests_do_not(self):
@@ -163,7 +168,7 @@ class LeanTest(Fresh):
         self.assertEqual(json.dumps(first), json.dumps(second))
         self.assertEqual(cache_marks(first), cache_marks(claude_system()))
         once = copy.deepcopy(first)
-        CheatsheetLayer().transform(first, ctx(lean=True))
+        transform(first, ctx(lean=True))
         self.assertEqual(first, once)
 
     def test_off_and_a_text_of_your_own(self):
@@ -269,7 +274,7 @@ class IndexTest(Fresh):
         work = body(convo([{"text": "hello"}]), model, system=claude_system())
         there = ctx(**kw)
         there.cfg["playbooks"]["inject"] = inject
-        CheatsheetLayer().transform(work, there)
+        transform(work, there)
         return work
 
     def test_nothing_without_playbooks(self):

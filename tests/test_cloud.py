@@ -260,7 +260,7 @@ class HandoffTest(CloudCase):
         cfg = config.load()
         cfg["cloud"].update(auto=True, heartbeat_minutes=10)
         self.layer = cloud.HandoffLayer(self.memory, cfg, background=False)
-        self.ctx = mock.Mock(cwd=self.alpha, agent="", lane="lane-1", session="s1", proxy=mock.Mock(log=Log(self.log_path)))
+        self.ctx = mock.Mock(cwd=self.alpha, agent="", thread="main", lane="lane-1", session="s1", proxy=mock.Mock(log=Log(self.log_path)))
 
     def turn(self, messages, stop):
         body = {"messages": messages, "tools": [{"name": "Bash", "input_schema": {}}]}
@@ -401,7 +401,7 @@ class HandoffTest(CloudCase):
         other = os.path.join(self.tmp, "other.git")
         git(self.tmp, "init", "-q", "--bare", other)
         git(beta, "remote", "set-url", "origin", other)
-        ctx = mock.Mock(cwd=beta, agent="", lane="lane-b", session="s2", proxy=self.ctx.proxy)
+        ctx = mock.Mock(cwd=beta, agent="", thread="main", lane="lane-b", session="s2", proxy=self.ctx.proxy)
         body = {"messages": [human("A long task")], "tools": [{"name": "Bash", "input_schema": {}}]}
         with mock.patch.object(cloud, "_must", side_effect=AssertionError("git in a repository not turned on")):
             self.layer.transform(body, ctx)

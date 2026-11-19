@@ -30,7 +30,7 @@ class LibraryCase(tm.Case):
         for i, (name, args, text, error) in enumerate(calls, 1):
             messages += [use(i, name, **args), out(i, text, error)]
         ctx = types.SimpleNamespace(cfg={"memory": {"enabled": True}, "library": cfg}, lane=lane, session="s", project=self.key,
-                                    agent=agent, agent_type="", klass="", store=self.store,
+                                    agent=agent, thread="sub" if agent else "main", agent_type="", klass="", store=self.store,
                                     proxy=types.SimpleNamespace(log=types.SimpleNamespace(write=self.logged.append)))
         body = {"messages": messages, "tools": [{"name": "Bash", "input_schema": {}}]}
         self.layer.observe(ctx, body, tm.reply(answer))
@@ -110,7 +110,7 @@ class WriterTest(LibraryCase):
         messages[2]["content"][0]["tool_use_id"] = ["odd"]
         logged = []
         ctx = types.SimpleNamespace(cfg={"memory": {"enabled": True}, "library": {}}, lane="lane-1", session="s", project=self.key,
-                                    agent="", proxy=types.SimpleNamespace(log=types.SimpleNamespace(write=logged.append)))
+                                    agent="", thread="main", proxy=types.SimpleNamespace(log=types.SimpleNamespace(write=logged.append)))
         self.layer.observe(ctx, {"messages": messages, "tools": [{"name": "Bash", "input_schema": {}}]}, tm.reply("ok"))
         self.assertEqual(([r for r in logged if r["kind"] == "error"], len(self.rows())), ([], 1))
 

@@ -12,7 +12,6 @@ import copy
 import re
 
 from .report import _spans
-from .routing import RoutingLayer
 
 ORDER = ["MCP instructions", "advisor notes", "deferred tool names", "agent types", "skill listing"]
 _UNKNOWN = re.compile(r"\n\n(?=# \S)")  # a top-level heading inside a span: a section no marker names, so it stays
@@ -34,7 +33,7 @@ class SysPrefixLayer:
     def transform(self, body, ctx):
         if ctx.cfg["startup"].get("system_prefix") is not True or ctx.kind != "messages":
             return
-        if RoutingLayer._kind(ctx, body) != "main":
+        if ctx.thread not in ("main", "fork"):  # a fork sends its parent's system prompt, byte for byte
             return
         system, messages = body.get("system"), body.get("messages")
         if not isinstance(system, list) or not system or not isinstance(system[-1], dict) or not isinstance(messages, list):
