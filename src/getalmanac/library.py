@@ -224,7 +224,7 @@ def record(memory, lane, group, seq, min_tools=MIN_TOOLS, now=None) -> int:
 
 
 def observe(memory, ctx, messages, reply):
-    """Called by the memory layer after the exchange was indexed (main thread only). Never raises."""
+    """Called by the memory layer after the exchange was indexed. Never raises."""
     try:
         turns = rq.human_turns(messages)
         if not turns or reply.get("stop_reason") == "tool_use":  # nothing finished yet
@@ -279,7 +279,8 @@ def drop_from(store, convo_id, seq):
 
 # ---- finding and showing ---------------------------------------------------------------------------------
 
-SHOWN = "l.calls >= ? and l.prompt != ''"  # what a search or a list shows: enough tool calls, and not a usage-only row
+# what a search or a list shows: enough tool calls, not a usage-only row, and not a sub-agent's exchange
+SHOWN = "l.calls >= ? and l.prompt != '' and not exists (select 1 from convo c where c.id = l.convo and c.parent != 0)"
 _SQL = ("select l.*, n.id node from library_fts f join library l on l.id = f.rowid "
         "join node n on n.convo = l.convo and n.kind = 'leaf' and n.seq = l.seq "  # an entry whose exchange is gone cannot be read back: skipped
         "where library_fts match ? and l.superseded_by = 0 and " + SHOWN)

@@ -1246,6 +1246,8 @@ class MemoryLayer:
             if parent and (handed or reply.get("stop_reason") != "tool_use"):  # filed when it has answered; nothing is stored while it works
                 reply = handed or reply
                 self.memory.index(ctx.lane, ctx.session, parent["project"], orig["messages"], reply, parent=parent["id"], agent_type=ctx.agent_type[:40])
+                from . import library
+                library.observe(self.memory, ctx, orig["messages"], reply)  # the row only feeds usage counts: no search shows it
                 self.memory.embed_pending()
             return
         if not self._main_thread(orig, ctx):
