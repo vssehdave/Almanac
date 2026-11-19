@@ -112,6 +112,21 @@ class SkillsLayerTest(LayerCase):
         self.assertTrue(sent["slides"].endswith("…"))
         self.assertIn("- slides: " + SKILLS["slides"], self.rig.sent()["messages"][0]["content"][1]["text"])
 
+    def test_a_skill_a_subagent_type_uses_is_shown_in_full_for_that_type_only(self):
+        for convo in (7, 8):
+            self.store.run("insert into convo (id, lane, session, project, started, updated, parent, agent_type) "
+                           "values (?, ?, 's', '/repo/demo', 1, 1, 1, 'Explore')", (convo, f"sub-{convo}"))
+        self.used("skill", "pdf-tools", 7, 8)
+        sub = {"x-claude-code-agent-id": "a1", "x-claude-code-agent-type": "Explore", "x-claude-code-request-class": "subagent"}
+        full = lambda: listing_of(self.rig.sent())["pdf-tools"] == SKILLS["pdf-tools"]  # noqa: E731
+        with mock.patch.object(startup, "_today", return_value="2099-01-01"):
+            self.rig.messages(body("main thread"))
+            self.assertFalse(full())  # the main thread does not inherit it
+            self.rig.messages(body("explore it"), extra=sub)
+            self.assertTrue(full())
+            self.rig.messages(body("plan it"), extra=dict(sub, **{"x-claude-code-agent-id": "a2", "x-claude-code-agent-type": "Plan"}))
+            self.assertFalse(full())  # nor does another type
+
     def test_decision_is_frozen_for_the_conversation(self):
         first = body("make a slide deck for the board")
         self.rig.messages(first)

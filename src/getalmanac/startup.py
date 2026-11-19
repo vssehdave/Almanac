@@ -36,11 +36,18 @@ def _today() -> str:
     return time.strftime("%Y-%m-%d")
 
 
+def _sub_type(ctx):
+    """The agent type whose own usage a sub-agent's listings pin; None for the main thread and a fork, which pin the main thread's."""
+    return ctx.agent_type if ctx.thread == "sub" else None
+
+
 def _daily(ctx, name, compute):
-    """A per-project, per-day snapshot of what drifts with usage, so new conversations of one project agree."""
+    """A per-project, per-day snapshot of what drifts with usage, so new conversations of one project agree.
+    A sub-agent's own type has its own snapshot."""
     if ctx.store is None:
         return compute()
-    return ctx.store.frozen(f"{name}-day:{_project(ctx)}:{_today()}", compute)
+    sub = _sub_type(ctx)
+    return ctx.store.frozen(f"{name}{f':{sub}' if sub is not None else ''}-day:{_project(ctx)}:{_today()}", compute)
 
 
 def _frozen(ctx, name, compute):
@@ -111,11 +118,11 @@ class _ListingLayer:
         return set()
 
     def pinned(self, ctx) -> list:
-        """Names the project keeps using (two of its last thirty main conversations): shown in full, snapshotted once a day."""
+        """Names the project keeps using (two of its last thirty conversations of this kind: main, or one sub-agent type): shown in full, snapshotted once a day."""
         if not self.KIND or ctx.store is None:
             return []
         from . import library  # library imports the layer that imports this module
-        used = library.recently_used(ctx.store, self.KIND, _project(ctx))
+        used = library.recently_used(ctx.store, self.KIND, _project(ctx), agent_type=_sub_type(ctx))
         return sorted(name for name, count in used.items() if count >= 2)
 
     def shorten(self, description: str, chars: int) -> str:
@@ -244,12 +251,11 @@ class ToolsLayer:
 
         def promoted():
             from . import library  # library imports the layer that imports this module
-            used = library.recently_used(ctx.store, "tool", _project(ctx), agent_type=sub) if ctx.store is not None else {}
+            used = library.recently_used(ctx.store, "tool", _project(ctx), agent_type=_sub_type(ctx)) if ctx.store is not None else {}
             return sorted(name for name, count in used.items() if count >= cfg["promote_after"])
 
-        sub = ctx.agent_type if ctx.agent and ctx.agent_type.lower() != "fork" else None  # a sub-agent keeps what its own type used
         def decide():
-            keep = set(_daily(ctx, "tools" if sub is None else f"tools:{sub}", promoted))  # a tool the message names is loaded by ToolSearch, not kept here
+            keep = set(_daily(ctx, "tools", promoted))  # a tool the message names is loaded by ToolSearch, not kept here
             for msg in messages:  # a tool this conversation already called must stay loaded
                 for b in rq.blocks(msg):
                     if b.get("type") == "tool_use":
