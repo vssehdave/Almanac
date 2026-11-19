@@ -186,6 +186,14 @@ class AgentsLayerTest(LayerCase):
         self.assertGreater(self.rig.records()[-1]["agents"]["saved_chars"], 400)
         self.assertTrue(listing_of(self.rig.sent())["slides"].endswith("…"))  # the skills layer still ran
 
+    def test_agents_used_in_two_conversations_stay_full_in_a_new_one(self):
+        self.used("agent", "infra-planner", 1, 2)
+        self.used("agent", "crew:db-reviewer", 3)  # one conversation is not a habit
+        self.rig.messages(body("fix the failing test in parser.py"))
+        sent = self.agents()
+        self.assertEqual(sent["infra-planner"], AGENTS["infra-planner"])
+        self.assertTrue(sent["crew:db-reviewer"].endswith("…"))
+
     def test_matched_agent_is_shown_in_full_next_to_the_message(self):
         self.rig.messages(body("review this database migration query"))
         sent = self.agents()

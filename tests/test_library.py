@@ -242,6 +242,15 @@ if __name__ == "__main__":
 
 
 class UsageTest(LibraryCase):
+    def test_agents_called_in_two_conversations_are_counted_by_type(self):
+        planner = ("Agent", {"subagent_type": "infra-planner", "prompt": "plan"}, "ok", False)
+        self.finish("Plan the terraform change", self.calls(planner), lane="lane-1")
+        self.finish("Plan the next terraform change", self.calls(("Task", {"subagent_type": "infra-planner"}, "ok", False)), lane="lane-2")
+        self.finish("Look around", [("Agent", {"subagent_type": "other"}, "ok", False)], lane="lane-3")
+        self.assertEqual(library.recently_used(self.store, "agent", self.key), {"infra-planner": 2, "other": 1})
+        self.assertEqual(library.recently_used(self.store, "tool", self.key)["Agent"], 2)
+        self.assertEqual(library.recently_used(self.store, "agent", self.key, convos=1), {"other": 1})  # the newest conversation only
+
     def test_the_old_used_table_moves_into_rows_that_nothing_shows(self):
         self.memory.index("lane-1", "s", self.key, [tm.human("an ordinary question about caching")], tm.reply("fine"))
         self.store.run("create table used (kind text not null, name text not null, project text not null, lane text not null, ts real not null, "

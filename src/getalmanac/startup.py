@@ -208,7 +208,7 @@ class SkillsLayer(_ListingLayer):
 class AgentsLayer(_ListingLayer):
     """The same for the agent listing, whose lines end in `(Tools: ...)`; a stubbed line drops that suffix."""
 
-    MARK, NOTE, KEY, GAP = AGENT_MARK, AGENT_NOTE, "agents", "\n"
+    MARK, NOTE, KEY, KIND, GAP = AGENT_MARK, AGENT_NOTE, "agents", "agent", "\n"
     HEADER = "Full descriptions of agent types that may be relevant to this message:"
 
     def settings(self, ctx):

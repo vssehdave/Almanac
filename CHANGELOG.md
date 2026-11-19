@@ -9,7 +9,9 @@
   calls, never a sub-agent's. What a project keeps using is read from these rows
   (`library.recently_used`), so the separate `used` table is gone: an older database
   is migrated on first open (one row per lane, shown nowhere, with its tools and
-  skills) and the table dropped. Behaviour changes: usage is counted per finished exchange, not per request; with
+  skills) and the table dropped. Agent types now count too: one that two of the
+  project's last ten conversations called keeps its full line in the agent listing.
+  Behaviour changes: usage is counted per finished exchange, not per request; with
   memory off nothing is recorded, so only `always_full` pins; forgetting a
   conversation forgets its usage.
 
