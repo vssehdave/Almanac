@@ -160,7 +160,7 @@ launch when it sees one. A command line with its own `--settings`, `--setting-so
 `--bare` or `--restricted` turns the profile off for that run, and says so.
 
 As a second line, the proxy cuts what still reaches a request, and hook text of any plugin that
-contains a marker from `profile.off_hook_text` (a mode banner and its rules, from a plugin that stays
+opens with a marker from `profile.off_hook_text` (a mode banner and its rules, from a plugin that stays
 installed for its slash commands; its skill entries stay listed): skill and agent
 entries, `mcp__plugin_<name>_*` tools and `## plugin:<name>:` server instructions of the
 off plugins, and their hook-injected text. That also covers a plain `claude` pointed
@@ -1343,7 +1343,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `profile.enabled` | `true` | Start Claude Code with the clean profile |
 | `profile.off_plugins` | `["claude-mem@thedotmack", "logbook@logbook", "pocketbook@pocketbook"]` | Plugins switched off in `almanac` sessions |
 | `profile.off_hooks` | `["getlogbook"]` | A user-settings hook whose command contains one of these, or the name of anything in `off_plugins` or `off_skills`, is left out |
-| `profile.off_hook_text` | `["MODE ACTIVE", "MODE CHANGED", "MODE OFF"]` | Hook text containing one of these is cut from requests (a mode banner of a plugin that stays installed) |
+| `profile.off_hook_text` | `[]` | Hook text whose first line contains one of these is cut from requests (the mode banner of a plugin that stays installed, by its own name such as `"ZED MODE"`; a generic word would cut your own hooks) |
 | `startup.lean_rules` | `true` | Add Almanac's minimal-change rules to the main thread and every sub-agent |
 | `startup.lean_level` | `"full"` | `lite` (build what was asked, name the smaller option), `full`, or `ultra` (also question the request) |
 | `startup.lean_rules_text` | `""` | Your own wording instead of the packaged rules |

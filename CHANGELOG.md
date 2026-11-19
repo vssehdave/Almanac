@@ -18,7 +18,7 @@
   model, get Almanac's own minimal-change rules as the first part of the
   cheatsheet text (`startup.lean_rules`, `lean_level`, `lean_rules_text`), the same
   bytes on every request. The overlapping bullets were removed from `common.md`.
-  `profile.off_hook_text` cuts the mode banner hooks of a plugin that stays
+  `profile.off_hook_text` (empty by default; add the banner's own name) cuts the mode banner hooks of a plugin that stays
   installed, and a plugin added to `profile.off_plugins` now also drops its
   user-settings hooks by name.
 

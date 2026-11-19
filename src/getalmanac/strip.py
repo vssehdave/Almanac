@@ -22,7 +22,7 @@ def _off(name: str, names) -> bool:
 
 
 def _cut_hooks(text: str, names, markers=()) -> str:
-    """The text without the hook output that mentions an off plugin or holds a marker (its first 400 characters decide)."""
+    """The text without the hook output that mentions an off plugin (its first 400 characters decide) or opens with a marker (its first line)."""
     out, at = [], 0
     for m in _HOOK.finditer(text):
         if m.start() < at:
@@ -30,7 +30,8 @@ def _cut_hooks(text: str, names, markers=()) -> str:
         end = _END.search(text, m.end())
         stop = end.start() if end else len(text)
         head = text[m.end():min(m.end() + 400, stop)].lower()
-        if any(n in head for n in names) or any(k.lower() in head for k in markers) or "<logbook-notes>" in head:
+        first = next((line for line in head.splitlines() if line.strip()), "")
+        if any(n in head for n in names) or any(k.lower() in first for k in markers) or "<logbook-notes>" in head:
             if "<logbook-notes>" in head and "</logbook-notes>" in text[m.end():]:
                 stop = text.index("</logbook-notes>", m.end()) + len("</logbook-notes>")
             out.append(text[at:m.start()])

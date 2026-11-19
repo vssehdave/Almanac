@@ -36,8 +36,9 @@ DEFAULTS = {
         # lists above (the part of a plugin id before the @), so a new plugin under development is one line in off_plugins.
         "off_hooks": ["getlogbook"],
         # Hook text of a plugin that is not off but whose job Almanac now does itself (a mode banner and its rules) is cut
-        # from requests when it contains one of these. The plugin stays installed.
-        "off_hook_text": ["MODE ACTIVE", "MODE CHANGED", "MODE OFF"],
+        # from requests when its first line contains one of these (the banner's own name, such as "ZED MODE": never a
+        # generic word, which would cut your own hooks too). The plugin stays installed. Empty: nothing is cut this way.
+        "off_hook_text": [],
     },
     "startup": {
         "agent_chars": 60,  # characters of description kept for a listed agent type; 0 leaves the agent listing alone

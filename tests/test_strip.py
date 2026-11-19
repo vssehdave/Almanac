@@ -83,18 +83,51 @@ class BannerTest(unittest.TestCase):
     """A plugin that stays installed but whose rules Almanac now supplies: its mode banner is cut, its skills stay listed."""
 
     def test_a_mode_banner_and_its_rules_are_cut_from_every_kind_of_hook_text(self):
+        cfg = copy.deepcopy(CFG)
+        cfg["profile"]["off_hook_text"] = ["ZED MODE"]
         for header in ("SessionStart:startup hook success: ", "SubagentStart hook additional context: ",
                        "UserPromptSubmit hook success: "):
             text = ("Intro.\n\n" + header + "ZED MODE ACTIVE \u2014 level: full\n\n# Zed\n\nrules rules\n\nmore rules\n"
                     "SessionStart hook additional context: kept note\n\n# Environment\n - cwd: /r")
             body = {"model": "m", "messages": [{"role": "user", "content": [{"type": "text", "text": text}]}]}
-            StripLayer().transform(body, mock.Mock(cfg=CFG))
+            StripLayer().transform(body, mock.Mock(cfg=cfg))
             out = body["messages"][0]["content"][0]["text"]
             self.assertNotIn("rules rules", out)
             self.assertNotIn("MODE ACTIVE", out)
             self.assertIn("Intro.", out)
             self.assertIn("kept note", out)
             self.assertIn("# Environment\n - cwd: /r", out)
+
+    def test_the_owners_own_hooks_are_never_cut_by_a_generic_mode_word(self):
+        owner = "SessionStart:startup hook success: DEBUG MODE ACTIVE, MODE CHANGED, MODE OFF\n\nowner rules\n\n# Environment\n - cwd: /r"
+        for markers in (None, ["ZED MODE"]):  # the default settings, and a marker for another plugin
+            cfg = copy.deepcopy(CFG)
+            if markers:
+                cfg["profile"]["off_hook_text"] = markers
+            body = {"model": "m", "messages": [{"role": "user", "content": [{"type": "text", "text": owner}]}]}
+            StripLayer().transform(body, mock.Mock(cfg=cfg))
+            self.assertEqual(body["messages"][0]["content"][0]["text"], owner)
+
+    def test_a_marker_must_open_the_hook_output(self):
+        cfg = copy.deepcopy(CFG)
+        cfg["profile"]["off_hook_text"] = ["ZED MODE"]
+        text = "SessionStart:startup hook success: our notes\n\nthe ZED MODE banner is cut elsewhere\n\n# Environment\n - cwd: /r"
+        body = {"model": "m", "messages": [{"role": "user", "content": [{"type": "text", "text": text}]}]}
+        StripLayer().transform(body, mock.Mock(cfg=cfg))
+        self.assertEqual(body["messages"][0]["content"][0]["text"], text)
+
+    def test_a_cut_banner_stops_at_the_next_hook_and_leaves_the_owners_hook_and_the_prompt(self):
+        cfg = copy.deepcopy(CFG)
+        cfg["profile"]["off_hook_text"] = ["ZED MODE"]
+        text = ("UserPromptSubmit hook success: ZED MODE CHANGED level full\n\n# Zed\n\nrules rules\n\n"
+                "UserPromptSubmit hook success: DEBUG MODE ACTIVE owner hook\n\n<system-reminder>kept</system-reminder>")
+        body = {"model": "m", "messages": [{"role": "user", "content": [{"type": "text", "text": text}, {"type": "text", "text": "fix the bug"}]}]}
+        StripLayer().transform(body, mock.Mock(cfg=cfg))
+        out = body["messages"][0]["content"]
+        self.assertNotIn("rules rules", out[0]["text"])
+        self.assertIn("DEBUG MODE ACTIVE owner hook", out[0]["text"])
+        self.assertIn("<system-reminder>kept</system-reminder>", out[0]["text"])
+        self.assertEqual(out[1]["text"], "fix the bug")
 
     def test_other_hook_text_and_the_skill_listing_stay(self):
         text = ("SessionStart:startup hook success: hello from a hook\n\n" + startup.SKILL_MARK + "\n\n- zed:core: Does things.\n\nEnd.")
