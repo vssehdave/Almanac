@@ -444,6 +444,20 @@ class ForgetTest(tm.Case):
         self.assertIsNone(self.store.get("recall:bb22"))
         self.assertEqual(self.store.get("recall:cc33"), note)  # an open conversation keeps its bytes
 
+    def test_forget_leaves_no_state_key_with_the_lane_in_it_and_sweeps_sub_agent_notes(self):
+        self.convo("aa11")
+        self.convo("bb22", "something else entirely")
+        for key in ("playbook:aa11:0:x", "playbooknudge:aa11:0:x", "route:aa11:1:y", "recall:aa11", "compact:aa11",
+                    "subnote:bb22", "recall:bb22", "route:bb22:0:z"):
+            self.store.put(key, "quoted text")
+        self.store.run("update convo set updated = updated - 7200")
+        self.store.run("update state set ts = ts - 7200")
+        self.assertEqual(self.memory.forget(convo_id=self.store.run("select id from convo where lane = 'aa11'")[0]["id"]), 1)
+        keys = [r["key"] for r in self.store.run("select key from state")]
+        self.assertFalse([k for k in keys if "aa11" in k])
+        self.assertNotIn("subnote:bb22", keys)  # a note that quotes another conversation goes with it
+        self.assertIn("route:bb22:0:z", keys)
+
     def test_forget_project_reaches_lanes_with_no_conversation_row(self):
         for lane, project in (("cc33", self.key), ("dd44", self.key), ("ee55", "dir:/other"), ("ff66", self.key)):
             self.store.put(f"project:{lane}", project)

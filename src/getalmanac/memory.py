@@ -1034,7 +1034,7 @@ class Memory:
         self._drop_lane(row["lane"])
 
     def _drop_lane(self, lane):
-        self.store.run("delete from state where key like ?", ("%:" + lane,))  # compact:, recall:, project:, usage: ...
+        self.store.run("delete from state where key like ? or key like ?", ("%:" + lane, "%:" + lane + ":%"))  # compact:, recall:, project:, route:<lane>:<turn> ...
         self.store.run("delete from raw where lane = ?", (lane,))
 
     def _cap_raw(self):
@@ -1090,11 +1090,11 @@ class Memory:
                         self._drop_lane(lane)
                         extra += 1
             if convo_id is not None or project:
-                # A recall note quotes other conversations and cannot be traced back to them, so every closed
-                # conversation loses its note; one that is resumed gets a new note.
-                busy = {"recall:" + r["lane"] for r in self.store.run("select lane from convo where updated > ?", (old,))}
-                for r in self.store.run("select key from state where key like 'recall:%' and ts < ?", (old,)):
-                    if r["key"] not in busy:
+                # A recall note (a sub-agent's too) quotes other conversations and cannot be traced back to them, so every
+                # closed conversation loses its note; one that is resumed gets a new note.
+                busy = {r["lane"] for r in self.store.run("select lane from convo where updated > ?", (old,))}
+                for r in self.store.run("select key from state where (key like 'recall:%' or key like 'subnote:%') and ts < ?", (old,)):
+                    if r["key"].partition(":")[2] not in busy:
                         self.store.run("delete from state where key = ?", (r["key"],))
                         extra += 1
             if convo_id is None and not project:  # everything: no saved choice of a closed conversation stays, whoever's it was
