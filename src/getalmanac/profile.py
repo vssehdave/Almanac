@@ -3,11 +3,11 @@
 Hooks cannot be removed by a settings layer on top (hook lists from every source are added together), and
 `--setting-sources` drops a whole source. So the launcher drops the user source and rebuilds it:
 
-- `--setting-sources project,local --settings <ALMANAC_HOME>/profile/settings.json`: the user's settings.json
+- `--setting-sources project,local --settings <ALMANAC_HOME>/profile/<account>/settings.json`: the user's settings.json
   with the off plugins set to false and the hooks that match `off_hooks` left out;
-- the user's skills (minus `off_skills`), agents and commands come back through `--add-dir <ALMANAC_HOME>/profile`,
+- the user's skills (minus `off_skills`), agents and commands come back through `--add-dir <ALMANAC_HOME>/profile/<account>`,
   which holds links to them (a copy where no link can be made);
-- the user's CLAUDE.md (with its @imports, minus any section about an off plugin) is written as `<ALMANAC_HOME>/profile/CLAUDE.md`,
+- the user's CLAUDE.md (with its @imports, minus any section about an off plugin) is written as `<ALMANAC_HOME>/profile/<account>/CLAUDE.md`,
   which Claude Code reads from the added folder (`CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD`, set in the settings below),
   and `claudeMdExcludes` stops it reading the unfiltered original. A CLAUDE.md reaches sub-agents too; a system prompt
   addition (`--append-system-prompt-file`) reaches the main thread only. The same setting also loads a CLAUDE.md from any
@@ -16,6 +16,8 @@ Hooks cannot be removed by a settings layer on top (hook lists from every source
 Login, plugins that stay on, MCP servers and history are not settings sources and are untouched.
 Hooks written into a repository's own `.claude/settings*.json` stay (see `leaks`).
 """
+import filecmp
+import hashlib
 import json
 import os
 import re
@@ -30,6 +32,12 @@ UNSAFE_FLAGS = ("--setting-sources", "--settings", "--bare", "--restricted")  # 
 
 def user_dir() -> Path:
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+
+
+def folder() -> Path:
+    """This account's profile folder. Accounts (config folders) run at the same time, so each one has its own."""
+    key = os.path.normcase(str(user_dir().resolve()))
+    return config.home() / "profile" / hashlib.sha1(key.encode("utf-8")).hexdigest()[:8]
 
 
 def off_names(cfg) -> list:
@@ -137,22 +145,58 @@ def _link(src: Path, dst: Path):
         shutil.copy2(src, dst)
 
 
+def _put(path: Path, text: str):
+    """Write `text` to `path` only when it differs, and by replacing the file whole: a running session never reads half of it."""
+    try:
+        if path.read_text(encoding="utf-8") == text:
+            return
+    except OSError:
+        pass
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _current(src: Path, dst: Path) -> bool:
+    """True when `dst` already is what `_link(src, dst)` makes (a link to the folder, or a file with the same bytes)."""
+    try:
+        if src.is_dir():  # shortcut: a copy made where no link can be made is always rebuilt, as it cannot be compared cheaply
+            return (dst.is_symlink() or getattr(os.path, "isjunction", lambda _: False)(dst)) and os.path.samefile(src, dst)
+        return dst.is_file() and not dst.is_symlink() and filecmp.cmp(src, dst, shallow=False)
+    except OSError:  # a link whose target is gone
+        return False
+
+
 def mirror(source: Path, dest: Path, cfg):
-    """Make `dest/.claude/{skills,agents,commands}` hold links to the user's, without the off skills."""
+    """Make `dest/.claude/{skills,agents,commands}` hold links to the user's, without the off skills.
+
+    Only what differs is touched, so a session that is running from this folder never finds it emptied."""
     skip = set(cfg["profile"]["off_skills"])
     for kind in ("skills", "agents", "commands"):
         folder = dest / ".claude" / kind
-        if folder.exists():
-            for old in folder.iterdir():
-                _remove(old)
         folder.mkdir(parents=True, exist_ok=True)
-        if not (source / kind).is_dir():
-            continue
-        for item in sorted((source / kind).iterdir()):
-            stem = item.name[:-3] if item.name.endswith(".md") else item.name
-            if item.name.startswith(".") or (kind == "skills" and stem in skip):
-                continue
-            _link(item, folder / item.name)
+        want = {}
+        if (source / kind).is_dir():
+            for item in sorted((source / kind).iterdir()):
+                stem = item.name[:-3] if item.name.endswith(".md") else item.name
+                if not (item.name.startswith(".") or (kind == "skills" and stem in skip)):
+                    want[item.name] = item
+        for old in folder.iterdir():
+            if old.name not in want:
+                _remove(old)
+        for name, item in want.items():
+            target = folder / name
+            if os.path.lexists(target):
+                if _current(item, target):
+                    continue
+                if item.is_dir() or target.is_dir() or target.is_symlink():
+                    _remove(target)
+                else:  # a changed file: replaced whole
+                    tmp = target.with_name(target.name + ".tmp")
+                    shutil.copy2(item, tmp)
+                    os.replace(tmp, target)
+                    continue
+            _link(item, target)
 
 
 def leaks(cwd, cfg) -> list:
@@ -172,7 +216,7 @@ def leaks(cwd, cfg) -> list:
 
 
 def prepare(cfg, args, cwd=None):
-    """(Claude Code arguments to put first, notes to print). Writes the files under ALMANAC_HOME/profile."""
+    """(Claude Code arguments to put first, notes to print). Writes the files under ALMANAC_HOME/profile/<account>."""
     if not cfg["profile"]["enabled"]:
         return [], []
     if any(a == f or a.startswith(f + "=") for a in args for f in UNSAFE_FLAGS):
@@ -184,19 +228,17 @@ def prepare(cfg, args, cwd=None):
         user = {}
     except (OSError, ValueError) as exc:
         return [], [f"the clean profile is off for this run: {source / 'settings.json'} was not read ({exc})"]
-    folder = config.home() / "profile"
-    folder.mkdir(exist_ok=True)
+    mine = folder()
+    mine.mkdir(parents=True, exist_ok=True)
     text = claude_md(source, cfg)
     md = source / "CLAUDE.md"
-    mine = folder / "CLAUDE.md"
     if text:
-        mine.write_text(text, encoding="utf-8")
+        _put(mine / "CLAUDE.md", text)
     else:
-        mine.unlink(missing_ok=True)  # an old copy must not outlive the user's file
-    (folder / "settings.json").write_text(
-        json.dumps(curated_settings(user, cfg, md.as_posix() if text else ""), indent=2), encoding="utf-8")
-    mirror(source, folder, cfg)
+        (mine / "CLAUDE.md").unlink(missing_ok=True)  # an old copy must not outlive the user's file
+    _put(mine / "settings.json", json.dumps(curated_settings(user, cfg, md.as_posix() if text else ""), indent=2))
+    mirror(source, mine, cfg)
     # --add-dir takes every value up to the next flag, so it must not be the last one before the user's own arguments
-    flags = ["--add-dir", str(folder), "--setting-sources", "project,local", "--settings", str(folder / "settings.json")]
+    flags = ["--add-dir", str(mine), "--setting-sources", "project,local", "--settings", str(mine / "settings.json")]
     notes = [f"{path} runs a hook this profile leaves out; it will still run here" for path in leaks(cwd or os.getcwd(), cfg)]
     return flags, notes

@@ -141,13 +141,14 @@ you keep (an `rtk` hook, say) still run. `profile.enabled` turns the whole thing
 
 How it is done, because a settings layer on top cannot remove a hook (hook lists
 from every source are added together): `almanac` starts Claude Code with
-`--setting-sources project,local` and `--settings ~/.almanac/profile/settings.json`,
+`--setting-sources project,local` and `--settings ~/.almanac/profile/<account>/settings.json`
+(`<account>` is a short hash of the Claude config folder, so two accounts running at once never share or empty each other's folder),
 a copy of `~/.claude/settings.json` with the off plugins set to `false` and the
 matching hooks left out. That drops the whole user source, so what it carries is put back:
 your skills (minus the off ones), agents and commands through `--add-dir
-~/.almanac/profile` (links to your folders, never copies you must keep in sync), and your
+~/.almanac/profile/<account>` (links to your folders, never copies you must keep in sync; a launch changes only what differs), and your
 `CLAUDE.md`, with its `@` imports and minus any section or marker that names an off
-plugin, as `~/.almanac/profile/CLAUDE.md`, which Claude Code reads from that added
+plugin, as `~/.almanac/profile/<account>/CLAUDE.md`, which Claude Code reads from that added
 folder (the generated settings set `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD`, so a
 `CLAUDE.md` in a folder you add with `--add-dir` yourself is read too, and
 `claudeMdExcludes` stops the original being read twice). A `CLAUDE.md` reaches sub-agents;

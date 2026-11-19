@@ -1,6 +1,7 @@
 import copy
 import json
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -102,55 +103,92 @@ class PrepareTest(unittest.TestCase):
         self.env.start()
         self.addCleanup(self.env.stop)
 
+    def prep(self, args, cwd=None):
+        flags, notes = profile.prepare(CFG, args, cwd=cwd or self.home)
+        self.dir = Path(flags[1]) if flags else None  # the folder this run was given with --add-dir
+        return flags, notes
+
     def test_flags_and_files(self):
-        flags, notes = profile.prepare(CFG, ["-p", "hi"], cwd=self.home)
+        flags, notes = self.prep(["-p", "hi"], self.home)
         self.assertEqual(notes, [])
         self.assertEqual(flags[0], "--add-dir")
         self.assertEqual(flags[2:4], ["--setting-sources", "project,local"])
-        self.assertEqual(flags[flags.index("--settings") + 1], str(self.home / "profile" / "settings.json"))
+        self.assertEqual(flags[flags.index("--settings") + 1], str(self.dir / "settings.json"))
         self.assertTrue(flags[1].startswith(str(self.home)) and flags[2].startswith("--"))  # --add-dir is not the last flag
-        written = json.loads((self.home / "profile" / "settings.json").read_text(encoding="utf-8"))
+        written = json.loads((self.dir / "settings.json").read_text(encoding="utf-8"))
         self.assertFalse(written["enabledPlugins"]["claude-mem@thedotmack"])
         self.assertEqual(written["claudeMdExcludes"], [(self.user / "CLAUDE.md").as_posix()])
 
     def test_the_users_rules_are_a_claude_md_of_the_profile_folder_so_sub_agents_get_them_too(self):
-        flags, _ = profile.prepare(CFG, [])
+        flags, _ = self.prep([])
         self.assertNotIn("--append-system-prompt-file", flags)  # a system prompt addition reaches the main thread only
-        self.assertIn("rules", (self.home / "profile" / "CLAUDE.md").read_text(encoding="utf-8"))
-        written = json.loads((self.home / "profile" / "settings.json").read_text(encoding="utf-8"))
+        self.assertIn("rules", (self.dir / "CLAUDE.md").read_text(encoding="utf-8"))
+        written = json.loads((self.dir / "settings.json").read_text(encoding="utf-8"))
         self.assertEqual(written["env"]["CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"], "1")  # Claude Code reads it from an added folder
         self.assertEqual(written["claudeMdExcludes"], [(self.user / "CLAUDE.md").as_posix()])  # the unfiltered copy stays out
 
     def test_a_removed_claude_md_leaves_no_old_copy_behind(self):
-        profile.prepare(CFG, [])
+        self.prep([])
         (self.user / "CLAUDE.md").unlink()
-        profile.prepare(CFG, [])
-        self.assertFalse((self.home / "profile" / "CLAUDE.md").exists())
-        written = json.loads((self.home / "profile" / "settings.json").read_text(encoding="utf-8"))
+        self.prep([])
+        self.assertFalse((self.dir / "CLAUDE.md").exists())
+        written = json.loads((self.dir / "settings.json").read_text(encoding="utf-8"))
         self.assertNotIn("claudeMdExcludes", written)
         self.assertNotIn("CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD", written.get("env", {}))
 
     def test_the_users_own_env_settings_are_kept(self):
         (self.user / "settings.json").write_text(json.dumps({**USER, "env": {"MINE": "1"}}), encoding="utf-8")
-        profile.prepare(CFG, [])
-        written = json.loads((self.home / "profile" / "settings.json").read_text(encoding="utf-8"))
+        self.prep([])
+        written = json.loads((self.dir / "settings.json").read_text(encoding="utf-8"))
         self.assertEqual(written["env"]["MINE"], "1")
 
     def test_skills_and_agents_come_along_except_the_off_skills(self):
-        profile.prepare(CFG, [], cwd=self.home)
-        skills = sorted(p.name for p in (self.home / "profile" / ".claude" / "skills").iterdir())
+        self.prep([], self.home)
+        skills = sorted(p.name for p in (self.dir / ".claude" / "skills").iterdir())
         self.assertEqual(skills, ["council", "keep"])
-        self.assertTrue((self.home / "profile" / ".claude" / "skills" / "keep" / "SKILL.md").exists())
-        self.assertEqual([p.name for p in (self.home / "profile" / ".claude" / "agents").iterdir()], ["editor.md"])
+        self.assertTrue((self.dir / ".claude" / "skills" / "keep" / "SKILL.md").exists())
+        self.assertEqual([p.name for p in (self.dir / ".claude" / "agents").iterdir()], ["editor.md"])
         (self.user / "skills" / "new").mkdir()
         (self.user / "skills" / "new" / "SKILL.md").write_text("n", encoding="utf-8")
-        profile.prepare(CFG, [], cwd=self.home)  # a second launch picks changes up and leaves the originals alone
-        self.assertEqual(sorted(p.name for p in (self.home / "profile" / ".claude" / "skills").iterdir()), ["council", "keep", "new"])
+        self.prep([], self.home)  # a second launch picks changes up and leaves the originals alone
+        self.assertEqual(sorted(p.name for p in (self.dir / ".claude" / "skills").iterdir()), ["council", "keep", "new"])
         self.assertTrue((self.user / "skills" / "keep" / "SKILL.md").exists())
+
+    def test_each_config_folder_has_its_own_profile_folder_and_a_launch_leaves_the_others_alone(self):
+        self.prep([])
+        mine = self.dir
+        other = temp()  # a second account running at the same time
+        (other / "settings.json").write_text("{}", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(other)}):
+            self.prep([])
+        self.assertNotEqual(self.dir, mine)
+        self.assertEqual(sorted(p.name for p in (mine / ".claude" / "skills").iterdir()), ["council", "keep"])
+        self.assertIn("rules", (mine / "CLAUDE.md").read_text(encoding="utf-8"))
+        self.prep([])
+        self.assertEqual(self.dir, mine)  # the same account always gets the same folder
+
+    def test_a_second_launch_with_nothing_changed_replaces_nothing(self):
+        self.prep([])
+        for name in ("settings.json", "CLAUDE.md"):  # an old time shows a rewrite
+            os.utime(self.dir / name, (1_000_000_000, 1_000_000_000))
+        with mock.patch.object(profile, "_remove") as remove, mock.patch.object(profile, "_link") as link:
+            self.prep([])
+        remove.assert_not_called()
+        link.assert_not_called()
+        for name in ("settings.json", "CLAUDE.md"):
+            self.assertEqual((self.dir / name).stat().st_mtime, 1_000_000_000)
+
+    def test_a_changed_or_removed_item_is_brought_up_to_date(self):
+        self.prep([])
+        (self.user / "agents" / "editor.md").write_text("agent v2", encoding="utf-8")
+        shutil.rmtree(self.user / "skills" / "keep")
+        self.prep([])
+        self.assertEqual((self.dir / ".claude" / "agents" / "editor.md").read_text(encoding="utf-8"), "agent v2")
+        self.assertEqual([p.name for p in (self.dir / ".claude" / "skills").iterdir()], ["council"])
 
     def test_off_for_the_run_when_the_user_sets_their_own_settings(self):
         for flag in (["--settings", "x.json"], ["--setting-sources=user"], ["--bare"]):
-            flags, notes = profile.prepare(CFG, flag, cwd=self.home)
+            flags, notes = self.prep(flag, self.home)
             self.assertEqual(flags, [])
             self.assertEqual(len(notes), 1)
 
@@ -161,7 +199,7 @@ class PrepareTest(unittest.TestCase):
 
     def test_an_unreadable_settings_file_leaves_the_profile_off_and_says_so(self):
         (self.user / "settings.json").write_text("{not json", encoding="utf-8")
-        flags, notes = profile.prepare(CFG, [], cwd=self.home)
+        flags, notes = self.prep([], self.home)
         self.assertEqual(flags, [])
         self.assertIn("was not read", notes[0])
 
@@ -169,7 +207,7 @@ class PrepareTest(unittest.TestCase):
         repo = temp()
         (repo / ".claude").mkdir()
         (repo / ".claude" / "settings.local.json").write_text(json.dumps(USER), encoding="utf-8")
-        _, notes = profile.prepare(CFG, [], cwd=repo)
+        _, notes = self.prep([], repo)
         self.assertEqual(len(notes), 1)
         self.assertIn("settings.local.json", notes[0])
 
