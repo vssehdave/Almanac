@@ -7,7 +7,7 @@
   Logbook, Pocketbook), the hooks matching `profile.off_hooks` (`getlogbook`) and the
   user skills in `profile.off_skills` (`logbook`): `--setting-sources project,local`
   plus a generated `--settings` file, with your skills, agents, commands and
-  `CLAUDE.md` put back through `--add-dir` and `--append-system-prompt-file`. A new
+  `CLAUDE.md` put back through `--add-dir` (as the profile folder's own `CLAUDE.md`, so sub-agents get it). A new
   proxy layer strips the same plugins' skills, agents, MCP tools, server instructions
   and hook text from any request as a second line. `almanac sandbox` runs plain
   Claude Code in `~/.claude-sandbox` with only the plugins you name.

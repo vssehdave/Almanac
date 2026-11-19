@@ -147,8 +147,11 @@ matching hooks left out. That drops the whole user source, so what it carries is
 your skills (minus the off ones), agents and commands through `--add-dir
 ~/.almanac/profile` (links to your folders, never copies you must keep in sync), and your
 `CLAUDE.md`, with its `@` imports and minus any section or marker that names an off
-plugin, through `--append-system-prompt-file` (`claudeMdExcludes` stops it being read
-twice). Login, the plugins that stay on, MCP servers and history are not settings
+plugin, as `~/.almanac/profile/CLAUDE.md`, which Claude Code reads from that added
+folder (the generated settings set `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD`, so a
+`CLAUDE.md` in a folder you add with `--add-dir` yourself is read too, and
+`claudeMdExcludes` stops the original being read twice). A `CLAUDE.md` reaches sub-agents;
+a system prompt addition would reach only the main thread. Login, the plugins that stay on, MCP servers and history are not settings
 sources and are untouched. Nothing in `~/.claude` is edited.
 
 What it does not do: hooks written into a repository's own `.claude/settings.json` or

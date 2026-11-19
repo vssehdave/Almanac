@@ -7,8 +7,11 @@ Hooks cannot be removed by a settings layer on top (hook lists from every source
   with the off plugins set to false and the hooks that match `off_hooks` left out;
 - the user's skills (minus `off_skills`), agents and commands come back through `--add-dir <ALMANAC_HOME>/profile`,
   which holds links to them (a copy where no link can be made);
-- the user's CLAUDE.md (with its @imports, minus any section about an off plugin) comes back through
-  `--append-system-prompt-file`, and `claudeMdExcludes` stops Claude Code reading it a second time.
+- the user's CLAUDE.md (with its @imports, minus any section about an off plugin) is written as `<ALMANAC_HOME>/profile/CLAUDE.md`,
+  which Claude Code reads from the added folder (`CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD`, set in the settings below),
+  and `claudeMdExcludes` stops it reading the unfiltered original. A CLAUDE.md reaches sub-agents too; a system prompt
+  addition (`--append-system-prompt-file`) reaches the main thread only. The same setting also loads a CLAUDE.md from any
+  folder the user adds with `--add-dir` themselves.
 
 Login, plugins that stay on, MCP servers and history are not settings sources and are untouched.
 Hooks written into a repository's own `.claude/settings*.json` stay (see `leaks`).
@@ -21,6 +24,7 @@ from pathlib import Path
 
 from . import config
 
+MD_FROM_ADDED_DIR = "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"  # makes Claude Code read CLAUDE.md of an --add-dir folder
 UNSAFE_FLAGS = ("--setting-sources", "--settings", "--bare", "--restricted")  # the user chose their own setup
 
 
@@ -61,8 +65,9 @@ def curated_settings(user: dict, cfg, md_path: str = "") -> dict:
     out["skillOverrides"] = {**out.get("skillOverrides", {}), **{name: "off" for name in p["off_skills"]}}
     if "hooks" in out:
         out["hooks"] = strip_hooks(out["hooks"], cfg)
-    if md_path:  # the CLAUDE.md is sent through the system prompt instead: do not read it twice
+    if md_path:  # the filtered CLAUDE.md is read from the profile folder instead: do not read the original too
         out["claudeMdExcludes"] = [*out.get("claudeMdExcludes", []), md_path]
+        out["env"] = {**out.get("env", {}), MD_FROM_ADDED_DIR: "1"}
     return out
 
 
@@ -183,13 +188,15 @@ def prepare(cfg, args, cwd=None):
     folder.mkdir(exist_ok=True)
     text = claude_md(source, cfg)
     md = source / "CLAUDE.md"
+    mine = folder / "CLAUDE.md"
+    if text:
+        mine.write_text(text, encoding="utf-8")
+    else:
+        mine.unlink(missing_ok=True)  # an old copy must not outlive the user's file
     (folder / "settings.json").write_text(
         json.dumps(curated_settings(user, cfg, md.as_posix() if text else ""), indent=2), encoding="utf-8")
     mirror(source, folder, cfg)
     # --add-dir takes every value up to the next flag, so it must not be the last one before the user's own arguments
     flags = ["--add-dir", str(folder), "--setting-sources", "project,local", "--settings", str(folder / "settings.json")]
-    if text:
-        (folder / "user-claude-md.md").write_text(text, encoding="utf-8")
-        flags += ["--append-system-prompt-file", str(folder / "user-claude-md.md")]
     notes = [f"{path} runs a hook this profile leaves out; it will still run here" for path in leaks(cwd or os.getcwd(), cfg)]
     return flags, notes

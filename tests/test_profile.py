@@ -108,12 +108,33 @@ class PrepareTest(unittest.TestCase):
         self.assertEqual(flags[0], "--add-dir")
         self.assertEqual(flags[2:4], ["--setting-sources", "project,local"])
         self.assertEqual(flags[flags.index("--settings") + 1], str(self.home / "profile" / "settings.json"))
-        self.assertIn("--append-system-prompt-file", flags)
         self.assertTrue(flags[1].startswith(str(self.home)) and flags[2].startswith("--"))  # --add-dir is not the last flag
         written = json.loads((self.home / "profile" / "settings.json").read_text(encoding="utf-8"))
         self.assertFalse(written["enabledPlugins"]["claude-mem@thedotmack"])
         self.assertEqual(written["claudeMdExcludes"], [(self.user / "CLAUDE.md").as_posix()])
-        self.assertIn("rules", (self.home / "profile" / "user-claude-md.md").read_text(encoding="utf-8"))
+
+    def test_the_users_rules_are_a_claude_md_of_the_profile_folder_so_sub_agents_get_them_too(self):
+        flags, _ = profile.prepare(CFG, [])
+        self.assertNotIn("--append-system-prompt-file", flags)  # a system prompt addition reaches the main thread only
+        self.assertIn("rules", (self.home / "profile" / "CLAUDE.md").read_text(encoding="utf-8"))
+        written = json.loads((self.home / "profile" / "settings.json").read_text(encoding="utf-8"))
+        self.assertEqual(written["env"]["CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"], "1")  # Claude Code reads it from an added folder
+        self.assertEqual(written["claudeMdExcludes"], [(self.user / "CLAUDE.md").as_posix()])  # the unfiltered copy stays out
+
+    def test_a_removed_claude_md_leaves_no_old_copy_behind(self):
+        profile.prepare(CFG, [])
+        (self.user / "CLAUDE.md").unlink()
+        profile.prepare(CFG, [])
+        self.assertFalse((self.home / "profile" / "CLAUDE.md").exists())
+        written = json.loads((self.home / "profile" / "settings.json").read_text(encoding="utf-8"))
+        self.assertNotIn("claudeMdExcludes", written)
+        self.assertNotIn("CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD", written.get("env", {}))
+
+    def test_the_users_own_env_settings_are_kept(self):
+        (self.user / "settings.json").write_text(json.dumps({**USER, "env": {"MINE": "1"}}), encoding="utf-8")
+        profile.prepare(CFG, [])
+        written = json.loads((self.home / "profile" / "settings.json").read_text(encoding="utf-8"))
+        self.assertEqual(written["env"]["MINE"], "1")
 
     def test_skills_and_agents_come_along_except_the_off_skills(self):
         profile.prepare(CFG, [], cwd=self.home)
