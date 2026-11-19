@@ -96,6 +96,7 @@ class _ListingLayer:
     """Collapse a listing's descriptions to a stub; show the full text when a message matches."""
 
     NOTE_NAMES = ""  # the note used when no description is kept at all
+    KIND = ""  # the usage `pinned` reads (tool, skill or agent); none pins nothing
     MARK, NOTE, KEY, HEADER, GAP = "", "", "", "", "\n\n"  # GAP: what separates the note from the first entry
 
     def __init__(self):
@@ -110,8 +111,12 @@ class _ListingLayer:
         return set()
 
     def pinned(self, ctx) -> list:
-        """Names the project keeps using: shown in full, snapshotted once a day."""
-        return []
+        """Names the project keeps using (two of its last ten conversations): shown in full, snapshotted once a day."""
+        if not self.KIND or ctx.store is None:
+            return []
+        from . import library  # library imports the layer that imports this module
+        used = library.recently_used(ctx.store, self.KIND, _project(ctx))
+        return sorted(name for name, count in used.items() if count >= 2)
 
     def shorten(self, description: str, chars: int) -> str:
         return stub(description, chars)
@@ -188,7 +193,7 @@ class _ListingLayer:
 
 
 class SkillsLayer(_ListingLayer):
-    MARK, NOTE, KEY = SKILL_MARK, SKILL_NOTE, "skills"
+    MARK, NOTE, KEY, KIND = SKILL_MARK, SKILL_NOTE, "skills", "skill"
     HEADER = "Full descriptions of skills that may be relevant to this message:"
     NOTE_NAMES = SKILL_NOTE_NAMES
 
@@ -198,10 +203,6 @@ class SkillsLayer(_ListingLayer):
 
     def always_full(self, ctx) -> set:
         return set(ctx.cfg["skills"]["always_full"])
-
-    def pinned(self, ctx) -> list:
-        used = ctx.store.recently_used("skill", _project(ctx)) if ctx.store is not None else {}
-        return sorted(name for name, count in used.items() if count >= 2)
 
 
 class AgentsLayer(_ListingLayer):
@@ -242,7 +243,8 @@ class ToolsLayer:
         turns = rq.human_turns(messages)
 
         def promoted():
-            used = ctx.store.recently_used("tool", _project(ctx)) if ctx.store is not None else {}
+            from . import library  # library imports the layer that imports this module
+            used = library.recently_used(ctx.store, "tool", _project(ctx)) if ctx.store is not None else {}
             return sorted(name for name, count in used.items() if count >= cfg["promote_after"])
 
         def decide():
@@ -285,16 +287,3 @@ class ToolsLayer:
                 msg["content"] = [note, {"type": "text", "text": msg["content"]}]
             else:
                 msg["content"].insert(0, note)
-
-    def observe(self, ctx, orig, reply):
-        """Remember which tools and skills this conversation used, to keep them loaded next time."""
-        if ctx.store is None:
-            return
-        for block in reply["content"]:
-            if block.get("type") != "tool_use":
-                continue
-            ctx.store.mark_used("tool", str(block.get("name")), _project(ctx), ctx.lane)
-            if block.get("name") == "Skill":
-                skill = (block.get("input") or {}).get("skill")
-                if skill:
-                    ctx.store.mark_used("skill", str(skill), _project(ctx), ctx.lane)

@@ -239,3 +239,23 @@ class ForgetTest(LibraryCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UsageTest(LibraryCase):
+    def test_the_old_used_table_moves_into_rows_that_nothing_shows(self):
+        self.memory.index("lane-1", "s", self.key, [tm.human("an ordinary question about caching")], tm.reply("fine"))
+        self.store.run("create table used (kind text not null, name text not null, project text not null, lane text not null, ts real not null, "
+                       "primary key (kind, name, lane))")
+        for kind, name, lane in (("tool", "Bash", "lane-1"), ("tool", "Read", "lane-1"), ("skill", "pdf", "lane-1"),
+                                 ("tool", "Bash", "gone-1"), ("skill", "pdf", "gone-2"), ("skill", "charts", "gone-2")):
+            self.store.run("insert into used values (?, ?, ?, ?, 5)", (kind, name, self.key, lane))
+        library.setup(self.store)
+        library.setup(self.store)  # a second run has nothing to move
+        self.assertEqual(self.store.run("select 1 from sqlite_master where name = 'used'"), [])
+        self.assertEqual(library.recently_used(self.store, "tool", self.key), {"Bash": 2, "Read": 1})
+        self.assertEqual(library.recently_used(self.store, "skill", self.key), {"pdf": 2, "charts": 1})
+        self.assertEqual(library.recently_used(self.store, "agent", self.key), {})
+        self.assertEqual(sorted(r["convo"] < 0 for r in self.rows()), [False, True, True])  # lane-1 has a conversation, the others none
+        self.assertEqual((library.listing(self.store), self.store.run("select count(*) n from library_fts")[0]["n"]), ([], 0))
+        self.assertIsNone(library.find(self.store, "an ordinary question about caching"))
+

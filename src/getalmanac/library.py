@@ -2,10 +2,12 @@
 
 When an exchange ends after at least one tool call, one entry is written from it (searches and lists show
 it once it has `library.min_tools` calls): the typed request, the route (the miner's step signatures, repeats
-collapsed), the tools and skills and agents it used, the files touched, the fixes (a failed step and what recovered it) and how it ended. No model is called. Text is
-redacted and tag-stripped like the rest of memory. When a later entry in the same project asks for the same
-thing by nearly the same route, it replaces the older one as the current entry, which is kept and linked
-under `superseded_by`; the newer one lists what changed. Rows go with their conversation (forget, prune).
+collapsed), the tools, skills and agents it used, the files touched, the fixes (a failed step and what
+recovered it) and how it ended. No model is called. Text is redacted and tag-stripped like the rest of
+memory. When a later entry in the same project asks for the same thing by nearly the same route, it replaces
+the older one as the current entry, which is kept and linked under `superseded_by`; the newer one lists what
+changed. Rows go with their conversation (forget, prune). The same rows say which tools, skills and agents a
+project keeps using (`recently_used`), sub-agent exchanges included; those are shown nowhere else.
 Current entries are searchable (an FTS5 table over prompt and route), and `note` renders the one that best
 matches a typed prompt as the short reminder the playbook layer adds to the request.
 """
@@ -63,6 +65,25 @@ def min_tools(cfg=None) -> int:
     return ((cfg if cfg is not None else config.load()).get("library") or {}).get("min_tools", MIN_TOOLS)
 
 
+def _carry_usage(store):
+    """A store written when usage had a table of its own: each lane's names move to one row (prompt '', so no search or
+    list shows it) of the lane's conversation, or of a number of its own below zero when it has none; then the table goes."""
+    if not store.run("select 1 from sqlite_master where name = 'used'"):
+        return
+    store.run("begin immediate")
+    try:
+        if store.run("select 1 from sqlite_master where name = 'used'"):  # another process may have moved it first
+            store.run("insert into library (convo, seq, project, prompt, tools, skills, created, updated) "
+                      "select coalesce((select id from convo where lane = u.lane), -min(u.rowid)), -1, max(u.project), '', "
+                      "json_group_array(u.name) filter (where u.kind = 'tool'), json_group_array(u.name) filter (where u.kind = 'skill'), "
+                      "max(u.ts), max(u.ts) from used u group by u.lane")
+            store.run("drop table used")
+        store.run("commit")
+    except BaseException:
+        store.run("rollback")
+        raise
+
+
 def setup(store):
     """Create the tables. The search table of a store written before it existed is filled from the current entries."""
     with store.lock:
@@ -75,6 +96,7 @@ def setup(store):
                     store.run("update library set calls = max(5, json_array_length(route))")
         if not store.run("select 1 from library_fts limit 1") and store.run("select 1 from library where superseded_by = 0 and prompt != '' limit 1"):
             store.run("insert into library_fts (rowid, prompt, route) select id, prompt, route from library where superseded_by = 0 and prompt != ''")
+        _carry_usage(store)
 
 
 def _sync(store, ids):
@@ -320,6 +342,15 @@ def find(store, text, project="", floor=0.0, min_tools=MIN_TOOLS):
     """The best current entry for `text` as (entry, score): in `project` first, then in any project. None when nothing scores."""
     best = search(store, text, project, 1, floor, min_tools)
     return (best[0][1], best[0][0]) if best else None
+
+
+def recently_used(store, kind, project, convos=10) -> dict:
+    """name -> how many of the project's last `convos` conversations used it. `kind` is "tool", "skill" or "agent"."""
+    column = {"tool": "tools", "skill": "skills", "agent": "agents"}[kind]
+    rows = store.run(f"select j.value name, count(distinct l.convo) n from library l, json_each(l.{column}) j where l.project = ? and l.convo in "
+                     "(select convo from library where project = ? group by convo order by max(updated) desc limit ?) group by j.value",
+                     (project, project, convos))
+    return {r["name"]: r["n"] for r in rows}
 
 
 def bump(store, entry) -> int:

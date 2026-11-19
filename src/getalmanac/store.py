@@ -1,4 +1,4 @@
-"""The local SQLite file: frozen per-conversation decisions and usage counts.
+"""The local SQLite file: frozen per-conversation decisions.
 
 One connection shared by the request threads and the background worker, behind
 a lock. Everything here stays on this machine.
@@ -13,11 +13,6 @@ from . import config
 
 SCHEMA = """
 create table if not exists state (key text primary key, value text not null, ts real not null);
-create table if not exists used (
-    kind text not null, name text not null, project text not null, lane text not null, ts real not null,
-    primary key (kind, name, lane)
-);
-create index if not exists used_project on used (kind, project, ts);
 """
 STATE_DAYS = 45
 VERSION = 1
@@ -73,18 +68,6 @@ class Store:
                 value = compute()
                 self.put(key, value)
             return value
-
-    def mark_used(self, kind, name, project, lane):
-        self.run("insert or ignore into used (kind, name, project, lane, ts) values (?, ?, ?, ?, ?)",
-                 (kind, name, project, lane, time.time()))
-
-    def recently_used(self, kind, project, lanes=10) -> dict:
-        """name -> how many of the project's last `lanes` conversations used it."""
-        rows = self.run(
-            "select name, count(*) n from used where kind = ? and project = ? and lane in "
-            "(select lane from used where kind = ? and project = ? group by lane order by max(ts) desc limit ?) "
-            "group by name", (kind, project, kind, project, lanes))
-        return {r["name"]: r["n"] for r in rows}
 
     def close(self):
         with self.lock:

@@ -9,7 +9,7 @@ import tempfile
 from helpers import Rig, config
 from test_startup import body as startup_body
 
-from getalmanac import report, startup
+from getalmanac import library, report, startup
 from getalmanac.store import Store
 from getalmanac.sysprefix import SysPrefixLayer
 
@@ -130,8 +130,10 @@ class SysPrefixTest(unittest.TestCase):
         self.assertEqual(dump(a), dump(b))
 
     def stack(self):
+        store = Store(os.path.join(tempfile.mkdtemp(prefix="almanac-db-"), "a.db"))
+        library.setup(store)  # the layers read usage from the library rows
         rig = Rig(layers=[startup.SkillsLayer(), startup.AgentsLayer(), startup.ToolsLayer(), SysPrefixLayer()],
-                  store=Store(os.path.join(tempfile.mkdtemp(prefix="almanac-db-"), "a.db")), overrides={"startup.system_prefix": True})
+                  store=store, overrides={"startup.system_prefix": True})
         self.addCleanup(rig.close)
         return rig
 
