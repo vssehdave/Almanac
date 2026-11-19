@@ -579,8 +579,21 @@ class PlaybookLayer:
         matched = ctx.store.get(f"{earlier}:m{prev}") or ctx.store.get(earlier)
         if len(calls) < limit or matched or any(c.endswith("playbook_save") for c in calls):
             return ""
+        if self._covered(ctx, orig[prev:seen[last]], person_text(orig[prev])):
+            return ""
         return (f"<system-reminder>\nThe previous task took {len(calls)} tool calls and has no playbook. If it will come up again, "
                 "record it with the `almanac:playbook` skill once this request is answered.\n</system-reminder>")
+
+    @staticmethod
+    def _covered(ctx, group, text) -> bool:
+        """True when a playbook or draft (any status) matches the request, or the miner or the library's repeated routes
+        already have it as a candidate to compile: the model and the compiler would draft the same playbook twice."""
+        from . import library, mine  # both import this module
+        if any(score(pb, text) for pb in listing()):
+            return True
+        route = tuple(library._collapse([s for c in library._calls(group) for s in c["steps"]])[:library.MAX_ROUTE])
+        found = mine._load(mine.candidates_path(), {}).get("candidates") or []
+        return library._found(route, text, found + library.candidates(ctx.store, found, library.min_tools(ctx.cfg)))
 
     @staticmethod
     def _place(messages, orig, kept):
