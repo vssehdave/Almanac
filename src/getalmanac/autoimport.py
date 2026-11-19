@@ -28,7 +28,7 @@ LAST = "autoimport:last"  # the report of the last round, for `almanac status`
 
 
 def source() -> Path:
-    return Path.home() / ".claude" / "projects"
+    return importer.transcript_dirs(None, "autoimport")[0] / "projects"
 
 
 def _own_home() -> bool:

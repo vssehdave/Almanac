@@ -22,7 +22,7 @@ import time
 from collections import Counter
 from pathlib import Path
 
-from . import config, launcher, playbook
+from . import config, importer, launcher, playbook
 from .memory import redact
 from .routing import person_text
 
@@ -104,18 +104,7 @@ def _save(path, data):
 
 def config_dirs(cfg=None) -> list:
     """Claude Code config folders to read: ~/.claude, $CLAUDE_CONFIG_DIR and playbooks.transcript_dirs."""
-    cfg = cfg if cfg is not None else config.load()
-    extra = (cfg.get("playbooks") or {}).get("transcript_dirs") or []
-    found, seen = [], set()
-    for raw in [Path.home() / ".claude", os.environ.get("CLAUDE_CONFIG_DIR") or "", *extra]:
-        if not isinstance(raw, (str, Path)) or not str(raw):
-            continue
-        path = Path(raw).expanduser()
-        real = os.path.normcase(os.path.realpath(path))
-        if real not in seen and (path / "projects").is_dir():
-            seen.add(real)
-            found.append(path)
-    return found
+    return importer.transcript_dirs(cfg, "mine")
 
 
 def _signature(block) -> str:

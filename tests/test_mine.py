@@ -138,6 +138,17 @@ class ParserTest(Home):
         write_session(self.user_home / ".claude", "C--code-app", "h1", [("home account request words", BUILD)])
         self.assertEqual(sorted(t["session"] for t in mine.read_turns(30, self.cfg)), ["h1", "w1"])
 
+    def test_one_function_states_which_reader_sees_which_folder(self):
+        from getalmanac import importer
+        for base in (self.cfg_dir, self.user_home / ".claude"):
+            (base / "projects").mkdir(parents=True)
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.cfg_dir)}):
+            self.assertEqual(importer.transcript_dirs(self.cfg, "autoimport"), [self.user_home / ".claude"])
+            self.assertEqual(importer.transcript_dirs(self.cfg, "import"), [self.cfg_dir])
+            self.assertEqual(importer.transcript_dirs(self.cfg, "mine"), [self.user_home / ".claude", self.cfg_dir])
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": ""}):
+            self.assertEqual(importer.transcript_dirs(self.cfg, "import"), [self.user_home / ".claude"])
+
     def test_config_dirs_dedupes_the_same_folder(self):
         (self.cfg_dir / "projects").mkdir()
         self.cfg["playbooks"]["transcript_dirs"] = [str(self.cfg_dir)]
