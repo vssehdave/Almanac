@@ -1232,6 +1232,9 @@ class MemoryLayer:
             if isinstance(number, int) and not isinstance(number, bool):
                 self.memory.store.run("update convo set review = 'reviewed', review_note = ? "
                                       "where id = ? and parent != 0 and review = 'pending'", (verdict, number))
+            elif number is None and (own := self.memory.convo_of(ctx.lane)):  # no number: every pending sub-agent of this conversation
+                self.memory.store.run("update convo set review = 'reviewed', review_note = ? "
+                                      "where parent = ? and review = 'pending'", (verdict, own["id"]))
 
     def observe(self, ctx, orig, reply):
         if not ctx.cfg["memory"]["enabled"]:

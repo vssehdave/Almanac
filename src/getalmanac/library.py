@@ -344,12 +344,16 @@ def find(store, text, project="", floor=0.0, min_tools=MIN_TOOLS):
     return (best[0][1], best[0][0]) if best else None
 
 
-def recently_used(store, kind, project, convos=10) -> dict:
-    """name -> how many of the project's last `convos` conversations used it. `kind` is "tool", "skill" or "agent"."""
+def recently_used(store, kind, project, convos=30, agent_type=None) -> dict:
+    """name -> how many of the project's last `convos` conversations used it. `kind` is "tool", "skill" or "agent".
+    Main conversations count for the main thread; with `agent_type`, only that type's sub-agent conversations count."""
     column = {"tool": "tools", "skill": "skills", "agent": "agents"}[kind]
+    scope = ("exists (select 1 from convo c where c.id = l.convo and c.parent != 0 and c.agent_type = ?)" if agent_type is not None
+             else "not exists (select 1 from convo c where c.id = l.convo and c.parent != 0)")
+    extra = (agent_type,) if agent_type is not None else ()
     rows = store.run(f"select j.value name, count(distinct l.convo) n from library l, json_each(l.{column}) j where l.project = ? and l.convo in "
-                     "(select convo from library where project = ? group by convo order by max(updated) desc limit ?) group by j.value",
-                     (project, project, convos))
+                     f"(select l.convo from library l where l.project = ? and {scope} group by l.convo order by max(l.updated) desc limit ?) "
+                     "group by j.value", (project, project, *extra, convos))
     return {r["name"]: r["n"] for r in rows}
 
 

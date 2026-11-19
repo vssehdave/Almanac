@@ -591,6 +591,16 @@ class SubagentTest(Case):
         self.assertEqual(review("claude-opus-5", child["id"], "changed my mind")["review_note"], "holds up")  # only pending changes
         hit = self.memory.search("retry helper net.py", project=self.key)[0]
         self.assertNotIn("unreviewed", mcp.render_hits([hit]))
+        self.rig.upstream.respond = lambda req: (200, {"content-type": "text/event-stream"}, sse(
+            "ok", tool=("mcp__almanac__memory_review", {"verdict": "all checked"})))
+        ask = dict(self.body("Review all the stored sub-agent work"), model="claude-opus-5")
+        self.rig.messages(ask)
+        self.rig.records()
+        here = self.store.run("select id from convo where lane = ?", (self.rig.records()[-1]["lane"],))[0]["id"]
+        self.store.run("update convo set review = 'pending', parent = ? where id = ?", (here, child["id"]))  # a sub-agent of the reviewing conversation
+        self.rig.messages(ask)
+        self.rig.records()
+        self.assertEqual(self.store.run("select review from convo where id = ?", (child["id"],))[0]["review"], "reviewed")  # no number: all of them
         self.assertIn("sub-agent of conversation", mcp.render_hits([hit]))
 
     def test_the_review_tool_only_acknowledges(self):
