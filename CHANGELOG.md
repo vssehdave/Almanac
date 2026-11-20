@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **The daily summary budget no longer loses counts.** The routing classifier, live
+  and idle summaries and the imported-summary job each read the day's count, added to
+  it and wrote it back, so calls that finished out of order (or on the importer's own
+  connection) overwrote each other. Reserving a call and adding its tokens are now
+  single atomic updates in the database.
+
 - **A cold return is compacted.** A request that comes back after its cache has
   expired rewrites the whole prefix whatever Almanac sends, so with
   `compaction.on_cold` (on by default) it is compacted from twice

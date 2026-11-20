@@ -379,15 +379,12 @@ class RoutingLayer:
     def _ask(self, ctx, cfg, text):
         """(tier, why) from one small-model call, or None. Shares the pause and daily cap of the summary calls."""
         store = ctx.store
-        used = summarize.today(store)
-        if summarize.paused_until(store) or used["calls"] >= ctx.cfg["memory"]["summary_daily_calls"]:
+        if summarize.paused_until(store) or not summarize.reserve(store, ctx.cfg["memory"]["summary_daily_calls"]):
             return None
-        used["calls"] += 1
-        store.put("summary:day", used)
         body = {"model": cfg["models"]["small"], "max_tokens": 120,
                 "system": summarize._identity(ctx.orig) + [{"type": "text", "text": ASK}],
                 "messages": [{"role": "user", "content": text[:3000]}]}
-        message = summarize.call(ctx, body, used, timeout=CLASSIFY_TIMEOUT)
+        message = summarize.call(ctx, body, timeout=CLASSIFY_TIMEOUT)
         raw = "".join(b.get("text") or "" for b in (message or {}).get("content") or [] if isinstance(b, dict))
         found = re.search(r"\{.*\}", raw, re.S)
         try:

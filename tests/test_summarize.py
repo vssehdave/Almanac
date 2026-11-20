@@ -274,6 +274,50 @@ class MigrationTest(unittest.TestCase):
         self.assertEqual(memory.status_counts()["done"], 1)
 
 
+class Budget(unittest.TestCase):
+    """The daily summary count and tokens are one record that several threads and connections add to."""
+
+    def ctx(self, store):
+        class Reply:
+            status = 200
+
+            def read(self):
+                return json.dumps({"content": [], "usage": {"input_tokens": 10, "output_tokens": 2}}).encode()
+
+        class Conn:
+            def request(self, *args):
+                pass
+
+            def getresponse(self):
+                return Reply()
+
+            def close(self):
+                pass
+
+        proxy = type("P", (), {"base": "", "connect": lambda self: Conn()})()
+        return type("C", (), {"store": store, "proxy": proxy, "headers": {}})()
+
+    def test_calls_finishing_out_of_order_lose_no_count_or_tokens(self):
+        path = os.path.join(tempfile.mkdtemp(prefix="almanac-bud-"), "a.db")
+        a, b = Store(path), Store(path)  # the background import has a connection of its own
+        self.addCleanup(a.close)
+        self.addCleanup(b.close)
+        self.assertTrue(summarize.reserve(a, 5))
+        self.assertTrue(summarize.reserve(b, 5))
+        summarize.call(self.ctx(b), {})  # the second call finishes first
+        summarize.call(self.ctx(a), {})
+        used = summarize.today(a)
+        self.assertEqual((used["calls"], used["in"], used["out"]), (2, 20, 4))
+
+    def test_the_cap_holds_and_an_explicit_limit_may_pass_it(self):
+        store = Store(os.path.join(tempfile.mkdtemp(prefix="almanac-bud-"), "a.db"))
+        self.addCleanup(store.close)
+        self.assertEqual([summarize.reserve(store, 2) for _ in range(3)], [True, True, False])
+        self.assertEqual(summarize.today(store)["calls"], 2)
+        self.assertTrue(summarize.reserve(store))
+        self.assertEqual(summarize.today(store)["calls"], 3)
+
+
 class CompactionTest(tc.LayerCase):
     def test_a_later_outline_uses_the_summary_and_a_frozen_prefix_does_not_change(self):
         messages = tc.history(8)
