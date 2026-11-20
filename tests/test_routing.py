@@ -440,6 +440,22 @@ class SubagentTest(Case):
         self.assertEqual([json.loads(r["body"])["model"] for r in self.rig.upstream.requests], [SMALL, LARGE])
 
 
+    def test_a_raised_subagent_drops_back_after_two_clean_requests(self):
+        def step(i, err):
+            return [{"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": "Bash", "input": {"command": "pytest"}}]},
+                    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "x", **({"is_error": True} if err else {})}]}]
+        loop = [human("Difficulty: standard\nfix the failing test")]
+        for i in range(3):
+            loop += step(i, True)
+        self.rig.messages(body(loop, MEDIUM), extra=sub_headers("c"))
+        self.assertEqual(self.rig.sent()["model"], LARGE)  # three errors in a row: raised
+        loop += step(3, False)
+        self.rig.messages(body(loop, MEDIUM), extra=sub_headers("c"))
+        self.assertEqual(self.rig.sent()["model"], LARGE)  # one clean request is not enough
+        loop += step(4, False)
+        self.rig.messages(body(loop, MEDIUM), extra=sub_headers("c"))
+        self.assertEqual(self.rig.sent()["model"], MEDIUM)  # two clean: back down
+
 class SubagentsModeTest(Case):
     mode = "subagents"
 
@@ -764,6 +780,18 @@ class AgentFloorTest(Case):
         self.send(convo([{"text": "hello"}]), model=LARGE)
         self.assertEqual(self.sub("Difficulty: simple\nlist the files", LARGE, agent="b"), LARGE)
         self.assertEqual(self.sub("Difficulty: simple\nlist the files", LARGE, agent="c", kind="Explore"), LARGE)
+
+    def test_an_inheriting_agent_with_no_difficulty_line_starts_on_medium(self):
+        self.start(**{"routing.route_inherited": False})  # the default; the floor must not lift the default back to Opus
+        self.send(convo([{"text": "hello"}]), model=LARGE)
+        self.assertEqual(self.sub("Look around the repo and tell me what it does.", LARGE), MEDIUM)
+        self.assertEqual(self.sub("Difficulty: simple\nlist the files", LARGE, agent="b"), LARGE)  # a marked task keeps the floor
+        self.assertEqual(self.sub("Difficulty: hard\nfind the race", LARGE, agent="c"), LARGE)
+
+    def test_an_agent_with_its_own_model_keeps_it_without_a_difficulty_line(self):
+        self.start(**{"routing.route_inherited": False})
+        self.send(convo([{"text": "hello"}]), model=MEDIUM)  # the parent runs on Sonnet; this agent asked for Opus
+        self.assertEqual(self.sub("Look around the repo and tell me what it does.", LARGE), LARGE)
 
     def test_a_pin_overrides_the_floor(self):
         self.send(convo([{"text": "hello"}]), model=MEDIUM)

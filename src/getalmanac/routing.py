@@ -9,7 +9,8 @@ model writes its whole prefix into that model's cache again, at the cache-write
 price, and the old model's cache goes cold. So on the main thread a move down is a
 priced decision (see `price`), and a move up is made whenever the turn needs it.
 Sub-agent threads start small and fresh, so they are routed freely, though never below the model
-their own definition asked for. A thread that keeps failing climbs one rung of its starting
+their own definition asked for. One that names no model and carries no difficulty line, so would only
+inherit the main thread's large model, starts on medium instead. A thread that keeps failing climbs one rung of its starting
 tier's ladder (`routing.ladders`: a model, then an effort level) and never past the end of it.
 
 Every decision is made once per human turn and stored, so the whole tool loop of
@@ -156,6 +157,20 @@ def strikes(messages, after: int) -> int:
     return count
 
 
+def settled(messages, calm: int) -> list:
+    """The messages after the last run of `calm` requests in a row whose tool results all came back clean:
+    failures before that no longer count, so a raised sub-agent drops back once it is working again."""
+    start, run = 0, 0
+    for i, msg in enumerate(messages):
+        results = [b for b in rq.blocks(msg) if b.get("type") == "tool_result"] if isinstance(msg, dict) else []
+        if not results:
+            continue
+        run = 0 if any(b.get("is_error") for b in results) else run + 1
+        if calm and run >= calm:
+            start, run = i + 1, 0
+    return messages[start:]
+
+
 def failing(messages, after: int) -> bool:
     """True when this stretch of a conversation went wrong."""
     return strikes(messages, after) > 0
@@ -251,7 +266,8 @@ class RoutingLayer:
         turn = len(turns) - 1 if kind == "main" else 0
         text = person_text(messages[turns[turn]])
         key = f"route:{ctx.lane}:{turn}:{_digest(text)}" if kind == "main" else f"route:{ctx.lane}"
-        hits = strikes(messages, cfg["escalate_after"]) if kind == "sub" else 0  # a sub-agent's own failures: each run is a new decision
+        # a sub-agent's own failures since it last worked cleanly: each count is a new decision, and a calm stretch drops it back
+        hits = strikes(settled(messages, cfg.get("calm_after", 2)), cfg["escalate_after"]) if kind == "sub" else 0
         key += f":s{hits}" if hits else ""
         first = False
         dec = ctx.store.get(key)
@@ -309,12 +325,15 @@ class RoutingLayer:
         if kind == "main" and turn:
             prev = store.get(f"route:{ctx.lane}:{turn - 1}:{_digest(person_text(messages[turns[turn - 1]]))}")
         cur = prev["tier"] if prev and not prev.get("skip") else tier_now
+        parent = (store.get(f"main:{ctx.session}") or {}).get("sent") if kind == "sub" else None
+        default = kind == "sub" and tier == "inherit" and pin not in TIERS and tier_now == "large" and parent == body["model"]
+        if default:  # no model of its own and no difficulty sign: the parent's Opus is not the right start
+            tier, why = "medium", "a sub-agent with no difficulty line and no model of its own starts on medium"
         if tier == "inherit":
             tier = cur
         failed_text = why == FAILED_WHY
         if kind == "sub" and pin not in TIERS:  # the model the agent starts on is a floor; `route_inherited` lifts it for one that only inherited the parent's
-            parent = (store.get(f"main:{ctx.session}") or {}).get("sent")
-            if (not cfg["route_inherited"] or parent and parent != body["model"]) and TIERS.index(tier) < TIERS.index(tier_now):
+            if not default and (not cfg["route_inherited"] or parent and parent != body["model"]) and TIERS.index(tier) < TIERS.index(tier_now):
                 tier, why = tier_now, why + f"; kept at the {tier_now} model the agent starts on"
         if pin not in TIERS and TIERS.index(tier) > top:
             tier, why = TIERS[top], why + f" (held at the {cfg['ceiling']} ceiling)"

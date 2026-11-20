@@ -41,7 +41,7 @@ DEFAULTS = {
         "off_hook_text": [],
     },
     "startup": {
-        "agent_chars": 60,  # characters of description kept for a listed agent type; 0 leaves the agent listing alone
+        "agent_chars": 160,  # characters of description kept for a listed agent type (enough to tell when to use it); 0 leaves the agent listing alone
         "lean_rules": True,  # Almanac's own minimal-change rules, added to the main thread and every sub-agent (cheatsheet.py)
         "lean_level": "full",  # lite: build what was asked and name the smaller option; full; ultra: also question the request
         "lean_rules_text": "",  # your own wording instead of the packaged rules ("" keeps them)
@@ -103,6 +103,7 @@ DEFAULTS = {
         "margin": 0.2,  # a move down on the main thread must be at least this much cheaper than staying
         "escalate_after": 3,  # tool errors in a row, or one call failing this often, raise the next turn one rung
         "escalate_turns": 3,  # turns the raise lasts
+        "calm_after": 2,  # a raised sub-agent drops back after this many requests in a row with clean tool results (0: never)
         # Relative prices per token, for comparing models only. They are list-price ratios as of 2026-11-03 for the
         # 5.5 models (cache write 1.25x input, cache read 0.05x for Sonnet and Opus); the Haiku cache-read ratio
         # (0.1x) is assumed, as it is not listed. cache_write and cache_read are what a prefix costs to write into,

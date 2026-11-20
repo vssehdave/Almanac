@@ -18,8 +18,9 @@ SKILL_NOTE = ("Descriptions ending in … are shortened to save context. Every s
 SKILL_NOTE_NAMES = ("Only skill names are listed to save context. Every skill listed can be invoked by its name, "
                     "and its full description is shown when a message calls for it.")
 AGENT_MARK = "Available agent types for the Agent tool:"
-AGENT_NOTE = ("Descriptions ending in … are shortened to save context. Every agent listed can still be used by its "
-              "name, and its full description is shown when a message calls for it.")
+AGENT_NOTE = ("Descriptions ending in … are shortened to save context; the full description is shown when a message "
+              "calls for it. When a listed specialist agent fits the task, use it (set subagent_type to its name) "
+              "instead of general-purpose; use general-purpose only when none fits.")
 _ENTRY = re.compile(r"(?m)^- ([\w.\-/]+(?::[\w.\-/]+)*)(?:: |[ ]*$)")  # `- name: text`, or a bare `- name`
 DEFER_MARK = "The following deferred tools are now available via ToolSearch."
 DEFER_TEXT = (DEFER_MARK + " Their schemas are NOT loaded — calling them directly will fail with "
@@ -106,6 +107,8 @@ class _ListingLayer:
     KIND = ""  # the usage `pinned` reads (tool, skill or agent); none pins nothing
     MARK, NOTE, KEY, HEADER, GAP = "", "", "", "", "\n\n"  # GAP: what separates the note from the first entry
 
+    ALWAYS_NOTE = False  # true: the note goes in even when nothing was shortened
+
     def __init__(self):
         self._indexes = {}
 
@@ -175,7 +178,7 @@ class _ListingLayer:
         text = block["text"]
         note = self.NOTE_NAMES if chars <= 0 and self.NOTE_NAMES else self.NOTE
         listing = self.MARK + "\n" + note + self.GAP + "\n".join(lines)
-        if len(listing) >= end - start:
+        if len(listing) >= end - start and not self.ALWAYS_NOTE:
             return  # nothing to gain: leave the request alone
         block["text"] = text[:start] + listing + text[end:]
         saved = (end - start) - len(listing)
@@ -217,6 +220,7 @@ class AgentsLayer(_ListingLayer):
 
     MARK, NOTE, KEY, KIND, GAP = AGENT_MARK, AGENT_NOTE, "agents", "agent", "\n"
     HEADER = "Full descriptions of agent types that may be relevant to this message:"
+    ALWAYS_NOTE = True  # the note also tells Claude to prefer a fitting specialist, so it must not depend on anything being cut
 
     def settings(self, ctx):
         chars = ctx.cfg["startup"]["agent_chars"]
