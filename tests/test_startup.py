@@ -23,9 +23,10 @@ SKILLS = {
 LISTING = startup.SKILL_MARK + "\n\n" + "\n".join(f"- {n}: {d}" for n, d in SKILLS.items())
 AGENTS = {
     "claude": "Catch-all for any task that does not fit a more specific agent. (Tools: *)",
-    "crew:db-reviewer": "Reviews database schemas, migrations and SQL queries for correctness." + LONG + " (Tools: Read, Grep, Bash)",
-    "infra-planner": "Plans terraform infrastructure changes before they are applied." + LONG + " (Tools: Read, Glob)",
-    **{f"helper-{i}": f"Handles routine chore number {i}." + LONG + " (Tools: Read, Edit)" for i in range(4)},
+    "crew:db-reviewer": "Reviews database schemas, migrations and SQL queries for correctness." + LONG * 2 + " (Tools: Read, Grep, Bash)",
+    "infra-planner": "Plans terraform infrastructure changes before they are applied." + LONG * 2 + " (Tools: Read, Glob)",
+    "mid-sized": "Writes release notes from merged pull requests." + LONG[:60] + " (Tools: Read)",  # long enough to be seen whole at the default
+    **{f"helper-{i}": f"Handles routine chore number {i}." + LONG * 2 + " (Tools: Read, Edit)" for i in range(4)},
 }
 AGENT_LISTING = startup.AGENT_MARK + "\n" + "\n".join(f"- {n}: {d}" for n, d in AGENTS.items())
 SESSION_TEXT = ("SessionStart hook: hi\n\n# Environment\n - Primary working directory: /repo/demo\n\n"
@@ -194,13 +195,25 @@ class AgentsLayerTest(LayerCase):
         sent = self.agents()
         self.assertEqual(list(sent), list(AGENTS))
         stubbed = sent["crew:db-reviewer"]
-        self.assertTrue(stubbed.endswith("…") and "Tools" not in stubbed and len(stubbed) <= 61)
+        self.assertTrue(stubbed.endswith("…") and "Tools" not in stubbed and len(stubbed) <= 161)
         self.assertEqual(sent["claude"], AGENTS["claude"])  # already short: kept whole, with its tools
+        self.assertEqual(sent["mid-sized"], AGENTS["mid-sized"])  # within the 160 character default: not stubbed
         text = self.rig.sent()["messages"][1]["content"][0]["text"]
         self.assertIn(startup.AGENT_NOTE, text)
         self.assertTrue(text.endswith("Today's date is 2026-01-01."))
         self.assertGreater(self.rig.records()[-1]["agents"]["saved_chars"], 400)
         self.assertTrue(listing_of(self.rig.sent())["slides"].endswith("…"))  # the skills layer still ran
+
+    def test_the_note_tells_claude_to_prefer_a_specialist_even_when_nothing_is_cut(self):
+        self.assertEqual(config.DEFAULTS["startup"]["agent_chars"], 160)
+        self.assertIn("instead of general-purpose", startup.AGENT_NOTE)
+        short = {"claude": "Catch-all agent. (Tools: *)", "crew:db-reviewer": "Reviews SQL. (Tools: Read)"}
+        request = body("hello")
+        request["messages"][1]["content"][0]["text"] = startup.AGENT_MARK + "\n" + "\n".join(f"- {n}: {d}" for n, d in short.items())
+        self.rig.messages(request)
+        text = self.rig.sent()["messages"][1]["content"][0]["text"]
+        self.assertIn(startup.AGENT_NOTE, text)
+        self.assertEqual(listing_of(self.rig.sent(), startup.AGENT_MARK), short)
 
     def test_agents_used_in_two_conversations_stay_full_in_a_new_one(self):
         self.used("agent", "infra-planner", 1, 2)

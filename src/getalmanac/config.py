@@ -41,7 +41,7 @@ DEFAULTS = {
         "off_hook_text": [],
     },
     "startup": {
-        "agent_chars": 60,  # characters of description kept for a listed agent type; 0 leaves the agent listing alone
+        "agent_chars": 160,  # characters of description kept for a listed agent type (enough to tell when to use it); 0 leaves the agent listing alone
         "lean_rules": True,  # Almanac's own minimal-change rules, added to the main thread and every sub-agent (cheatsheet.py)
         "lean_level": "full",  # lite: build what was asked and name the smaller option; full; ultra: also question the request
         "lean_rules_text": "",  # your own wording instead of the packaged rules ("" keeps them)
