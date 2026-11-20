@@ -5,6 +5,7 @@ fetched into a quarantine folder, nothing in it is ever run, and only folders ho
 copied out, without their links, and only after a SAFE scan.
 """
 import hashlib
+import io
 import json
 import os
 import re
@@ -505,8 +506,12 @@ def _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, bo
     changed += [f"MCP server(s) left out, no exact version: {', '.join(n for n in servers if n not in kept)}"] if len(kept) < len(servers) else []
     row = f"| `{name}` | {source} | {(commit or 'local')[:8]} | {licence} | {'; '.join(changed)} |"
     sources = bundle_dir() / "SOURCES.md"
-    old = sources.read_text(encoding="utf-8").splitlines() if sources.exists() else BUNDLE_HEAD.splitlines()
-    sources.write_text("\n".join([ln for ln in old if not ln.startswith(f"| `{name}` |")] + [row.replace("\n", " ")]) + "\n", encoding="utf-8")
+    with open(sources, encoding="utf-8", newline="") if sources.exists() else io.StringIO(BUNDLE_HEAD) as handle:
+        text = handle.read()
+    eol = "\r\n" if "\r\n" in text else "\n"  # an imported file keeps its own line endings
+    lines = [ln for ln in text.splitlines() if not ln.startswith(f"| `{name}` |")] + [row.replace("\n", " ")]
+    with open(sources, "w", encoding="utf-8", newline="") as handle:
+        handle.write(eol.join(lines) + eol)
     note_scan(dest, "plugin", tree_hash(dest), res, f"bundle/{name}")
     out(f"installed {name}: {len(found)} skill(s), {len(agents)} agent(s)")
     for line in parts["hooks"]:
@@ -717,7 +722,9 @@ def import_bundle(path, out=print) -> int:
         return ERROR
     dest.mkdir(exist_ok=True)
     for folder in found:
-        if (dest / folder.name).exists() or linked(dest / folder.name):
+        if folder.name == "almanac":  # the package carries its own, newer one
+            out("skipped almanac: the package already carries it")
+        elif (dest / folder.name).exists() or linked(dest / folder.name):
             out(f"kept {folder.name}: already in {dest}")
         else:
             copy(folder, dest / folder.name)

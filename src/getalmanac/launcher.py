@@ -74,7 +74,7 @@ def with_bundle(args, cfg):
     mine = config.home() / "bundle"
     folders = [own] if own.is_dir() else []
     if mine.is_dir():
-        folders += sorted(p for p in mine.iterdir() if (p / ".claude-plugin" / "plugin.json").is_file())
+        folders += sorted(p for p in mine.iterdir() if p.name != "almanac" and (p / ".claude-plugin" / "plugin.json").is_file())
     return [arg for folder in folders for arg in ("--plugin-dir", str(folder))] + list(args)
 
 

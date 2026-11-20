@@ -408,6 +408,16 @@ class Bundle(Base):
     def sources(self):
         return [ln for ln in (self.tmp / "home" / "bundle" / "SOURCES.md").read_text().splitlines() if ln.startswith("| `mine`")]
 
+    def test_the_sources_file_keeps_its_line_endings(self):
+        self.plugin()
+        sources = self.tmp / "home" / "bundle" / "SOURCES.md"
+        sources.parent.mkdir(parents=True)
+        sources.write_bytes(b"# Mine\r\n\r\n| `old` | x | y | z | w |\r\n")
+        self.assertEqual(self.add(str(self.src), bundle=True, name="mine")[0], 0)
+        data = sources.read_bytes()
+        self.assertEqual(data.count(b"\n"), data.count(b"\r\n"))
+        self.assertEqual(data.count(b"| `"), 2)
+
     def test_installs_a_plugin_folder_with_a_manifest_and_a_sources_row(self):
         self.plugin()
         rc, text = self.add(str(self.src), bundle=True, name="mine")
@@ -470,6 +480,8 @@ class ImportBundle(Base):
             (old / name / ".claude-plugin").mkdir()
             (old / name / ".claude-plugin" / "plugin.json").write_text('{"name": "%s"}' % name)
         (old / "stray").mkdir()
+        (old / "almanac" / ".claude-plugin").mkdir(parents=True)  # an older copy of the package's own plugin
+        (old / "almanac" / ".claude-plugin" / "plugin.json").write_text('{"name": "almanac"}')
         (old / "SOURCES.md").write_text("rows")
         mine = self.tmp / "home" / "bundle"
         (mine / "two" / ".claude-plugin").mkdir(parents=True)
@@ -478,6 +490,8 @@ class ImportBundle(Base):
         self.assertEqual(skills.import_bundle(old, out=lines.append), 0)
         self.assertEqual(sorted(p.name for p in mine.iterdir()), ["SOURCES.md", "one", "two"])
         self.assertIn("kept two", " ".join(lines))
+        self.assertIn("skipped almanac", " ".join(lines))
+        self.assertEqual((mine / "SOURCES.md").read_bytes(), b"rows")
         self.assertIn('"mine"', (mine / "two" / ".claude-plugin" / "plugin.json").read_text())
         self.assertTrue((mine / "one" / "skills" / "s" / "SKILL.md").is_file())
         with redirect_stdout(io.StringIO()):

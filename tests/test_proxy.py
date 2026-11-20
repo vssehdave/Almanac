@@ -212,6 +212,9 @@ class LauncherTest(unittest.TestCase):
             if manifest:
                 with open(os.path.join(mine, name, ".claude-plugin", "plugin.json"), "w") as handle:
                     handle.write('{"name": "%s"}' % name)
+        os.makedirs(os.path.join(mine, "almanac", ".claude-plugin"))  # a stale copy must not load beside the package's own
+        with open(os.path.join(mine, "almanac", ".claude-plugin", "plugin.json"), "w") as handle:
+            handle.write('{"name": "almanac"}')
         self.addCleanup(shutil.rmtree, mine)
         on = launcher.with_bundle(["-p", "hi"], {"bundle": {"enabled": True}})
         self.assertEqual(on[0::2][:-1], ["--plugin-dir"] * 3)
