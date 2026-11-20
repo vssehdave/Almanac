@@ -70,6 +70,28 @@ def today(store) -> dict:
     return kept if kept and kept["day"] == day else {"day": day, "calls": 0, "in": 0, "out": 0}
 
 
+def _day(kept, **add) -> dict:
+    day = time.strftime("%Y-%m-%d")
+    kept = kept if kept and kept["day"] == day else {"day": day, "calls": 0, "in": 0, "out": 0}
+    return {**kept, **{k: kept[k] + v for k, v in add.items()}}
+
+
+def reserve(store, cap=None) -> bool:
+    """Count one call against today's budget, atomically. False, with nothing counted, when `cap` is already reached.
+    The explicit `--limit` of `almanac memory summarize` passes no cap."""
+    won = []
+
+    def change(kept):
+        kept = _day(kept)
+        if cap is not None and kept["calls"] >= cap:
+            return kept
+        won.append(1)
+        return _day(kept, calls=1)
+
+    store.update("summary:day", change)
+    return bool(won)
+
+
 def paused_until(store) -> float:
     until = store.get("summary:pause") or 0
     return until if until > time.time() else 0
@@ -148,30 +170,27 @@ def outline_lines(ctx, orig, kind, text, timeout=SYNTH_TIMEOUT):
         return [], "off"
     if accounts.cooling_until(ctx.headers.get("authorization", "")[7:].strip()):
         return [], "cooling"
-    used = today(store)
     if paused_until(store):
         return [], "paused"
-    if used["calls"] >= cfg["summary_daily_calls"]:
+    if not reserve(store, cfg["summary_daily_calls"]):
         return [], "cap"
-    used["calls"] += 1
-    store.put("summary:day", used)
     if len(text) > SYNTH_INPUT:
         text = text[: SYNTH_INPUT // 3] + "\n... (middle not shown) ...\n" + text[-(2 * SYNTH_INPUT // 3):]
     body = {"model": cfg["summary_model"], "max_tokens": 1000, "thinking": {"type": "disabled"},
             "system": _identity(orig) + [{"type": "text", "text": ROLLUP_INSTRUCTION if kind == "rollup" else JOIN_INSTRUCTION}],
             "messages": [{"role": "user", "content": text}]}
     seen = {}
-    message = call(ctx, body, used, timeout=timeout, seen=seen)
+    message = call(ctx, body, timeout=timeout, seen=seen)
     if message is None:
         return [], f"status {seen['status']}" if seen.get("status", 200) != 200 else "error"
     lines = _parse_lines(message)
     return lines, "" if lines else "parse"
 
 
-def call(ctx, body, used, timeout=TIMEOUT, seen=None):
+def call(ctx, body, timeout=TIMEOUT, seen=None):
     """One small Messages call with the login this request carried. Returns the reply, or None on any failure.
 
-    Counts its tokens in `used` (today's totals) and pauses all small-model calls after a login or allowance error.
+    Adds its tokens to today's totals and pauses all small-model calls after a login or allowance error.
     The HTTP status, if one came back, goes in `seen`.
     """
     store = ctx.store
@@ -189,9 +208,8 @@ def call(ctx, body, used, timeout=TIMEOUT, seen=None):
             return None
         message = json.loads(data)
         usage = message.get("usage") or {}
-        used["in"] += sum(int(usage.get(k) or 0) for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
-        used["out"] += int(usage.get("output_tokens") or 0)
-        store.put("summary:day", used)
+        tokens = sum(int(usage.get(k) or 0) for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+        store.update("summary:day", lambda kept: _day(kept, **{"in": tokens, "out": int(usage.get("output_tokens") or 0)}))
         return message
     except (OSError, ValueError, http.client.HTTPException):
         return None
@@ -211,6 +229,8 @@ class Idle:
 
 class SummaryLayer:
     """Runs only in the background; it never touches a request."""
+
+    slow = True  # its jobs make network calls: the proxy runs them on a worker of their own
 
     def __init__(self, memory):
         self.memory = memory
@@ -264,11 +284,8 @@ class SummaryLayer:
         rows = store.run("select id, turns, sumturns from convo where lane = ?", (ctx.lane,))
         if not rows or rows[0]["turns"] < 2 or rows[0]["sumturns"] >= rows[0]["turns"]:  # one exchange has its own summary already
             return
-        used = today(store)
-        if paused_until(store) or used["calls"] >= cfg["summary_daily_calls"]:
+        if paused_until(store) or not reserve(store, cfg["summary_daily_calls"]):
             return
-        used["calls"] += 1
-        store.put("summary:day", used)
         text = self.memory.digest(ctx.lane)
         if len(text) > INPUT_CHARS:
             text = text[: INPUT_CHARS // 3] + "\n... (middle not shown) ...\n" + text[-(2 * INPUT_CHARS // 3):]
@@ -276,7 +293,7 @@ class SummaryLayer:
                 "system": ctx.system + [{"type": "text", "text": CONVO_INSTRUCTION}],
                 "messages": [{"role": "user", "content": text}]}
         seen = {}
-        message = call(ctx, body, used, timeout=timeout, seen=seen)
+        message = call(ctx, body, timeout=timeout, seen=seen)
         found = _parse_convo(message) if message else ""
         if found:
             self.memory.set_convo_summary(rows[0]["id"], found, rows[0]["turns"])
@@ -298,17 +315,14 @@ class SummaryLayer:
         rows = store.run("select id from node where kind = 'leaf' and convo = (select id from convo where lane = ?) "
                          "and summary = '' and tries < ? order by ts desc, id desc limit ?", (ctx.lane, MAX_TRIES, PER_JOB))
         for row in rows:
-            used = today(store)
-            if paused_until(store) or used["calls"] >= cfg["summary_daily_calls"]:
+            if paused_until(store) or not reserve(store, cfg["summary_daily_calls"]):
                 break
             store.run("update node set tries = tries + 1 where id = ?", (row["id"],))
-            used["calls"] += 1
-            store.put("summary:day", used)
-            if not self._ask(ctx, orig, row["id"], cfg["summary_model"], used):
+            if not self._ask(ctx, orig, row["id"], cfg["summary_model"]):
                 break  # the upstream is refusing or not answering: do not wait for it once per exchange
         self.memory.embed_pending()  # a new summary clears its exchange's vector; make it again from the summary
 
-    def _ask(self, ctx, orig, node_id, model, used, facts_only=False):
+    def _ask(self, ctx, orig, node_id, model, facts_only=False):
         """One summary call for one exchange. Any failure leaves the rule-written text and returns False.
         With `facts_only` the exchange already has its summary: only its facts are taken from the answer."""
         store, memory = ctx.store, self.memory
@@ -319,7 +333,7 @@ class SummaryLayer:
                 "system": _identity(orig) + [{"type": "text", "text": INSTRUCTION}],
                 "messages": [{"role": "user", "content": text}]}
         seen = {}
-        message = call(ctx, body, used, seen=seen)
+        message = call(ctx, body, seen=seen)
         if message is None:
             why = "status" if seen.get("status", 200) != 200 else "error"
         else:
@@ -414,14 +428,12 @@ def refine(memory, cfg, project=None, limit=None, dry_run=False, say=print, fact
     layer, ctx = SummaryLayer(memory), _Ask(store, upstream, tok)
     orig = {"system": IDENTITY}
     for n, node_id in enumerate(ids, 1):
-        used = today(store)
         if not facts:
             store.run("update node set tries = tries + 1 where id = ?", (node_id,))
-        used["calls"] += 1
-        store.put("summary:day", used)
+        reserve(store)  # no cap: an explicit --limit may go past the daily count
         upstream.log.last = {}
         had = store.run("select summary, facts from node where id = ?", (node_id,))[0]
-        ok = layer._ask(ctx, orig, node_id, model, used, facts_only=facts)
+        ok = layer._ask(ctx, orig, node_id, model, facts_only=facts)
         now = store.run("select summary, facts from node where id = ?", (node_id,))[0]
         if (now["facts"] != had["facts"]) if facts else (now["summary"] != had["summary"]):
             report["summarized"] += 1

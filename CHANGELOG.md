@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **The daily summary budget no longer loses counts.** The routing classifier, live
+  and idle summaries and the imported-summary job each read the day's count, added to
+  it and wrote it back, so calls that finished out of order (or on the importer's own
+  connection) overwrote each other. Reserving a call and adding its tokens are now
+  single atomic updates in the database.
+- **Summary calls run on their own worker.** A slow summary no longer holds back
+  other conversations' exchange indexing and usage records. A summary still starts
+  only after its own exchange is indexed.
 - **Compaction adds to its outline instead of rebuilding it.** The prefix is now the
   session context, then the outline in generations, then the recent exchanges. A
   later compaction keeps every earlier byte and adds one generation for the

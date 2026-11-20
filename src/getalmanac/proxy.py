@@ -127,8 +127,9 @@ class Proxy:
         self.keepalive = keepalive.Keepalive(self)  # opt-in cache pings for paused conversations (keepalive.py)
         self.started, self.count = time.time(), 0
         self.importing = None  # the background import thread (autoimport.py), once serve() has started it
-        self._jobs = queue.Queue()
-        threading.Thread(target=self._work, daemon=True).start()
+        self._jobs, self._slow = queue.Queue(), queue.Queue()
+        threading.Thread(target=self._work, args=(self._jobs,), daemon=True).start()
+        threading.Thread(target=self._work, args=(self._slow,), daemon=True).start()  # model calls: their network waits stay off the first
 
     def hop_for(self, host):
         """The corporate proxy to reach `host` through, or None to connect directly."""
@@ -234,23 +235,26 @@ class Proxy:
                 if hasattr(layer, "observe"):
                     self._jobs.put((layer, ctx, orig, reply))
 
-    def _work(self):
+    def _work(self, jobs):
         while True:
-            job = self._jobs.get()
+            job = jobs.get()
             try:
                 if job is None:
                     return
                 layer, ctx, orig, reply = job
+                if jobs is self._jobs and getattr(layer, "slow", False):
+                    self._slow.put(job)  # handed on once the earlier layers' jobs for this reply are done: indexing first
+                    continue
                 layer.observe(ctx, orig, reply)
             except Exception as exc:  # background work never reaches the user
                 self.log.write({"ts": time.time(), "kind": "error", "where": "observe", "error": f"{type(exc).__name__}: {exc}"[:300]})
             finally:
-                self._jobs.task_done()
+                jobs.task_done()
 
     def drain(self, timeout=10.0):
         """Wait for background work (indexing, summaries) to finish. For shutdown and tests."""
         end = time.time() + timeout
-        while self._jobs.unfinished_tasks and time.time() < end:
+        while (self._jobs.unfinished_tasks or self._slow.unfinished_tasks) and time.time() < end:  # a job is handed to _slow before _jobs marks it done
             time.sleep(0.02)
 
     def health(self, challenge="") -> dict:

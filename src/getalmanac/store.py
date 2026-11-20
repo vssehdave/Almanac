@@ -60,6 +60,23 @@ class Store:
                  "on conflict(key) do update set value = excluded.value, ts = excluded.ts",
                  (key, json.dumps(value), time.time()))
 
+    def update(self, key, change):
+        """Atomic read-modify-write: `change(old or None)` returns the new value. Holds SQLite's write lock from the read
+        to the write, so another connection (the background import) cannot slip an update between them."""
+        with self.lock:
+            self.db.execute("begin immediate")
+            try:
+                rows = self.db.execute("select value from state where key = ?", (key,)).fetchall()
+                new = change(json.loads(rows[0]["value"]) if rows else None)
+                self.db.execute("insert into state (key, value, ts) values (?, ?, ?) "
+                                "on conflict(key) do update set value = excluded.value, ts = excluded.ts",
+                                (key, json.dumps(new), time.time()))
+                self.db.execute("commit")
+            except BaseException:
+                self.db.execute("rollback")
+                raise
+            return new
+
     def merge(self, key, **fields):
         """Set some fields of a dict value and keep the others; writes only when one changes."""
         with self.lock:
