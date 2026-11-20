@@ -148,6 +148,11 @@ TTL_SECONDS = {"5m": 300, "1h": 3600}
 WEIGHTS = {"input_tokens": 1, "cache_creation_input_tokens": 1.25, "cache_read_input_tokens": 0.1, "output_tokens": 5}
 
 
+def is_cold(idle, ttls) -> bool:
+    """True when a pause outlasted the shortest cache life the request asked for."""
+    return bool(ttls) and isinstance(idle, (int, float)) and idle > min(TTL_SECONDS.get(t, 300) for t in ttls)
+
+
 def cache_marks(body) -> dict:
     """The cache breakpoints in a request as the client sent it, and the ttl of each in order."""
     ttl = []

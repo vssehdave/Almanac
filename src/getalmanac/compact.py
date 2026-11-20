@@ -20,6 +20,11 @@ When the memory has a status for each exchange (see status.py) the outline is in
 sections instead: standing decisions first, then open work, then what is done
 (newest first, as many as fit); superseded and noise exchanges are only counted.
 
+A request that returns after its cache has expired (a pause longer than its shortest cache_control ttl)
+pays for a full rewrite whatever is sent, so with `compaction.on_cold` it is compacted from COLD_FLOOR times
+the target size instead of the trigger size: at a human turn by the prefix, inside a turn and in a sub-agent
+by the stubs below. It happens once, on that request; the stored prefix and stubs then hold as usual.
+
 The prefix is built only at a human turn. Inside one long turn (a tool loop with no
 new message from the person) there is nothing to rebuild, so when the request nears
 the model's window the old tool results of that turn are replaced by a one-line stub
@@ -55,6 +60,7 @@ NO_TEXT = "(this result held no text, for example only an image, so nothing was 
 MIN_STUB = 2000  # characters: a smaller tool result is not worth a stub
 FLOOR_KEEP = 4  # a long turn never keeps fewer than this many of its newest results
 RELIEF_TO = 0.75  # a pass frees room down to this share of the limit, so the next request needs no second pass
+COLD_FLOOR = 2  # x target_tokens: a cold return is compacted from this size, since its prefix is rewritten anyway
 RELATED = 5  # most related exchanges listed
 RELATED_HEAD = "Earlier exchanges related to your new message:"
 MORE ="- ({n} more {what} not listed; find them with memory_search)"
@@ -263,6 +269,7 @@ class CompactLayer:
             ctx.store.run("delete from state where key = ?", (f"stubs:{ctx.lane}",))  # so did the stubs
             state = None
         fresh = False
+        size = self._size_if_cold(body, ctx, (state["prefix"] + messages[state["covered"]:]) if state else messages)  # what would go out without the cold rule
         covered = len(messages) - 1
         at_human_turn = bool(rq.human_text(messages[-1])) and len(rq.human_turns(messages[:covered])) >= 1
         if at_human_turn and (not state or covered > state["covered"]):
@@ -271,27 +278,53 @@ class CompactLayer:
             # After a compaction, wait for real growth before the next one: redoing it
             # every turn would rewrite the prefix each time and waste the cache.
             grown = not state or sum(len(json.dumps(m, ensure_ascii=False)) for m in tail) / CHARS_PER_TOKEN >= cfg["target_tokens"] / 2
-            if grown and self._estimate(body, ctx, current) >= cfg["trigger_tokens"]:
+            if grown and self._estimate(body, ctx, current) >= self._trigger(ctx, cfg):
                 state, fresh = self._compact(ctx, messages, covered, cfg), True
         out = messages
         if state:
             out = json.loads(json.dumps(state["prefix"])) + messages[state["covered"]:]
             ctx.stats["compaction"] = {"covered": state["covered"], "fresh": fresh,
                                        "prefix_chars": len(json.dumps(state["prefix"], ensure_ascii=False))}
+        had = self._stubs(ctx)
         stubbed = self._relieve(body, ctx, cfg, out, at_human_turn)
         if stubbed:
             ctx.stats.setdefault("compaction", {})["stubbed"] = stubbed  # under this mark a refused body is retried without it
         if state or stubbed:
             body["messages"] = out
+        self._note_cold(body, ctx, size, out, fresh or self._stubs(ctx) > had)
+
+    @staticmethod
+    def _cold(ctx, cfg) -> bool:
+        return bool(ctx.cold and cfg.get("on_cold", True))
+
+    @classmethod
+    def _trigger(cls, ctx, cfg) -> int:
+        return min(cfg["trigger_tokens"], COLD_FLOOR * cfg["target_tokens"]) if cls._cold(ctx, cfg) else cfg["trigger_tokens"]
+
+    @staticmethod
+    def _stubs(ctx) -> int:
+        return len((ctx.store.get(f"stubs:{ctx.lane}") or {}).get("ids") or {})
+
+    @classmethod
+    def _size_if_cold(cls, body, ctx, messages) -> int:
+        """The request's estimated tokens before any change, kept only to log a cold return's saving (the same count for both sides)."""
+        return estimate(body, ctx, messages, None) if cls._cold(ctx, ctx.cfg["compaction"]) else 0
+
+    @classmethod
+    def _note_cold(cls, body, ctx, before, after, acted):
+        if acted and cls._cold(ctx, ctx.cfg["compaction"]):
+            ctx.stats["cold"] = {"before": before, "after": estimate(body, ctx, after, None)}
 
     def _relieve_agent(self, body, ctx):
         """A sub-agent thread has no stored prefix, but a long one still fills its window: only the stubs apply to it."""
         cfg, messages = ctx.cfg["compaction"], body.get("messages") or []
         if not (cfg["enabled"] and ctx.agent and rq.has_client_tools(body) and len(messages) > 2)                 or ctx.store.get(f"nocompact:{ctx.lane}"):
             return
+        had, size = self._stubs(ctx), self._size_if_cold(body, ctx, messages)
         stubbed = self._relieve(body, ctx, cfg, messages, False)
         if stubbed:
             ctx.stats.setdefault("compaction", {})["stubbed"] = stubbed
+        self._note_cold(body, ctx, size, messages, self._stubs(ctx) > had)
 
     def _relieve(self, body, ctx, cfg, out, at_human_turn) -> int:
         """Stub the old tool results of the current turn (see the module docstring). Returns how many are stubbed in `out`.
@@ -319,6 +352,8 @@ class CompactLayer:
             current = _results(out[(turns[-1] + 1 if turns else 0):])
             window = routing.window(ctx.cfg["routing"], str(body.get("model") or ""))
             limit = share * min(window, int(ctx.store.get(f"window:{ctx.lane}") or window))  # a size refusal taught the real one
+            if self._cold(ctx, cfg):
+                limit = min(limit, COLD_FLOOR * cfg["target_tokens"])
             # The last reply's count may not be stored yet (it is written in the background): the count made when
             # the stubs were last changed stands in for it, so a second pass is not made for a body already shrunk.
             counts = [c for c in (ctx.store.get(f"usage:{ctx.lane}"), kept.get("est")) if c and 0 < c["messages"] <= len(body["messages"])]

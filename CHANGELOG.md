@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **A cold return is compacted.** A request that comes back after its cache has
+  expired rewrites the whole prefix whatever Almanac sends, so with
+  `compaction.on_cold` (on by default) it is compacted from twice
+  `compaction.target_tokens` instead of the trigger size: by the stored prefix on
+  the main thread at a human turn, by the stubs inside a long turn and in a
+  sub-agent. The request log records `cold` (estimated tokens before and after).
+
 - **Playbooks are their own package.** The playbook code (folder format, approval and
   signing, matching, route offers, includes and `RESULT`/`RESUME`, dedupe, the miner and
   the compile step) moved to Playbook (`getplaybook`, a dependency now), which also works

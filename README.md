@@ -1481,6 +1481,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `compaction.enabled` | `true` | Compact long conversations |
 | `compaction.trigger_tokens` | `150000` | Size that starts a compaction |
 | `compaction.target_tokens` | `40000` | Most the summary may take |
+| `compaction.on_cold` | `true` | A request that returns after its cache expired (a pause longer than its shortest cache ttl) is compacted from twice `target_tokens` instead of the trigger, since its prefix is rewritten anyway; sub-agents and long turns get the stubs |
 | `compaction.window_share` | `0.85` | Inside one long turn, old tool results are stubbed once a request reaches this share of the model's window (`0` is off) |
 | `compaction.keep_results` | `12` | Tool results of the current turn that are never stubbed (the newest) |
 | `compaction.own_the_context` | `true` | Also switch off Claude Code's own auto-compaction (`DISABLE_AUTO_COMPACT=1`) while compaction is on |
