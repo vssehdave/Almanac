@@ -273,6 +273,35 @@ def render_routing(records) -> str:
     return "\n".join(lines)
 
 
+def compactions(records) -> dict:
+    """What the compactions in the log did: appends (earlier bytes kept) and roll-ups (rewritten), and the small model's notes."""
+    out = {"append": 0, "rollup": 0, "kept": 0, "prefix": 0, "joined": 0, "fell_back": 0}
+    for r in records:
+        c = r.get("compaction") if r.get("kind") == "messages" else None
+        if not isinstance(c, dict) or not c.get("fresh") or c.get("kind") not in ("append", "rollup"):
+            continue
+        out[c["kind"]] += 1
+        out["kept"] += c["kept_chars"] if isinstance(c.get("kept_chars"), int) else 0
+        out["prefix"] += c["prefix_chars"] if isinstance(c.get("prefix_chars"), int) else 0
+        for key in ("synth", "rollup_synth"):
+            if c.get(key):
+                out["joined" if c[key] == "ok" else "fell_back"] += 1
+    return out
+
+
+def render_compaction(records) -> str:
+    """Lines for `almanac report`, or "" when nothing was compacted since generations began."""
+    c = compactions(records)
+    if not (c["append"] or c["rollup"]):
+        return ""
+    lines = ["", "Compaction, from the request log:",
+             f"  {c['append']} append{'' if c['append'] == 1 else 's'}, {c['rollup']} roll-up{'' if c['rollup'] == 1 else 's'}; "
+             + (f"{c['kept'] / c['prefix']:.0%} of the stored prefix bytes were kept as they were" if c["prefix"] else "no sizes recorded")]
+    if c["joined"] or c["fell_back"]:
+        lines.append(f"  {c['joined']} joined by the small model, {c['fell_back']} fell back to the rule-written outline")
+    return "\n".join(lines)
+
+
 def agents(records) -> dict:
     """The sub-agent threads of the latest main conversation, one entry per lane, in the order they started."""
     msgs = [r for r in records if r.get("kind") == "messages" and r.get("session")]
@@ -378,4 +407,4 @@ def render(records) -> str:
         lines.append(prefix_line(records))
     lines.append(library_line(records))
     lines.append("Per-part figures are the exact total split by size, so treat them as estimates.")
-    return "\n".join(lines) + render_routing(records) + render_agents(records)
+    return "\n".join(lines) + render_compaction(records) + render_routing(records) + render_agents(records)

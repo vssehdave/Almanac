@@ -449,13 +449,32 @@ When a conversation passes `compaction.trigger_tokens` (150,000 by default) and
 you send a new message, everything before that message is replaced by:
 
 - the session-start context, unchanged,
-- an outline of the earlier exchanges, by status, and
+- an outline of the earlier exchanges, by status, in generations (oldest
+  first), and
 - the most recent exchanges in full.
 
 That replacement is stored and sent unchanged on every later request, so
-Anthropic's prompt cache keeps hitting. It is rebuilt only after the
-conversation has grown a good deal again, and thrown away if you rewind or edit
-the covered messages.
+Anthropic's prompt cache keeps hitting, and thrown away if you rewind or edit
+the covered messages. After the conversation has grown a good deal again the
+next compaction does not rebuild it: it keeps the session context and every
+generation byte for byte, adds one generation for the exchanges since (the ones
+that were verbatim included) and writes new recent exchanges after it. The
+cache still reads up to the last old generation, so only the tail is written
+(Almanac puts a cache breakpoint on the newest generation for that, when the
+request has one of Claude Code's four to spare). Each generation has its own
+sections and, when `memory.summary_model` is set, a short note from the small
+model that joins the decisions and open items of its exchanges and marks the
+ones a later exchange reversed. That is one call per generation, inside
+`memory.summary_daily_calls`, made as the compaction is built; if it fails or is
+off the generation is the rule-written outline, and a generation is never edited
+after it has been sent. When the generations together pass
+`compaction.outline_share` of `compaction.target_tokens`, the oldest are merged
+into one "earlier work" generation (one more small-model call, rule-written
+outline as the fallback) that keeps the standing decisions and open work and
+counts the rest. That merge is the only step that rewrites earlier bytes, and it
+merges enough at once that it does not come back soon. `almanac report` shows
+how many compactions were appends and how many roll-ups, and how much of the
+stored prefix each kept as it was.
 
 Each stored exchange has a status: `open` (the newest one, or one that ended on
 a question), `done`, `decision` (you stated a rule or a choice: "from now on",
@@ -470,11 +489,13 @@ The outline is in sections, within the same size budget: standing decisions
 first (oldest first, the last to be dropped), then open work with the longer
 summary, then done exchanges, newest first, until the room runs out, with a line
 saying how many more are not listed and that `memory_search` finds them.
-Superseded and noise exchanges are not listed, only counted. Between open work
-and done comes a short list, up to five, of earlier exchanges of the same
+Superseded and noise exchanges are not listed, only counted. Ahead of the recent
+exchanges comes a short list, up to five, of earlier exchanges of the same
 conversation that match the message you just sent, so the exchange you are
 returning to is not buried. It is worked out once, when the compaction is built,
-and stored with it; with no match the outline is the same as without it. Each exchange's
+and stored with it, in the block of recent exchanges (which every compaction
+writes anew) so that it never sits in a generation that must stay as it was;
+with no match there is none. Each exchange's
 transcript is also kept in the local memory and Claude can read any of them back
 by number. The summaries are plainer than what `/compact` produces. The prefix
 is built when you send a message, from the statuses at that moment; a status that
@@ -1485,6 +1506,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `compaction.enabled` | `true` | Compact long conversations |
 | `compaction.trigger_tokens` | `150000` | Size that starts a compaction |
 | `compaction.target_tokens` | `40000` | Most the summary may take |
+| `compaction.outline_share` | `0.35` | Share of `target_tokens` the outline generations may take together (the recent exchanges get the rest); past it the oldest generations are merged into one "earlier work" generation, the only step that rewrites earlier bytes |
 | `compaction.on_cold` | `true` | A request that returns after its cache expired (a pause longer than its shortest cache ttl) is compacted from twice `target_tokens` instead of the trigger, since its prefix is rewritten anyway; sub-agents and long turns get the stubs |
 | `compaction.window_share` | `0.85` | Inside one long turn, old tool results are stubbed once a request reaches this share of the model's window (`0` is off) |
 | `compaction.keep_results` | `12` | Tool results of the current turn that are never stubbed (the newest) |

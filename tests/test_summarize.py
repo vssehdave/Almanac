@@ -285,7 +285,7 @@ class CompactionTest(tc.LayerCase):
                             tc.human("Thanks, one more thing")]
         self.assertEqual(json.dumps(self.send(grown)[:3]), json.dumps(first[:3]))  # the frozen prefix is untouched
         later = compact.build_prefix(messages, len(messages) - 1, ids, 6000, self.memory.summaries(lane))
-        line = [x for x in later[0]["content"][-1]["text"].splitlines() if x.startswith(f"- [{ids[0]}]")][0]
+        line = [x for x in tc.summary(later).splitlines() if x.startswith(f"- [{ids[0]}]")][0]
         self.assertTrue(line.startswith(f"- [{ids[0]}] Importer overview -> Part 1 reads rows"))
         self.assertNotIn("Importer overview", json.dumps(first))
 

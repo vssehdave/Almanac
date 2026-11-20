@@ -15,6 +15,11 @@ SESSION_TEXT = "# Environment\n - Primary working directory: /nowhere/demo\n"
 TOOLS = [{"name": "Bash", "description": "run", "input_schema": {"type": "object"}}]
 
 
+def summary(prefix):
+    """The summary blocks of a built or sent prefix (outline generations, then the recent exchanges) as one text."""
+    return "\n\n".join(b["text"] for b in prefix[0]["content"][1:])
+
+
 def human(text, marker=False):
     block = {"type": "text", "text": text}
     if marker:
@@ -65,13 +70,13 @@ class PrefixTest(unittest.TestCase):
         prefix = compact.build_prefix(messages, len(messages) - 1, {0: 41, 5: 46}, budget_chars=6000)
         self.assertEqual([m["role"] for m in prefix], ["user", "system", "assistant"])
         self.assertEqual(prefix[2]["content"][0]["text"], compact.ACK)
-        opening, summary = prefix[0]["content"]
+        opening, gen, recent = prefix[0]["content"]  # the reminders, one outline generation, the recent exchanges
         self.assertEqual(opening["text"], "<system-reminder>rules v1</system-reminder>")
-        self.assertTrue(summary["text"].startswith("<system-reminder>\nAlmanac compacted this conversation"))
-        self.assertIn("- [41] Question 1: how does part 1 of the importer work? -> Part 1 parses rows", summary["text"])
-        self.assertIn("--- Exchange 6 [46] ---", summary["text"])
-        self.assertIn("[tool Bash]", summary["text"])
-        self.assertIn("codeword is zebra6", summary["text"])
+        self.assertTrue(gen["text"].startswith("<system-reminder>\nAlmanac compacted this conversation"))
+        self.assertIn("- [41] Question 1: how does part 1 of the importer work? -> Part 1 parses rows", gen["text"])
+        self.assertIn("--- Exchange 6 [46] ---", recent["text"])
+        self.assertIn("[tool Bash]", recent["text"])
+        self.assertIn("codeword is zebra6", recent["text"])
         self.assertEqual(prefix[1]["content"][0]["text"], SESSION_TEXT)
         self.assertEqual(prefix[1]["content"][1]["tool"]["name"], "extra")
         self.assertNotIn("cache_control", json.dumps(prefix))
@@ -79,7 +84,7 @@ class PrefixTest(unittest.TestCase):
 
     def test_a_small_budget_still_keeps_the_last_exchange_and_says_what_is_missing(self):
         messages = history(30)
-        text = compact.build_prefix(messages, len(messages) - 1, {}, budget_chars=3000)[0]["content"][1]["text"]
+        text = summary(compact.build_prefix(messages, len(messages) - 1, {}, budget_chars=3000))
         self.assertIn("--- Exchange 30 ---", text)
         self.assertIn("earlier exchanges not listed", text)
 
@@ -88,14 +93,14 @@ class OutlineByStatusTest(unittest.TestCase):
     def outline(self, statuses, turns=12, budget=12000, told=None, ids=None):
         messages = history(turns)
         prefix = compact.build_prefix(messages, len(messages) - 1, ids or {n: 100 + n for n in range(turns)}, budget, told, statuses)
-        return prefix[0]["content"][-1]["text"]
+        return summary(prefix)
 
     def test_related_hits_take_their_room_from_the_budget_once(self):
         hits = [{"id": 100 + n, "title": f"Question {n + 1}", "snippet": "x" * 190} for n in range(5)]
         messages, ids = history(60), {n: 100 + n for n in range(60)}
         def done(related):
-            text = compact.build_prefix(messages, len(messages) - 1, ids, 12000, None, {n: "done" for n in range(60)}, related)[0]["content"][-1]["text"]
-            return text.split("Done, newest first:")[1].split("The most recent")[0].count("\n- [")
+            text = summary(compact.build_prefix(messages, len(messages) - 1, ids, 12000, None, {n: "done" for n in range(60)}, related))
+            return text.split("Done, newest first:")[1].split("\n\n")[0].count("\n- [")
         note = len(compact.RELATED_HEAD) + sum(len(f"- [{h['id']}] {h['title']} -> {h['snippet']}") + 1 for h in hits)
         self.assertGreater(done([]), 5)
         self.assertLessEqual(done([]) - done(hits), note // 100 + 1)  # a done line is about 100 characters
@@ -145,8 +150,8 @@ class OutlineByStatusTest(unittest.TestCase):
         old = compact.build_prefix(messages, len(messages) - 1, {0: 41}, 6000)
         self.assertEqual(compact.build_prefix(messages, len(messages) - 1, {0: 41}, 6000, None, {}), old)
         self.assertEqual(compact.build_prefix(messages, len(messages) - 1, {0: 41}, 6000, {}, None), old)
-        self.assertIn("Earlier exchanges, oldest first:", old[0]["content"][-1]["text"])
-        self.assertNotIn("Standing decisions", old[0]["content"][-1]["text"])
+        self.assertIn("Earlier exchanges, oldest first:", summary(old))
+        self.assertNotIn("Standing decisions", summary(old))
 
 
 class LayerCase(unittest.TestCase):
@@ -160,7 +165,7 @@ class LayerCase(unittest.TestCase):
                   startup.SkillsLayer(), startup.ToolsLayer()]
         self.rig = Rig(layers=layers, store=self.store,
                        overrides={"compaction.trigger_tokens": self.trigger, "compaction.target_tokens": 1500,
-                                  "memory.recall": False})
+                                  "memory.recall": False, "memory.summary_model": ""})
         self.addCleanup(self.rig.close)
 
     def send(self, messages):
@@ -180,7 +185,7 @@ class CompactLayerTest(LayerCase):
         # a system message is only accepted directly before an assistant message
         self.assertEqual([m["role"] for m in sent], ["user", "system", "assistant", "user"])
         self.assertEqual(sent[-1], messages[-1])  # the new message goes out exactly as typed
-        self.assertIn("Almanac compacted this conversation", sent[0]["content"][-1]["text"])
+        self.assertIn("Almanac compacted this conversation", summary(sent))
         self.assertLess(len(json.dumps(sent)), len(json.dumps(messages)) * 0.6)
         record = self.rig.records()[-1]["compaction"]
         self.assertEqual((record["covered"], record["fresh"]), (len(messages) - 1, True))
@@ -189,7 +194,7 @@ class CompactLayerTest(LayerCase):
         messages = history(8)
         messages[9]["content"][1]["text"] = "Question 3: from now on answer every question with a codeword"  # turn 3 is a decision
         first = self.send(messages)
-        text = first[0]["content"][-1]["text"]
+        text = summary(first)
         self.assertIn("Standing decisions, oldest first:", text)
         self.assertIn("Question 3: from now on", text.split("Done, newest first:")[0])
         lane = self.rig.records()[-1]["lane"]
@@ -202,7 +207,7 @@ class CompactLayerTest(LayerCase):
     def test_the_outline_lists_earlier_exchanges_related_to_the_new_message(self):
         messages = history(40, last="fix the rate limiter again")
         messages[9]["content"][1]["text"] = "Question 3: why does the rate limiter drop bursts?"
-        text = self.send(messages)[0]["content"][-1]["text"]
+        text = summary(self.send(messages))
         heading = "Earlier exchanges related to your new message:"
         self.assertIn(heading, text)
         self.assertIn("Question 3: why does the rate limiter drop bursts?", text.split(heading)[1].split("\n\n")[0])
@@ -214,14 +219,13 @@ class CompactLayerTest(LayerCase):
 
     def test_without_related_exchanges_the_outline_is_unchanged(self):
         messages = history(8, last="zzqq xxww")
-        self.assertNotIn("related to your new message", self.send(messages)[0]["content"][-1]["text"])
+        self.assertNotIn("related to your new message", summary(self.send(messages)))
         plain = compact.build_prefix(messages, len(messages) - 1, {0: 41}, 6000)
         self.assertEqual(compact.build_prefix(messages, len(messages) - 1, {0: 41}, 6000, related=[]), plain)
 
     def test_covered_exchanges_can_be_read_back_from_memory(self):
         sent = self.send(history(8))
-        summary = sent[0]["content"][-1]["text"]
-        first = int(summary.split("] Question 1:", 1)[0].rsplit("[", 1)[1])  # the done section lists the newest first
+        first = int(summary(sent).split("] Question 1:", 1)[0].rsplit("[", 1)[1])  # the done section lists the newest first
         self.assertIn("source of part 1", self.memory.detail(first))
         self.assertIn("zebra1", self.memory.read(first)["text"])
 
@@ -235,7 +239,7 @@ class CompactLayerTest(LayerCase):
         messages = history(8)
         first = self.send(messages)
         grown = messages + [{"role": "assistant", "content": [{"type": "text", "text": "The exporter mirrors it."}]},
-                            human("Thanks, one more thing")]
+                            human("Thanks, one more thing", marker=True)]
         grown[-3]["content"][1].pop("cache_control")  # the client moves its cache marker along
         second = self.send(grown)
         self.assertEqual(json.dumps(second[:3]), json.dumps(first[:3]))
@@ -332,7 +336,7 @@ class CompactLayerTest(LayerCase):
         record = self.rig.records()[-1]["compaction"]
         self.assertEqual((record["covered"], record["fresh"]), (len(grown) - 1, True))
         self.assertEqual(sent[-1], grown[-1])
-        self.assertIn("--- Exchange", sent[0]["content"][-1]["text"])
+        self.assertIn("--- Exchange", summary(sent))
 
     def test_the_last_reply_s_exact_count_decides(self):
         self.rig.cfg["compaction"]["trigger_tokens"] = 50000
@@ -353,6 +357,242 @@ class CompactLayerTest(LayerCase):
         self.rig.cfg["compaction"]["enabled"] = False
         messages = history(8)
         self.assertEqual(self.send(messages), messages)
+
+
+MODEL = "claude-haiku-5-5"
+
+
+def note(lines):
+    message = {"type": "message", "role": "assistant", "content": [{"type": "text", "text": json.dumps({"lines": lines})}],
+               "usage": {"input_tokens": 50, "output_tokens": 20}}
+    return 200, {"content-type": "application/json"}, json.dumps(message).encode()
+
+
+def summarize_used(store):
+    return compact.summarize.today(store)["calls"]
+
+
+class GenerationTest(LayerCase):
+    """The outline is built in generations: a compaction adds one to the end, and only a roll-up rewrites earlier bytes."""
+
+    def setUp(self):
+        super().setUp()
+        self.rig.cfg["compaction"].update(outline_share=0.9, trigger_tokens=1000)  # short stretches, and the outline has the room
+        self.rig.cfg["memory"]["summary_model"] = MODEL
+        self.calls, self.verdict = [], lambda sent: note(["[1] codewords are required from now on (exchange 3)"])
+        self.rig.upstream.respond = self.respond
+
+    def respond(self, req):
+        sent = json.loads(req["body"])
+        if sent.get("model") == MODEL:
+            self.calls.append(sent)
+            return self.verdict(sent)
+        return 200, {"content-type": "text/event-stream"}, sse()
+
+    @staticmethod
+    def convo(n):
+        messages = history(n)
+        messages[9]["content"][1]["text"] = "Question 3: from now on answer every question with a codeword"  # a standing decision
+        return messages
+
+    def state(self):
+        return self.store.get(f"compact:{self.rig.records()[-1]['lane']}")
+
+    def test_a_later_compaction_adds_a_generation_and_keeps_every_earlier_byte(self):
+        first = self.send(self.convo(8))
+        one = self.state()
+        second = self.send(self.convo(13))
+        two = self.state()
+        kept = one["nopen"] + len(one["gens"])
+        self.assertEqual(json.dumps(two["prefix"][0]["content"][:kept]), json.dumps(one["prefix"][0]["content"][:kept]))
+        self.assertEqual(two["prefix"][1], one["prefix"][1])  # the session-start system message is as it was
+        self.assertEqual([g["kind"] for g in two["gens"]], ["append", "append"])
+        self.assertEqual(two["gens"][1]["lo"], one["recent_from"])  # the new one starts where the verbatim exchanges began
+        self.assertEqual(two["gens"][1]["hi"], two["recent_from"])
+        text = two["prefix"][0]["content"][kept]["text"]
+        self.assertIn(f"] Question {one['recent_from'] + 1}:", text)  # an exchange that was verbatim is now in the outline
+        self.assertIn("--- Exchange 13", two["prefix"][0]["content"][-1]["text"])  # and the recent exchanges are new
+        # what went out: identical up to the end of the first generation, apart from the cache breakpoint that moves with the newest
+        self.assertEqual(json.dumps(compact._strip(second[0]["content"][:kept])), json.dumps(compact._strip(first[0]["content"][:kept])))
+        record = self.rig.records()[-1]["compaction"]
+        self.assertEqual((record["kind"], record["gens"], record["kept_chars"]), ("append", 2, len(json.dumps(one["prefix"][0]["content"][:kept]))))
+        self.assertLess(record["kept_chars"], record["prefix_chars"])
+
+    def test_a_cache_breakpoint_sits_on_the_newest_generation_only_where_it_fits(self):
+        sent = self.send(self.convo(8))
+        state = self.state()
+        at = state["nopen"] + len(state["gens"]) - 1
+        self.assertEqual(sent[0]["content"][at]["cache_control"], {"type": "ephemeral"})
+        self.assertNotIn("cache_control", json.dumps(state["prefix"]))  # the stored prefix never holds it
+        self.assertEqual(json.dumps(compact._strip(sent[0]["content"])), json.dumps(state["prefix"][0]["content"]))
+        crowded = body(self.convo(8))
+        crowded["system"] = [{"type": "text", "text": f"rule {n}", "cache_control": {"type": "ephemeral"}} for n in range(3)]
+        self.rig.messages(crowded)  # three breakpoints in the system prompt and one on the last message: no room for a fifth
+        self.assertNotIn("cache_control", json.dumps(self.rig.sent()["messages"][0]["content"][at]))
+        other = self.convo(8)
+        other[0]["content"][1]["text"] = "A different first question"
+        other[-1]["content"][-1]["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
+        self.assertEqual(self.send(other)[0]["content"][at]["cache_control"], {"type": "ephemeral", "ttl": "1h"})  # never after a longer one
+
+    def test_a_joined_note_heads_the_generation_and_is_asked_for_once(self):
+        self.send(self.convo(8))
+        self.assertEqual(len(self.calls), 1)
+        asked = self.calls[0]
+        self.assertEqual(asked["system"][-1]["text"], compact.summarize.JOIN_INSTRUCTION)
+        self.assertEqual(asked["system"][0], {"type": "text", "text": "You are Claude Code"})
+        self.assertIn("(decision) Question 3", asked["messages"][0]["content"])
+        state = self.state()
+        gen = state["prefix"][0]["content"][state["nopen"]]["text"]
+        self.assertIn(compact.JOINED + "\n- [1] codewords are required from now on (exchange 3)", gen)
+        self.assertEqual(self.rig.records()[-1]["compaction"]["synth"], "ok")
+        again = self.send(self.convo(8) + [{"role": "assistant", "content": [{"type": "text", "text": "ok"}]}, human("one more thing", marker=True)])
+        self.assertEqual(len(self.calls), 1)  # a later request replays the stored bytes and asks nothing
+        self.assertEqual(again[0]["content"][state["nopen"]]["text"], gen)
+        self.assertEqual(summarize_used(self.store), 1)  # and the one call counted against the daily cap
+
+    def test_when_the_note_fails_the_generation_is_the_rule_written_outline(self):
+        self.verdict = lambda sent: (500, {"content-type": "application/json"}, b"{}")
+        sent = self.send(self.convo(8))
+        self.assertEqual(sent[-1], self.convo(8)[-1])  # the request went out compacted all the same
+        state = self.state()
+        gen = state["prefix"][0]["content"][state["nopen"]]["text"]
+        self.assertNotIn(compact.JOINED, gen)
+        self.assertIn("Standing decisions, oldest first:", gen)
+        self.assertEqual(self.rig.records()[-1]["compaction"]["synth"], "status 500")
+        self.assertEqual(state["gens"][0]["lines"], [])
+        calls = len(self.calls)
+        self.send(self.convo(8))
+        self.assertEqual(len(self.calls), calls)  # a sent generation is not edited, so it is not asked again
+
+    def test_a_reply_that_is_not_json_or_a_paused_account_is_the_same_fallback(self):
+        self.verdict = lambda sent: (200, {"content-type": "application/json"}, json.dumps(
+            {"type": "message", "content": [{"type": "text", "text": "no json here"}], "usage": {}}).encode())
+        self.send(self.convo(8))
+        self.assertEqual(self.rig.records()[-1]["compaction"]["synth"], "parse")
+        self.store.put("summary:pause", 10 ** 12)
+        self.calls.clear()
+        self.send(self.convo(13))
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.rig.records()[-1]["compaction"]["synth"], "paused")
+        self.assertEqual(len(self.state()["gens"]), 2)
+
+    def test_with_no_summary_model_no_call_is_made(self):
+        self.rig.cfg["memory"]["summary_model"] = ""
+        self.send(self.convo(8))
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.rig.records()[-1]["compaction"]["synth"], "off")
+
+    def test_the_generations_roll_up_at_the_budget_and_not_before(self):
+        self.rig.cfg["memory"]["summary_model"] = ""
+        outline = 1500 * 3 * 0.9
+        kinds = []
+        for n in range(8, 70, 5):
+            self.send(self.convo(n))
+            state, record = self.state(), self.rig.records()[-1]["compaction"]
+            kinds.append(record["kind"])
+            texts = [b["text"] for b in state["prefix"][0]["content"][state["nopen"]:state["nopen"] + len(state["gens"])]]
+            if record["kind"] == "rollup":
+                self.assertEqual(state["gens"][0]["kind"], "rollup")
+                self.assertEqual(record["kept_chars"], len(json.dumps(state["prefix"][0]["content"][:state["nopen"]])))  # earlier bytes rewritten
+                self.assertIn("Earlier work, rolled up", texts[0])
+                self.assertIn("Question 3: from now on", texts[0])  # a standing decision survives the roll-up
+                self.assertIn("Almanac compacted this conversation", texts[0])  # the one that is now first carries the header
+                self.assertLess(sum(map(len, texts)), outline * 0.75 + len(compact.HEADER))  # well under the budget after it
+            else:
+                self.assertLessEqual(sum(map(len, texts)), outline + len(compact.HEADER))  # an append stays inside it
+            self.assertEqual([g["lo"] for g in state["gens"]][1:], [g["hi"] for g in state["gens"]][:-1])  # the generations tile the exchanges
+            self.assertEqual((state["gens"][0]["lo"], state["gens"][-1]["hi"]), (0, state["recent_from"]))
+        self.assertEqual(kinds[0], "append")
+        self.assertIn("rollup", kinds)
+        self.assertLess(kinds.count("rollup"), len(kinds) - 1)  # rare: most compactions are appends
+
+    def test_a_rollup_asks_the_small_model_for_a_summary_of_summaries(self):
+        self.verdict = lambda sent: note(["[1] rolled up: codewords stay required"]) if sent["system"][-1]["text"] == compact.summarize.ROLLUP_INSTRUCTION \
+            else note(["[2] a note for the stretch"])
+        for n in range(8, 70, 5):
+            self.send(self.convo(n))
+            if self.rig.records()[-1]["compaction"]["kind"] == "rollup":
+                break
+        record, state = self.rig.records()[-1]["compaction"], self.state()
+        self.assertEqual((record["kind"], record["rollup_synth"]), ("rollup", "ok"))
+        asked = [c for c in self.calls if c["system"][-1]["text"] == compact.summarize.ROLLUP_INSTRUCTION]
+        self.assertEqual(len(asked), 1)
+        self.assertIn("(decision) Question 3", asked[0]["messages"][0]["content"])
+        first = state["prefix"][0]["content"][state["nopen"]]["text"]
+        self.assertIn(compact.JOINED + "\n- [1] rolled up: codewords stay required", first)
+        self.assertEqual(state["gens"][0]["lines"], ["[1] rolled up: codewords stay required"])
+
+    def test_a_rollup_with_the_model_down_is_the_rule_outline(self):
+        self.verdict = lambda sent: (529, {"content-type": "application/json"}, b"{}")
+        for n in range(8, 70, 5):
+            self.send(self.convo(n))
+            if self.rig.records()[-1]["compaction"]["kind"] == "rollup":
+                break
+        state = self.state()
+        self.assertEqual(state["gens"][0]["kind"], "rollup")
+        self.assertIn("Standing decisions, oldest first:", state["prefix"][0]["content"][state["nopen"]]["text"])
+        self.assertEqual(state["gens"][0]["lines"], [])
+
+    def test_a_rewind_drops_every_generation(self):
+        self.send(self.convo(8))
+        self.send(self.convo(13))
+        self.assertEqual(len(self.state()["gens"]), 2)
+        edited = self.convo(13)
+        edited[5]["content"][0]["text"] = "A rewritten earlier answer."
+        self.rig.cfg["compaction"]["trigger_tokens"] = 10 ** 9
+        self.assertEqual(self.send(edited), edited)
+        self.assertIsNone(self.state())
+        self.rig.cfg["compaction"]["trigger_tokens"] = 1000
+        self.store.run("delete from state where key like 'usage:%'")  # the last reply's small count described the uncompacted body
+        self.send(edited)  # a first generation again, over the new history
+        record = self.rig.records()[-1]["compaction"]
+        self.assertEqual((record["kind"], record["gens"], record["kept_chars"]), ("append", 1, 0))
+
+    def test_the_generations_survive_a_restart(self):
+        self.send(self.convo(8))
+        one = self.state()
+        lane = self.rig.records()[-1]["lane"]
+        path = self.store.path
+        self.rig.close()
+        self.store.close()
+        self.store = Store(path)
+        self.addCleanup(self.store.close)
+        self.memory = Memory(self.store)
+        self.rig = Rig(respond=self.respond, store=self.store, layers=[ProjectLayer(self.memory), CompactLayer(self.memory), MemoryLayer(self.memory)],
+                       overrides={"compaction.trigger_tokens": 1000, "compaction.target_tokens": 1500, "compaction.outline_share": 0.9,
+                                  "memory.recall": False, "memory.summary_model": MODEL})
+        self.addCleanup(self.rig.close)
+        self.assertEqual(self.store.get(f"compact:{lane}")["gens"], one["gens"])
+        replay = self.send(self.convo(8))  # the same conversation: the stored prefix is replayed as it was
+        self.assertEqual(json.dumps(compact._strip(replay[:3])), json.dumps(one["prefix"]))
+        self.send(self.convo(13))
+        two = self.store.get(f"compact:{lane}")
+        kept = one["nopen"] + len(one["gens"])
+        self.assertEqual(json.dumps(two["prefix"][0]["content"][:kept]), json.dumps(one["prefix"][0]["content"][:kept]))
+        self.assertEqual(len(two["gens"]), 2)
+
+    def test_a_state_stored_before_generations_is_rebuilt_as_the_first_one(self):
+        self.send(self.convo(8))
+        state, lane = self.state(), self.rig.records()[-1]["lane"]
+        for key in ("gens", "recent_from", "nopen", "log"):
+            state.pop(key)
+        self.store.put(f"compact:{lane}", state)
+        self.send(self.convo(13))
+        after = self.state()
+        self.assertEqual([g["kind"] for g in after["gens"]], ["append"])
+        self.assertEqual((after["gens"][0]["lo"], after["gens"][0]["hi"]), (0, after["recent_from"]))
+
+    def test_the_report_counts_appends_and_rollups(self):
+        from getalmanac import report
+        records = [{"kind": "messages", "compaction": {"fresh": True, "kind": "append", "kept_chars": 800, "prefix_chars": 1000, "synth": "ok"}},
+                   {"kind": "messages", "compaction": {"fresh": True, "kind": "append", "kept_chars": 900, "prefix_chars": 1200, "synth": "status 500"}},
+                   {"kind": "messages", "compaction": {"fresh": True, "kind": "rollup", "kept_chars": 10, "prefix_chars": 1000, "rollup_synth": "ok"}},
+                   {"kind": "messages", "compaction": {"fresh": False, "kind": "append", "kept_chars": 1, "prefix_chars": 1}}]
+        text = report.render_compaction(records)
+        self.assertIn("2 appends, 1 roll-up", text)
+        self.assertIn("53%", text)  # (800 + 900 + 10) / 3200 of the prefix bytes kept
+        self.assertIn("2 joined by the small model, 1 fell back", text)
+        self.assertEqual(report.render_compaction([]), "")
 
 
 def loop(n, start=0, size=3000, special=None):
@@ -608,7 +848,7 @@ class ColdTest(LayerCase):
     def test_a_cold_main_thread_is_compacted_under_the_trigger(self):
         messages = history(14)
         sent, record = self.cold(messages, gap=4000)
-        self.assertIn("Almanac compacted this conversation", sent[0]["content"][-1]["text"])
+        self.assertIn("Almanac compacted this conversation", summary(sent))
         self.assertEqual(record["compaction"]["fresh"], True)
         self.assertGreater(record["cold"]["before"], record["cold"]["after"])
         self.assertEqual(record["cold"]["before"], compact.estimate(body(messages), None, messages, None))
