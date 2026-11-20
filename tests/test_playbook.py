@@ -269,6 +269,41 @@ class LayerTest(Home):
         self.assertEqual(reminders(later["messages"][0]), [note])
         self.assertEqual(reminders(later["messages"][2]), [])
 
+    def _turns(self, n, every=3):
+        """n typed turns; every `every`th one but the last matches the playbook. Returns the messages up to the last typed turn."""
+        out = []
+        for i in range(n):
+            out += [human(ASK if i % every == 0 and i < n - 1 else f"now tidy the notes folder up, step {i}"), said(f"done {i}")]
+        return out[:-1]
+
+    def _selects(self, n):
+        rig = self.rig()
+        history = self._turns(n)
+        for upto in range(1, len(history) + 1, 2):  # every request of the conversation, as the turns arrive
+            self.send(rig, body(*history[:upto]))
+        seen, orig = [], rig.upstream.requests
+        queries = []
+        self.store.db.set_trace_callback(lambda sql: queries.append(sql) if sql.lstrip().lower().startswith("select") else None)
+        self.send(rig, body(*history))
+        self.store.db.set_trace_callback(None)
+        return len(queries), [json.loads(r["body"]) for r in orig]
+
+    def test_replaying_earlier_turns_costs_a_fixed_number_of_queries(self):
+        playbook.save(make(), script=SCRIPT)
+        playbook.approve("weekly-report")
+        counts = {n: self._selects(n)[0] for n in (1, 5, 25)}
+        self.assertEqual(counts[1] + 1, counts[5], counts)  # one scan for the earlier turns, however many there are
+        self.assertEqual(counts[5], counts[25], counts)
+
+    def test_earlier_turns_keep_the_bytes_they_were_sent_with(self):
+        playbook.save(make(), script=SCRIPT)
+        playbook.approve("weekly-report")
+        _, sent = self._selects(7)
+        final = sent[-1]["messages"]
+        for k, req in enumerate(sent[:-1]):  # turn k was newest in request k: its message never changes afterwards
+            self.assertEqual(final[2 * k], req["messages"][2 * k])
+            self.assertEqual(len(reminders(final[2 * k])), 1 if k % 3 == 0 and k < 6 else 0)
+
     def test_uses_is_counted_once_per_frozen_note(self):
         playbook.save(make())
         rig = self.rig()

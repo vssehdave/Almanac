@@ -67,6 +67,20 @@ class Store:
             if any(now.get(k) != v for k, v in fields.items()):
                 self.put(key, {**now, **fields})
 
+    def scan(self, *prefixes):
+        """{key: value} of every key that starts with one of `prefixes` (each ends in ':'), in one query. Reads keep keys
+        out of the sweep the way `get` does."""
+        clause = " or ".join("(key >= ? and key < ?)" for _ in prefixes)
+        args = [x for p in prefixes for x in (p, p[:-1] + chr(ord(p[-1]) + 1))]
+        rows = self.run(f"select key, value, ts from state where {clause}", args)
+        stale = [r["key"] for r in rows if time.time() - r["ts"] > 86400]
+        if stale:
+            try:
+                self.many("update state set ts = ? where key = ?", [(time.time(), k) for k in stale])
+            except sqlite3.Error:
+                pass  # another process holds the write lock; the sweep can wait, the values were read
+        return {r["key"]: json.loads(r["value"]) for r in rows}
+
     def frozen(self, key, compute, outside=False):
         """A decision made once per key and returned unchanged afterwards.
 

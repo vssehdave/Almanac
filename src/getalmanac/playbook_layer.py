@@ -69,18 +69,20 @@ class PlaybookLayer:
         nudge = ctx.store.frozen("playbooknudge" + key[len("playbook"):], lambda: self._nudge(ctx, orig, seen, last)) if books else ""
         # Earlier turns got their note when they were new: put it back, byte for byte, so the cached prefix holds.
         # When compaction changed the history the turns no longer line up, and there is nothing to put back.
+        lane = ctx.lane
+        kept = ctx.store.scan(f"playbook:{lane}:", f"playbooknudge:{lane}:", f"playbookskip:{lane}:") if last else {}  # one query for every earlier turn
         if len(mine) == len(seen):
             for turn in range(last):
                 earlier = self._key(ctx, turn, person_text(orig[seen[turn]]))
-                old = ctx.store.get(f"{earlier}:m{seen[turn]}")
+                old = kept.get(f"{earlier}:m{seen[turn]}")
                 if old is None:
-                    old = ctx.store.get(earlier)
-                old = "\n".join(x for x in (old, ctx.store.get("playbooknudge" + earlier[len("playbook"):])) if x)
+                    old = kept.get(earlier)
+                old = "\n".join(x for x in (old, kept.get("playbooknudge" + earlier[len("playbook"):])) if x)
                 if old:
                     _insert_before_last(messages[mine[turn]], old)
         for turn in range(last):  # a reminder that went into an earlier turn's tool loop stays where it was put
             earlier = self._key(ctx, turn, person_text(orig[seen[turn]]))
-            self._place(messages, orig, ctx.store.get("playbookskip" + earlier[len("playbook"):]))
+            self._place(messages, orig, kept.get("playbookskip" + earlier[len("playbook"):]))
         text = "\n".join(x for x in (text, nudge) if x)
         if text:
             _insert_before_last(messages[mine[-1]], text)
