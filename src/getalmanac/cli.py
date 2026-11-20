@@ -531,7 +531,7 @@ def _skill(rest):
     if args.cmd == "audit":
         return skills.audit(args.pending, args.again, out=_print)
     if args.cmd == "add":
-        ask = (lambda q: input(q).strip().lower() in ("y", "yes")) if sys.stdin.isatty() else None
+        ask = _yes if sys.stdin.isatty() else None
         return skills.add(args.source, args.skill, args.ref, args.accept_caution, args.replace, out=_print,
                           bundle=args.bundle, name=args.name, ask=ask)
     if os.path.exists(args.target):
@@ -704,6 +704,14 @@ def _sandbox(rest):
     from . import sandbox
 
     return sandbox.run(rest)
+
+
+def _yes(question) -> bool:
+    """A yes typed at the terminal. No answer is a no: on Windows an empty input such as NUL still says it is a terminal."""
+    try:
+        return input(question).strip().lower() in ("y", "yes")
+    except EOFError:
+        return False
 
 
 def _review_gate(_rest):
