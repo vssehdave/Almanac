@@ -58,7 +58,7 @@ def run_once(memory, cfg, now=None) -> dict:
         if now - stat.st_mtime > days * 86400:
             continue
         if seen.get(str(path)) in (sig, sig + [len(known)]):  # [.., n]: left alone while n projects were stored
-            kept[str(path)] = sig
+            kept[str(path)] = seen[str(path)]  # as it was: a deferred file keeps its count, or it would look imported
             continue
         if now - stat.st_mtime < OPEN_SECONDS:  # still being written: the next round
             continue

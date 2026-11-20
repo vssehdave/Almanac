@@ -252,7 +252,7 @@ def observe(memory, ctx, messages, reply):
     """Called by the memory layer after the exchange was indexed. Never raises."""
     try:
         turns = rq.human_turns(messages)
-        if not turns or reply.get("stop_reason") == "tool_use":  # nothing finished yet
+        if not turns or reply.get("stop_reason") in ("tool_use", None):  # nothing finished yet (None: cut off)
             return 0
         group = messages[turns[-1]:] + [{"role": "assistant", "content": reply["content"]}]
         written = record(memory, ctx.lane, group, len(turns) - 1, min_tools(ctx.cfg))

@@ -144,6 +144,16 @@ class IndexTest(Case):
         self.assertIn("src/proxy.py", node["text"])
         self.assertNotIn("rules", node["text"])
 
+    def test_a_cut_off_reply_is_not_stored_as_finished(self):
+        from getalmanac import sse
+        from helpers import sse as stream
+        raw = stream("partial answer")
+        cut = sse.parse(raw[:raw.index(b"event: content_block_stop")])
+        self.assertIsNone(cut["stop_reason"])
+        key = self.memory.projects.see(self.alpha)
+        self.assertEqual(self.memory.index("lane-1", "s1", key, self.convo(), cut), 1)  # the first exchange only
+        self.assertEqual(self.memory.index("lane-1", "s1", key, self.convo(), reply("Added it.")), 1)  # finished later
+
     def test_an_unfinished_turn_waits(self):
         key = self.memory.projects.see(self.alpha)
         self.assertEqual(self.memory.index("lane-1", "s1", key, self.convo(), reply("", stop="tool_use")), 1)
