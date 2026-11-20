@@ -601,7 +601,7 @@ class Memory:
         # A new conversation is indexed after its first reply; a lane first seen with a later human turn
         # (the caller's `finished` means one more follows) is one carried on from somewhere else.
         carried = len(turns) + (1 if finished else 0) >= 2
-        finished = finished or (reply is not None and reply.get("stop_reason") != "tool_use")
+        finished = finished or (reply is not None and reply.get("stop_reason") not in ("tool_use", None))  # None: the stream was cut off
 
         def group(seq):
             last = seq == len(turns) - 1
@@ -1281,7 +1281,7 @@ class MemoryLayer:
         if self._sub_thread(orig, ctx):
             parent = self._parent(ctx)
             handed = self._handback(reply)
-            if parent and (handed or reply.get("stop_reason") != "tool_use"):  # filed when it has answered; nothing is stored while it works
+            if parent and (handed or reply.get("stop_reason") not in ("tool_use", None)):  # filed when it has answered; nothing is stored while it works
                 reply = handed or reply
                 self.memory.index(ctx.lane, ctx.session, parent["project"], orig["messages"], reply, parent=parent["id"], agent_type=ctx.agent_type[:40])
                 from . import library

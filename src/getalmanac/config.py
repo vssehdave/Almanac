@@ -79,6 +79,7 @@ DEFAULTS = {
         "enabled": True,
         "trigger_tokens": 150000,  # a conversation this large is compacted at its next message
         "target_tokens": 40000,  # most tokens the summary that replaces it may take
+        "outline_share": 0.35,  # share of target_tokens the outline generations may take together; past it the oldest are merged into one
         "on_cold": True,  # a request that returns after the cache has expired is compacted from twice target_tokens, since the prefix is rewritten anyway
         "window_share": 0.85,  # inside one long turn, old tool results are removed from this share of the model's window; 0 turns it off
         "keep_results": 12,  # tool results of the current turn that are never removed (the newest ones)
@@ -141,6 +142,13 @@ DEFAULTS = {
         "nudge_after": 25,  # a turn of this many tool calls, with no playbook saved or matched, is flagged to the next request; 0 is off
         "compile_per_day": 1,  # most Sonnet sessions a day that do the compiling; 0 turns it off
     },
+    # Opt-in prompt-cache keepalive (keepalive.py): while a conversation is paused, a tiny request that reads its
+    # cached prefix restarts the cache's life. Costs about a tenth of the prefix per ping, against a full rewrite on return.
+    "keepalive": {
+        "enabled": False,
+        "max_idle_minutes": 240,  # stop pinging a conversation this long after its last real request
+        "max_lanes": 4,  # conversation threads kept alive at once (the least recently active is dropped first)
+    },
     "cloud": {
         "auto": False,  # true keeps a running task's snapshot on origin's cloud/handoff branch (see cloud.py)
         "heartbeat_minutes": 10,
@@ -166,6 +174,7 @@ _OFF = {
     "routing": [("routing", "mode", "off")],
     "cheatsheet": [("cheatsheet", "mode", "off")],
     "cloud": [("cloud", "auto", False)],
+    "keepalive": [("keepalive", "enabled", False)],
     "accounts": [("accounts", "fallback", [])],
     "startup": [("startup", "agent_chars", 0), ("startup", "lean_rules", False), ("startup", "system_prefix", False)],
 }

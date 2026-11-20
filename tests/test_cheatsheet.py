@@ -122,7 +122,7 @@ class LayerTest(Fresh):
             self.assertEqual(run(model, klass="subagent", agent="a1", agent_type="fork")["system"][-1]["text"], full)
 
     def test_a_sub_agent_gets_the_short_rules_and_the_skills_except_on_haiku(self):
-        agent, skills = cheatsheet.read("agent"), cheatsheet.read("skills")
+        agent, skills = cheatsheet.read("agent"), cheatsheet.skills(sub=True)
         for model in (LARGE, MEDIUM):
             text = run(model, klass="subagent", agent="a1")["system"][-1]["text"]
             self.assertEqual(text, "Main prompt.\n\n" + agent + "\n\n" + skills)
@@ -139,7 +139,7 @@ class LayerTest(Fresh):
             handle.write("Be brief.\n")
         with mock.patch.dict(os.environ, {"ALMANAC_HOME": home}):
             self.assertEqual(cheatsheet.text_for(SMALL, True), "Be brief.")
-            self.assertEqual(cheatsheet.text_for(LARGE, True), "Be brief.\n\n" + cheatsheet.read("skills"))
+            self.assertEqual(cheatsheet.text_for(LARGE, True), "Be brief.\n\n" + cheatsheet.skills(sub=True))
             self.assertIn("(Opus)", cheatsheet.text_for(LARGE))  # the full sheet is untouched
 
     def test_mode_off(self):
@@ -315,7 +315,7 @@ class IndexTest(Fresh):
         self.save()
         self.assertIn("Playbooks on hand", json.dumps(self.sent()))
         self.assertEqual(self.sent(inject=False)["system"][-1]["text"], "Main prompt.\n\n" + cheatsheet.text_for(MEDIUM))
-        self.assertEqual(self.sent(enabled=False)["system"][-1]["text"], "Main prompt.\n\n" + cheatsheet.text_for(MEDIUM))
+        self.assertEqual(self.sent(enabled=False)["system"][-1]["text"], "Main prompt.\n\n" + cheatsheet.text_for(MEDIUM, playbooks=False))  # playbooks off: the sheet stops pointing at them
 
     def test_the_list_follows_the_playbook_settings_not_the_cheatsheet(self):
         self.save()
@@ -348,5 +348,15 @@ class CommandTest(Fresh):
         self.assertIn("agent, Haiku: about", text)
 
 
+class SkillsSheetTest(unittest.TestCase):
+    def test_a_subagent_is_not_told_to_hand_work_on_and_playbooks_off_drops_their_line(self):
+        self.assertEqual(cheatsheet.skills(), cheatsheet.read("skills"))
+        self.assertNotIn("Hand a self-contained", cheatsheet.skills(sub=True))
+        self.assertIn("almanac:adopt", cheatsheet.skills(sub=True))
+        self.assertIn("playbook_run", cheatsheet.skills())
+        self.assertNotIn("playbook_run", cheatsheet.skills(playbooks=False))
+
+
 if __name__ == "__main__":
     unittest.main()
+

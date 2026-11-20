@@ -17,6 +17,12 @@ from .routing import CONTINUE, _digest, handwritten, person_text, person_turns
 from .startup import _insert_before_last
 
 
+def _memory_tools(cfg) -> bool:
+    """The memory tools are offered only when both settings are on, the same test as mcp.client_config."""
+    memory = cfg.get("memory") or {}
+    return bool(memory.get("enabled", True) and memory.get("tools", True))
+
+
 class PlaybookLayer:
     """Tell Claude which playbook applies to the newest typed request of the main conversation thread.
     When none does, a prompt-library entry for a task like it is offered instead (never both).
@@ -251,7 +257,7 @@ class PlaybookLayer:
         entry, score = hit
         entry["uses"] = library.bump(ctx.store, entry["id"])
         ctx.stats["library"] = {"id": entry["id"], "score": score}
-        return library.note(entry, cfg.get("note_chars", library.NOTE_CHARS), (ctx.cfg.get("memory") or {}).get("tools", True))
+        return library.note(entry, cfg.get("note_chars", library.NOTE_CHARS), _memory_tools(ctx.cfg))
 
     @classmethod
     def _first(cls, ctx, low, key, books=True, entries=False) -> str:
