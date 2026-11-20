@@ -84,11 +84,14 @@ class Round(Base):
         os.utime(busy, (time.time() - 7200,) * 2)
         self.assertEqual(self.round()["exchanges"], 1)
 
-    def test_only_the_personal_folder_is_read(self):
+    def test_the_active_login_folder_is_read(self):
         home = os.path.join(self.tmp, "home")
-        with mock.patch.object(Path, "home", return_value=Path(home)), \
-                mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": os.path.join(home, ".claude-work")}):
-            self.assertEqual(REAL_SOURCE(), Path(home) / ".claude" / "projects")
+        work = os.path.join(home, ".claude-work")
+        with mock.patch.object(Path, "home", return_value=Path(home)):
+            with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": work}):
+                self.assertEqual(REAL_SOURCE(), Path(work) / "projects")
+            with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": ""}):
+                self.assertEqual(REAL_SOURCE(), Path(home) / ".claude" / "projects")
 
     def test_the_summary_pass_and_vectors_follow(self):
         self.cfg["memory"]["summary_model"] = "claude-haiku-5-5"

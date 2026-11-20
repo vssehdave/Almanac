@@ -39,15 +39,11 @@ _GIT_C = re.compile(r"\bgit\s+(?:-[\w-]+\s+)*?-C\s+" + _ARG)
 
 
 def transcript_dirs(cfg, purpose) -> list:
-    """The Claude Code config folders (each with a projects/ folder of session files) one reader may use:
-      "autoimport": ~/.claude only. It runs unasked every hour, so another config folder (a work account, a sandbox)
-                    is never imported, whatever CLAUDE_CONFIG_DIR says;
-      "import":     what `almanac memory import` looks in for a folder name it was given: $CLAUDE_CONFIG_DIR, else ~/.claude.
-    (The playbook miner's folders are getplaybook's: config.transcript_dirs.)"""
-    home, env = Path.home() / ".claude", os.environ.get("CLAUDE_CONFIG_DIR") or ""
-    if purpose == "autoimport":
-        return [home]
-    return [Path(env).expanduser() if env else home]
+    """The Claude Code config folder (with a projects/ folder of session files) a reader may use: $CLAUDE_CONFIG_DIR
+    when set, else ~/.claude, the login Almanac runs with. `purpose` ("autoimport" or "import") is kept for callers;
+    both read the same folder. (The playbook miner's folders are getplaybook's: config.transcript_dirs.)"""
+    env = os.environ.get("CLAUDE_CONFIG_DIR") or ""
+    return [Path(env).expanduser() if env else Path.home() / ".claude"]
 
 
 def transcripts(words) -> list:
