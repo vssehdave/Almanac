@@ -141,6 +141,13 @@ DEFAULTS = {
         "nudge_after": 25,  # a turn of this many tool calls, with no playbook saved or matched, is flagged to the next request; 0 is off
         "compile_per_day": 1,  # most Sonnet sessions a day that do the compiling; 0 turns it off
     },
+    # Opt-in prompt-cache keepalive (keepalive.py): while a conversation is paused, a tiny request that reads its
+    # cached prefix restarts the cache's life. Costs about a tenth of the prefix per ping, against a full rewrite on return.
+    "keepalive": {
+        "enabled": False,
+        "max_idle_minutes": 240,  # stop pinging a conversation this long after its last real request
+        "max_lanes": 4,  # conversation threads kept alive at once (the least recently active is dropped first)
+    },
     "cloud": {
         "auto": False,  # true keeps a running task's snapshot on origin's cloud/handoff branch (see cloud.py)
         "heartbeat_minutes": 10,
@@ -166,6 +173,7 @@ _OFF = {
     "routing": [("routing", "mode", "off")],
     "cheatsheet": [("cheatsheet", "mode", "off")],
     "cloud": [("cloud", "auto", False)],
+    "keepalive": [("keepalive", "enabled", False)],
     "accounts": [("accounts", "fallback", [])],
     "startup": [("startup", "agent_chars", 0), ("startup", "lean_rules", False), ("startup", "system_prefix", False)],
 }
