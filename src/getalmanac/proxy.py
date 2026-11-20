@@ -631,7 +631,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                             if SIZE_ERROR.search(detail):  # too long says nothing against the rewrite: estimate by size next time
                                 proxy.store.run("delete from state where key = ?", (f"usage:{ctx.lane}",))
                             else:
-                                proxy.store.put(f"nocompact:{ctx.lane}", detail)
+                                proxy.store.put(f"nocompact:{ctx.lane}", {"detail": detail, "at": len((ctx.orig or {}).get("messages") or [])})
                         except Exception:  # without the mark the retry may compact again, be refused again, and go out raw
                             pass
                     del ctx.stats[mark]
