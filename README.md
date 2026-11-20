@@ -650,11 +650,13 @@ request is never dropped.
 **Audit it.** `almanac route status` lists each decision with its reason, the
 estimated cost of staying and of switching, and whether it was applied.
 `almanac status` also shows usage for the last 5 and 24 hours (requests, input,
-cache write, cache read and output tokens, and a weighted total at list-price
-ratios, not the plan's real accounting) and a cache line: the share of input
-read from cache, the cold returns (a request that came back after a pause
-longer than the shortest cache life it asked for) with the cache writes they
-cost, and the cache lives Claude Code asked for. `almanac report --json`
+cache write, cache read and output tokens, as raw counts: there is no price
+weighting, since a plan counts usage its own way), the cold returns of each
+period (a request that came back after a pause longer than the shortest cache
+life it asked for) with the cache tokens they wrote, that as a share of the
+period's cache writes plus input, how many Almanac compacted
+(`compaction.on_cold`) and the estimated tokens that saved, and a cache line:
+the share of input read from cache and the cache lives Claude Code asked for. `almanac report --json`
 carries the same under `meter`. The log records `cache` and `idle` per request.
 
 `almanac report` has one line on the prompt library for the last 24 hours:
@@ -1483,6 +1485,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `compaction.enabled` | `true` | Compact long conversations |
 | `compaction.trigger_tokens` | `150000` | Size that starts a compaction |
 | `compaction.target_tokens` | `40000` | Most the summary may take |
+| `compaction.on_cold` | `true` | A request that returns after its cache expired (a pause longer than its shortest cache ttl) is compacted from twice `target_tokens` instead of the trigger, since its prefix is rewritten anyway; sub-agents and long turns get the stubs |
 | `compaction.window_share` | `0.85` | Inside one long turn, old tool results are stubbed once a request reaches this share of the model's window (`0` is off) |
 | `compaction.keep_results` | `12` | Tool results of the current turn that are never stubbed (the newest) |
 | `compaction.own_the_context` | `true` | Also switch off Claude Code's own auto-compaction (`DISABLE_AUTO_COMPACT=1`) while compaction is on |

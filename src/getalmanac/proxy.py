@@ -28,7 +28,7 @@ from . import request as rq
 from . import sse
 from . import upstream
 from .memory import redact
-from .report import Log, cache_marks, sections
+from .report import Log, cache_marks, is_cold, sections
 
 REQUEST_SKIP = {"host", "connection", "keep-alive", "transfer-encoding", "te", "upgrade",
                 "proxy-authorization", "proxy-connection", "content-length"}
@@ -93,6 +93,7 @@ class Ctx:
         self.thread = None  # "main", "sub", "fork" or None, see rq.thread
         self.frozen_lane = ""  # where startup decisions are kept: a fork reads its parent's, so both send the same bytes
         self.stats = {}
+        self.cold = False  # the cache this request would have read has expired (see Proxy.rewrite)
         self.after = None  # the rewritten body, when a layer changed it
         self.orig = None  # the body as Claude Code sent it, for layers that decide from the whole history
 
@@ -173,6 +174,8 @@ class Proxy:
             ctx.frozen_lane = rq.lane_key(ctx.session, ctx.parent, orig["messages"]) if ctx.thread == "fork" else ctx.lane
             ctx.cwd = rq.working_dir(orig)
             ctx.after, ctx.orig = None, orig
+            before = self.last_seen.get(ctx.lane) if ctx.lane else None  # the same gap `finish` logs as `idle`
+            ctx.cold = before is not None and is_cold(time.time() - before, cache_marks(orig)["ttl"])
             if not self.layers or self.is_fused(ctx.lane) or self.is_fused(ctx.frozen_lane):
                 return raw, orig
             work = json.loads(raw)
@@ -609,6 +612,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 for mark in ("route", "compaction"):
                     if mark not in ctx.stats or proxy.store is None:
                         continue
+                    if mark == "compaction":
+                        ctx.stats.pop("cold", None)  # the compacted body is the one refused: nothing was saved
                     if mark == "route":
                         _tell(proxy, "refused", ctx, resp.status, detail)
                     else:

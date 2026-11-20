@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **A cold return is compacted.** A request that comes back after its cache has
+  expired rewrites the whole prefix whatever Almanac sends, so with
+  `compaction.on_cold` (on by default) it is compacted from twice
+  `compaction.target_tokens` instead of the trigger size: by the stored prefix on
+  the main thread at a human turn, by the stubs inside a long turn and in a
+  sub-agent. The request log records `cold` (estimated tokens before and after).
+
+- **`almanac status` shows raw usage, not a weighted total.** The weighted figure used
+  API list-price ratios, which are not a plan's accounting, so it is gone from `status`
+  and from `almanac report --json`. Each period (5 hours, 24 hours) shows input, cache
+  write, cache read and output tokens, and for cold returns: how many, the cache tokens
+  they wrote, that as a share of the period's cache writes plus input, how many
+  `compaction.on_cold` compacted, and the estimated tokens that saved.
 - **Auto-import and its summary pass use the login Almanac runs with.** They read
   `$CLAUDE_CONFIG_DIR` when it is set (for example a work account), else `~/.claude`,
   instead of always `~/.claude`. So `almanac status` no longer reports "no valid login"

@@ -144,8 +144,12 @@ MAX_AGENTS = 4
 AUDIT = re.compile(r"audit|plan|review", re.I)
 BUILD = re.compile(r"build|implement|write the code", re.I)
 TTL_SECONDS = {"5m": 300, "1h": 3600}
-# List-price ratios to plain input, not the plan's real accounting.
-WEIGHTS = {"input_tokens": 1, "cache_creation_input_tokens": 1.25, "cache_read_input_tokens": 0.1, "output_tokens": 5}
+USAGE = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
+
+
+def is_cold(idle, ttls) -> bool:
+    """True when a pause outlasted the shortest cache life the request asked for."""
+    return bool(ttls) and isinstance(idle, (int, float)) and idle > min(TTL_SECONDS.get(t, 300) for t in ttls)
 
 
 def cache_marks(body) -> dict:
@@ -168,59 +172,62 @@ def cache_marks(body) -> dict:
 def meter(records, now=None) -> dict:
     """Usage over 5 hours and 24 hours, and how often a pause outlasted the cache's life."""
     now = now or time.time()
-    keys = tuple(WEIGHTS)
+    keys = tuple(USAGE)
     out = {"5h": None, "24h": None}
+    seen = {}
     for name, span in (("5h", 5 * 3600), ("24h", 86400)):
-        total = {"requests": 0, "weighted": 0.0, **dict.fromkeys(keys, 0)}
+        total = {"requests": 0, **dict.fromkeys(keys, 0), "cold_returns": 0, "cold_write_tokens": 0,
+                 "cold_compacted": 0, "cold_saved_tokens": 0}
         for r in records:
-            usage = r.get("usage") if isinstance(r, dict) else None
-            if not isinstance(usage, dict) or r.get("kind") != "messages" or not isinstance(r.get("ts"), (int, float))                     or r["ts"] <= now - span:
+            if not isinstance(r, dict) or r.get("kind") != "messages" or not isinstance(r.get("ts"), (int, float)) or r["ts"] <= now - span:
+                continue
+            usage = r.get("usage")
+            if not isinstance(usage, dict):
                 continue
             total["requests"] += 1
             for k in keys:
                 n = usage.get(k)
-                n = n if isinstance(n, int) else 0
-                total[k] += n
-                total["weighted"] += WEIGHTS[k] * n
-        total["weighted"] = round(total["weighted"])
+                total[k] += n if isinstance(n, int) else 0
+            c = r.get("cache")
+            ttls = [t for t in c.get("ttl") or [] if isinstance(t, str)] if isinstance(c, dict) else []
+            if name == "24h":
+                for t in ttls:
+                    seen[t] = seen.get(t, 0) + 1
+            if is_cold(r.get("idle"), ttls):
+                total["cold_returns"] += 1
+                n = usage.get("cache_creation_input_tokens")
+                total["cold_write_tokens"] += n if isinstance(n, int) else 0
+            note = r.get("cold")
+            if isinstance(note, dict) and isinstance(note.get("before"), int) and isinstance(note.get("after"), int):
+                total["cold_compacted"] += 1
+                total["cold_saved_tokens"] += max(0, note["before"] - note["after"])
+        base = total["input_tokens"] + total["cache_creation_input_tokens"]
+        total["cold_share"] = round(total["cold_write_tokens"] / base, 3) if base else None
         out[name] = total
     day = out["24h"]
     side = sum(day[k] for k in keys[:3])
-    cold = {"requests": 0, "cache_write_tokens": 0}
-    seen = {}
-    for r in records:
-        c = r.get("cache") if isinstance(r, dict) else None
-        if not isinstance(c, dict) or not isinstance(r.get("ts"), (int, float)) or r["ts"] <= now - 86400:
-            continue
-        ttls = [t for t in c.get("ttl") or [] if isinstance(t, str)]
-        for t in ttls:
-            seen[t] = seen.get(t, 0) + 1
-        idle, usage = r.get("idle"), r.get("usage") or {}
-        if ttls and isinstance(idle, (int, float)) and idle > min(TTL_SECONDS.get(t, 300) for t in ttls):
-            cold["requests"] += 1
-            n = usage.get("cache_creation_input_tokens")
-            cold["cache_write_tokens"] += n if isinstance(n, int) else 0
     out["cache"] = {"read_share": round(day["cache_read_input_tokens"] / side, 3) if side else None,
-                    "cold_returns": cold["requests"], "cold_write_tokens": cold["cache_write_tokens"], "ttl_seen": seen}
+                    "cold_returns": day["cold_returns"], "cold_write_tokens": day["cold_write_tokens"],
+                    "cold_share": day["cold_share"], "cold_compacted": day["cold_compacted"],
+                    "cold_saved_tokens": day["cold_saved_tokens"], "ttl_seen": seen}
     return out
 
 
 def render_meter(records, now=None) -> list:
-    """The three `almanac status` lines."""
+    """The `almanac status` lines: raw token counts per period, no price weighting (a plan counts usage its own way)."""
     m = meter(records, now)
 
-    def line(label, t):
-        return (f"  {label:<10} {t['requests']} requests, input {t['input_tokens']:,}, cache write "
-                f"{t['cache_creation_input_tokens']:,}, cache read {t['cache_read_input_tokens']:,}, "
-                f"output {t['output_tokens']:,}; weighted {t['weighted']:,}")
+    def lines(label, t):
+        share = "no input yet" if t["cold_share"] is None else f"{t['cold_share']:.1%} of cache writes + input"
+        return [f"  {label:<10} {t['requests']} requests, input {t['input_tokens']:,}, cache write "
+                f"{t['cache_creation_input_tokens']:,}, cache read {t['cache_read_input_tokens']:,}, output {t['output_tokens']:,}",
+                f"  {'cold':<10} {t['cold_returns']} returns wrote {t['cold_write_tokens']:,} cache tokens ({share}); "
+                f"{t['cold_compacted']} compacted, {t['cold_saved_tokens']:,} tokens saved"]
 
     c = m["cache"]
     share = "no usage yet" if c["read_share"] is None else f"{c['read_share']:.0%} of input read from cache"
     seen = ", ".join(f"{k} {v}" for k, v in sorted(c["ttl_seen"].items())) or "none seen"
-    return [line("usage 5h", m["5h"]),
-            line("usage 24h", m["24h"]) + " (weighted: list-price ratios, not the plan's accounting)",
-            f"  {'cache':<10} {share}; {c['cold_returns']} cold returns cost {c['cold_write_tokens']:,} "
-            f"write tokens; ttl seen: {seen}"]
+    return [*lines("usage 5h", m["5h"]), *lines("usage 24h", m["24h"]), f"  {'cache':<10} {share}; ttl seen: {seen}"]
 
 
 def routing(records) -> dict:

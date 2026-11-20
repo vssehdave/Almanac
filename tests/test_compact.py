@@ -577,5 +577,105 @@ class LongTurnTest(LayerCase):
         self.assertEqual(json.dumps(second[:len(first)]), json.dumps(first))  # the same bytes on the next request
 
 
+class ColdTest(LayerCase):
+    """A request back after its cache expired is compacted from twice target_tokens (1500 here), not from the trigger."""
+    trigger = 10 ** 6
+
+    def setUp(self):
+        super().setUp()
+        self.rig.cfg["routing"]["windows"]["m"] = 30000
+        self.rig.upstream.respond = lambda req: (200, {"content-type": "text/event-stream"},
+                                                 sse(usage={"input_tokens": len(req["body"]) // 3}))
+
+    def cold(self, messages, extra=None, gap=4000):
+        """Send once, let `gap` seconds pass for that lane, then send `messages`; return what the upstream got last."""
+        self.rig.messages(body(copy.deepcopy(messages)), extra=extra)
+        lane = self.rig.records()[-1]["lane"]
+        self.rig.proxy.last_seen[lane] -= gap
+        self.rig.messages(body(copy.deepcopy(messages)), extra=extra)
+        return self.rig.sent()["messages"], self.rig.records()[-1]
+
+    def test_a_cold_main_thread_is_compacted_under_the_trigger(self):
+        messages = history(14)
+        sent, record = self.cold(messages, gap=4000)
+        self.assertIn("Almanac compacted this conversation", sent[0]["content"][-1]["text"])
+        self.assertEqual(record["compaction"]["fresh"], True)
+        self.assertGreater(record["cold"]["before"], record["cold"]["after"])
+        self.assertEqual(record["cold"]["before"], compact.estimate(body(messages), None, messages, None))
+
+    def test_a_second_cold_return_counts_against_the_stored_prefix_not_the_raw_history(self):
+        messages = history(14)
+        self.cold(messages)
+        state = self.store.get(f"compact:{self.rig.records()[-1]['lane']}")
+        grown = messages[:-1] + sum((turn(n) for n in range(20, 30)), []) + [messages[-1]]
+        _, record = self.cold(grown)
+        current = state["prefix"] + grown[state["covered"]:]
+        self.assertEqual(record["cold"]["before"], compact.estimate(body(grown), None, current, None))
+        self.assertLess(record["cold"]["before"], compact.estimate(body(grown), None, grown, None))
+
+    def test_a_refused_cold_compaction_is_not_counted(self):
+        self.rig.upstream.respond = lambda req: (
+            (400, {"content-type": "application/json"}, b'{"type":"error","error":{"type":"invalid_request_error"}}')
+            if b"Almanac compacted this conversation" in req["body"] else (200, {"content-type": "text/event-stream"}, sse()))
+        messages = history(14)
+        sent, record = self.cold(messages)
+        self.assertEqual(sent, messages)  # the original went out
+        self.assertNotIn("cold", record)
+
+    def test_the_next_warm_request_keeps_the_same_prefix_and_is_not_counted_again(self):
+        messages = history(14)
+        sent, _ = self.cold(messages)
+        self.rig.messages(body(copy.deepcopy(messages)))
+        self.assertEqual(json.dumps(self.rig.sent()["messages"]), json.dumps(sent))
+        self.assertNotIn("cold", self.rig.records()[-1])
+
+    def test_a_warm_request_of_the_same_size_is_untouched(self):
+        messages = history(14)
+        sent, record = self.cold(messages, gap=100)  # inside the 5 minute life
+        self.assertEqual(sent, messages)
+        self.assertNotIn("cold", record)
+
+    def test_a_longer_ttl_makes_a_short_pause_warm(self):
+        messages = history(14)
+        for msg in messages:
+            for block in msg["content"]:
+                if "cache_control" in block:
+                    block["cache_control"]["ttl"] = "1h"
+        sent, record = self.cold(messages, gap=2000)  # past 5m, inside 1h
+        self.assertEqual(sent, messages)
+
+    def test_a_small_conversation_is_not_worth_compacting(self):
+        sent, record = self.cold(history(2))
+        self.assertEqual(sent, history(2))
+        self.assertNotIn("cold", record)
+
+    def test_it_can_be_switched_off(self):
+        self.rig.cfg["compaction"]["on_cold"] = False
+        messages = history(14)
+        sent, record = self.cold(messages)
+        self.assertEqual(sent, messages)
+        self.assertNotIn("cold", record)
+
+    def test_compaction_off_wins(self):
+        self.rig.cfg["compaction"]["enabled"] = False
+        messages = history(14)
+        sent, record = self.cold(messages)
+        self.assertEqual(sent, messages)
+        self.assertNotIn("cold", record)
+
+    def test_a_cold_long_turn_is_stubbed_below_the_window_share(self):
+        sent, record = self.cold(long_turn(10))
+        self.assertTrue(stubbed(sent))
+        self.assertGreater(record["cold"]["before"], record["cold"]["after"])
+
+    def test_a_cold_sub_agent_is_stubbed_too(self):
+        extra = {"x-claude-code-agent-id": "a1"}
+        sent, record = self.cold(long_turn(10), extra=extra)
+        self.assertTrue(stubbed(sent))
+        self.assertGreater(record["cold"]["before"], record["cold"]["after"])
+        warm, _ = self.cold(long_turn(10), extra={"x-claude-code-agent-id": "a2"}, gap=10)
+        self.assertEqual(stubbed(warm), [])
+
+
 if __name__ == "__main__":
     unittest.main()
