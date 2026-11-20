@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -204,11 +205,19 @@ class LauncherTest(unittest.TestCase):
         self.assertNotIn("DISABLE_AUTO_COMPACT", env(enabled=False))
         self.assertNotIn("DISABLE_AUTO_COMPACT", launcher.child_env("http://127.0.0.1:1", parent={"PATH": "x"}))
 
-    def test_the_bundle_is_passed_as_a_plugin_folder_unless_turned_off(self):
+    def test_the_package_plugin_and_the_users_bundle_are_passed_unless_turned_off(self):
+        mine = os.path.join(os.environ["ALMANAC_HOME"], "bundle")
+        for name, manifest in (("one", True), ("two", True), ("notaplugin", False)):
+            os.makedirs(os.path.join(mine, name, ".claude-plugin" if manifest else "x"), exist_ok=True)
+            if manifest:
+                with open(os.path.join(mine, name, ".claude-plugin", "plugin.json"), "w") as handle:
+                    handle.write('{"name": "%s"}' % name)
+        self.addCleanup(shutil.rmtree, mine)
         on = launcher.with_bundle(["-p", "hi"], {"bundle": {"enabled": True}})
-        self.assertEqual(on[0], "--plugin-dir")
-        self.assertTrue(os.path.isfile(os.path.join(on[1], "egm", ".claude-plugin", "plugin.json")))
-        self.assertEqual(on[2:], ["-p", "hi"])
+        self.assertEqual(on[0::2][:-1], ["--plugin-dir"] * 3)
+        self.assertEqual([os.path.basename(p) for p in on[1:6:2]], ["almanac", "one", "two"])
+        self.assertTrue(os.path.isfile(os.path.join(on[1], ".claude-plugin", "plugin.json")))
+        self.assertEqual(on[6:], ["-p", "hi"])
         self.assertEqual(launcher.with_bundle(["-p", "hi"], {"bundle": {"enabled": False}}), ["-p", "hi"])
 
     def test_every_bundled_plugin_has_a_manifest_and_a_licence(self):
@@ -218,29 +227,6 @@ class LauncherTest(unittest.TestCase):
                 with open(os.path.join(folder, name, ".claude-plugin", "plugin.json"), encoding="utf-8") as handle:
                     self.assertTrue(json.load(handle)["name"])
                 self.assertTrue(os.path.isfile(os.path.join(folder, name, "LICENSE")), name)
-
-    def test_bundled_cli_anything_is_text_only_and_free_of_removed_steps(self):
-        folder = os.path.join(os.path.dirname(launcher.__file__), "bundle", "cli-anything")
-        self.assertFalse(os.path.exists(os.path.join(folder, "hooks")))
-        for root, _dirs, files in os.walk(folder):
-            for name in files:
-                self.assertNotIn(os.path.splitext(name)[1], (".py", ".sh", ".js", ".ps1", ".bat", ".cmd"), name)
-                with open(os.path.join(root, name), encoding="utf-8") as handle:
-                    text = handle.read()
-                for banned in ("npx ", "npx skills add", "/root/cli-anything", "@apireno/domshell", "git clone"):
-                    self.assertNotIn(banned, text, os.path.join(root, name))
-
-    def test_every_crew_agent_has_a_name_a_short_description_and_a_known_model(self):
-        folder = os.path.join(os.path.dirname(launcher.__file__), "bundle", "crew", "agents")
-        files = [f for f in os.listdir(folder) if f.endswith(".md")]
-        self.assertTrue(files)
-        for file in files:
-            with open(os.path.join(folder, file), encoding="utf-8") as handle:
-                head = handle.read().split("\n---\n", 1)[0].splitlines()[1:]
-            fields = dict(line.split(": ", 1) for line in head if ": " in line)
-            self.assertTrue(fields.get("name"), file)
-            self.assertTrue(0 < len(fields.get("description", "")) <= 200, file)
-            self.assertIn(fields.get("model"), ("haiku", "sonnet", "opus"), file)
 
     def test_run_launches_the_client_through_the_proxy(self):
         # A stand-in "claude" that makes one request to the base URL it was given.

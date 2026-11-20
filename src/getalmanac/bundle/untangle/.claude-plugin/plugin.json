@@ -1,5 +1,0 @@
-{
-  "name": "untangle",
-  "description": "Refactor a tangled codebase in phases without changing behaviour.",
-  "version": "0.0.0"
-}

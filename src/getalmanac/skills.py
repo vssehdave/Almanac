@@ -574,6 +574,26 @@ def audit(pending=None, again=False, out=print) -> int:
     return worst
 
 
+def import_bundle(path, out=print) -> int:
+    """Copy the plugin folders in `path` (a bundle kept elsewhere) into the user bundle, keeping any that are already there."""
+    src, dest = Path(path), config.home() / "bundle"
+    found = sorted(p for p in src.iterdir() if (p / ".claude-plugin" / "plugin.json").is_file()) if src.is_dir() else []
+    if not found:
+        out(f"almanac: no plugin folders (each with .claude-plugin/plugin.json) in {path}")
+        return ERROR
+    dest.mkdir(exist_ok=True)
+    for folder in found:
+        if (dest / folder.name).exists() or linked(dest / folder.name):
+            out(f"kept {folder.name}: already in {dest}")
+        else:
+            copy(folder, dest / folder.name)
+            out(f"imported {folder.name}")
+    for name, target in (("SOURCES.md", dest / "SOURCES.md"), ("pack.json", config.home() / "pack.json")):
+        if (src / name).is_file() and not target.exists():  # the notes and the pack come along, never over newer ones
+            shutil.copyfile(src / name, target)
+    return 0
+
+
 def _find(which):
     """(label, kind, path) of the installed item with this name or path, or None."""
     real = os.path.realpath(which) if os.path.exists(which) else None
@@ -618,17 +638,13 @@ def unaccept(which, out=print) -> int:
     return 0
 
 
-# The pack: the owner's list of third-party skills and plugins, each pinned to a commit.
+# The pack: your own list of third-party skills and plugins, each pinned to a commit.
 KINDS = ("skill", "plugin", "binary", "builtin")
 
 
 def pack_file(path=None):
-    """pack.json: the given path, else the one shipped in the package."""
-    if path:
-        return Path(path)
-    from importlib import resources
-
-    return resources.files("getalmanac").joinpath("pack.json")
+    """pack.json: the given path, else the one in the Almanac folder (the package ships none)."""
+    return Path(path) if path else config.home() / "pack.json"
 
 
 def load_pack(path=None):

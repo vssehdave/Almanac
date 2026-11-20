@@ -37,6 +37,8 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac cheatsheet path      where your own copies go (opus.md, sonnet.md, haiku.md, fable.md, common.md, skills.md, agent.md, lean.md)
   almanac skill scan PATH|URL  scan a skill or plugin with SkillSpector (exit 0 SAFE, 1 CAUTION, 2 DO_NOT_INSTALL, 3 error)
   almanac skill add URL|PATH   fetch, scan, and install its skills only if SAFE (--skill NAME, --ref SHA)
+  almanac skill add --bundle URL|PATH   the same, installed as a plugin in your Almanac bundle (the adopt skill continues)
+  almanac skill import-bundle PATH      copy plugin folders from an old bundle into your Almanac bundle
   almanac skill audit          scan installed skills and plugins not scanned yet (--again: all), then a table
   almanac skill accept ITEM    stop the launch warning for this item at its current contents (`unaccept` undoes it)
   almanac pack list            the pack: third-party skills and plugins, each pinned to a commit
@@ -513,6 +515,7 @@ def _skill(rest):
     add.add_argument("--ref", help="a full commit SHA to fetch instead of the default branch")
     add.add_argument("--accept-caution", action="store_true", help="install even when the verdict is CAUTION")
     add.add_argument("--replace", action="store_true", help="overwrite a skill with the same name")
+    sub.add_parser("import-bundle").add_argument("path", help="a folder of plugin folders, such as an old copy of the bundle")
     sub.add_parser("accept").add_argument("item", help="an installed skill or plugin, by name or path")
     sub.add_parser("unaccept").add_argument("item")
     audit = sub.add_parser("audit")
@@ -521,6 +524,8 @@ def _skill(rest):
     args = parser.parse_args(rest)
     if args.cmd in ("accept", "unaccept"):
         return getattr(skills, args.cmd)(args.item, out=_print)
+    if args.cmd == "import-bundle":
+        return skills.import_bundle(args.path, out=_print)
     if args.cmd == "audit":
         return skills.audit(args.pending, args.again, out=_print)
     if args.cmd == "add":
@@ -544,7 +549,7 @@ def _pack(rest):
     from . import skills
 
     parser = argparse.ArgumentParser(prog="almanac pack")
-    parser.add_argument("--file", help="a pack.json other than the one shipped with Almanac")
+    parser.add_argument("--file", help="a pack.json other than the one in the Almanac folder")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("list")
     install = sub.add_parser("install")

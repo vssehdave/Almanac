@@ -388,17 +388,35 @@ class Launch(Base):
         self.assertEqual((todo, len(unhashed)), ([], 1))
 
 
+class ImportBundle(Base):
+    def test_copies_plugin_folders_without_links_and_keeps_existing_ones(self):
+        old = self.tmp / "old"
+        for name in ("one", "two"):
+            make_skill(old / name / "skills", "s")
+            (old / name / ".claude-plugin").mkdir()
+            (old / name / ".claude-plugin" / "plugin.json").write_text('{"name": "%s"}' % name)
+        (old / "stray").mkdir()
+        (old / "SOURCES.md").write_text("rows")
+        mine = self.tmp / "home" / "bundle"
+        (mine / "two" / ".claude-plugin").mkdir(parents=True)
+        (mine / "two" / ".claude-plugin" / "plugin.json").write_text('{"name": "mine"}')
+        lines = []
+        self.assertEqual(skills.import_bundle(old, out=lines.append), 0)
+        self.assertEqual(sorted(p.name for p in mine.iterdir()), ["SOURCES.md", "one", "two"])
+        self.assertIn("kept two", " ".join(lines))
+        self.assertIn('"mine"', (mine / "two" / ".claude-plugin" / "plugin.json").read_text())
+        self.assertTrue((mine / "one" / "skills" / "s" / "SKILL.md").is_file())
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.main(["skill", "import-bundle", str(self.tmp / "nothing")]), skills.ERROR)
+
+
 class Pack(Base):
-    def test_repo_pack_is_pinned_and_valid(self):
-        old = os.getcwd()
-        os.chdir(self.tmp)  # the pack is found from any folder, not only the checkout
-        self.addCleanup(os.chdir, old)
-        entries = skills.load_pack()
-        self.assertGreaterEqual(len(entries), 11)
-        self.assertEqual(len({e["name"] for e in entries}), len(entries))
-        for e in entries:
-            self.assertRegex(e["ref"], r"^[0-9a-f]{40}$", e["name"])
-            self.assertTrue(e["source"].startswith("https://github.com/"), e["name"])
+    def test_the_package_ships_no_pack_and_the_one_in_the_almanac_folder_is_read(self):
+        self.assertEqual((skills.pack_file(), skills.load_pack()), (self.tmp / "home" / "pack.json", []))
+        sha = "a" * 40
+        (self.tmp / "home" / "pack.json").write_text(json.dumps({"entries": [
+            {"name": "x", "kind": "skill", "source": "https://github.com/a/b", "ref": sha}]}))
+        self.assertEqual([e["name"] for e in skills.load_pack()], ["x"])
 
     def test_install_routes_by_kind(self):
         make_skill(self.src / "skills", "packed")
