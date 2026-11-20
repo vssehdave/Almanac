@@ -1,13 +1,19 @@
 import contextlib
+import copy
 import io
 import json
+import os
+import shutil
 import sqlite3
+import tempfile
+import time
 import unittest
+from pathlib import Path
 from unittest import mock
 
-import test_mine as tm
+from helpers import mine, playbook
 
-from getalmanac import library, mine, playbook
+from getalmanac import config, library
 from getalmanac.memory import Memory
 from getalmanac.project import Projects
 from getalmanac.store import Store
@@ -16,7 +22,79 @@ PULL = ["Bash: git pull", "Bash: python build.py"]
 FORMS = ["Bash: git status", "Bash: python -m pytest", "Bash: npm run build"]  # the step form: rtk unwrapped, flags and cd dropped
 
 
-class LibraryCandidateTest(tm.Home):
+
+NOW = time.time()
+
+
+SECRET = "sk-" + "a1b2c3d4e5f6g7h8i9j0k1l2"
+
+
+CWD = "C:\\Users\\someone\\code\\billing-app"
+
+
+BUILD = [("Bash", {"command": "git pull --rebase"}), ("Bash", {"command": "python build.py --all"}),
+         ("Skill", {"skill": "interfaces:better-layout"}), ("Agent", {"subagent_type": "crew:code-reviewer"})]
+
+
+REPORT = ["please build the weekly sales report and email it to finance",
+          "build weekly sales report then email finance please",
+          "build the weekly sales report, email finance"]
+
+
+def stamp(ts=None) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(ts or NOW))
+
+
+def line(**kw) -> str:
+    return json.dumps(kw)
+
+
+def write_session(base, folder, sid, turns, cwd=CWD, extra=(), when=None):
+    """turns: [(typed text, [(tool name, input)])]. Each tool call is one request written as two lines, plus a tool result."""
+    lines = []
+    for n, (text, tools) in enumerate(turns):
+        lines.append(line(type="user", isSidechain=False, sessionId=sid, cwd=cwd, timestamp=stamp(when),
+                          origin={"kind": "human"}, message={"role": "user", "content": text}))
+        for i, (name, args) in enumerate(tools):
+            req = f"req-{sid}-{n}-{i}"
+            usage = {"input_tokens": 10, "cache_creation_input_tokens": 100, "cache_read_input_tokens": 5000, "output_tokens": 50}
+            block = {"type": "tool_use", "id": f"t{n}{i}", "name": name, "input": args}
+            for content in ([{"type": "text", "text": "ok"}], [block]):
+                lines.append(line(type="assistant", isSidechain=False, requestId=req, sessionId=sid, timestamp=stamp(when),
+                                  message={"role": "assistant", "content": content, "usage": usage}))
+            lines.append(line(type="user", isSidechain=False, sessionId=sid, timestamp=stamp(when),
+                              message={"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"t{n}{i}",
+                                                                    "content": "SECRET-RESULT " + SECRET}]}))
+    lines += list(extra)
+    path = Path(base) / "projects" / folder / f"{sid}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+class Home(unittest.TestCase):
+    """A fresh ALMANAC_HOME, home folder and Claude config folder for each test."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="almanac-mine-"))
+        self.cfg_dir, self.user_home, self.alm = self.tmp / "cfg", self.tmp / "home", self.tmp / "almanac"
+        for p in (self.cfg_dir, self.user_home, self.alm):
+            p.mkdir()
+        patches = [mock.patch.dict(os.environ, {"ALMANAC_HOME": str(self.alm), "CLAUDE_CONFIG_DIR": str(self.cfg_dir)}),
+                   mock.patch("pathlib.Path.home", return_value=self.user_home)]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.cfg = copy.deepcopy(config.DEFAULTS)
+
+    def three_sessions(self, texts=REPORT, tools=BUILD, folder="C--code-billing-app"):
+        for sid in (0, 1):
+            write_session(self.cfg_dir, folder, f"sess-{sid}", [(t, tools) for n, t in enumerate(texts) if n % 2 == sid])
+        return texts
+
+
+class LibraryCandidateTest(Home):
     def entries(self, *rows, project="p", names=()):
         """rows: (prompt, route, uses, superseded_by); written to the store `mine` opens. names: {project key: name} to know."""
         store = Store(self.alm / "almanac.db")
@@ -79,7 +157,7 @@ class LibraryCandidateTest(tm.Home):
         tools = [("Bash", {"command": "rtk git status"}), ("Bash", {"command": "python -m pytest -q"}),
                  ("Bash", {"command": "cd x && npm run build"})]
         self.three_sessions(tools=tools)
-        self.entries((tm.REPORT[0], FORMS, 4, 0))
+        self.entries((REPORT[0], FORMS, 4, 0))
         (c,) = self.mined()
         self.assertEqual(c["count"], 3)  # the one the transcripts found
 

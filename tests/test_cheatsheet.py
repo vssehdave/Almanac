@@ -11,7 +11,9 @@ from unittest import mock
 from helpers import Rig, sse
 from test_routing import LARGE, MAIN, MEDIUM, SMALL, SetProject, body, convo, sub_headers
 
-from getalmanac import cheatsheet, cli, config, playbook, proxy as proxy_mod, request as rq
+from helpers import playbook
+
+from getalmanac import cheatsheet, cli, config, proxy as proxy_mod, request as rq
 from getalmanac.cheatsheet import CheatsheetLayer
 from getalmanac.routing import RoutingLayer
 from getalmanac.store import Store

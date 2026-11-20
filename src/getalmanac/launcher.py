@@ -44,7 +44,8 @@ def child_env(url: str, parent=None, cfg=None) -> dict:
     # A custom base URL makes Claude Code hide model features it cannot verify through
     # a gateway. This relay changes none of them, so say it is the first-party API.
     env["_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL"] = "1"
-    env["ALMANAC_PROXY"] = url
+    env["ALMANAC_PROXY"] = url  # also tells the Playbook plugin's hooks to stay silent: the proxy places the offers
+    env["PLAYBOOK_HOME"], env["PLAYBOOK_CONFIG"] = str(config.home()), str(config.config_path())  # its server shares the playbooks
     # Behind a corporate proxy Claude Code would send its requests for this loopback address to that proxy.
     keep = (env.pop("no_proxy", "") + "," + env.get("NO_PROXY", "")).replace(" ", "").split(",")
     env["NO_PROXY"] = ",".join(dict.fromkeys([h for h in keep if h] + ["localhost", "127.0.0.1", "::1"]))
@@ -127,6 +128,7 @@ def https_env(session, port: int, parent=None, cfg=None) -> dict:
     keep = [h for h in current.replace(" ", "").split(",") if h and h != "*" and not session.host.endswith(h.lstrip("*."))]
     env["NO_PROXY"] = ",".join(dict.fromkeys(keep + ["localhost", "127.0.0.1", "::1"]))
     env["ALMANAC_PROXY"] = f"http://127.0.0.1:{port}"
+    env["PLAYBOOK_HOME"], env["PLAYBOOK_CONFIG"] = str(config.home()), str(config.config_path())
     return env
 
 
@@ -204,10 +206,12 @@ def run(args, cfg) -> int:
     except Exception as exc:  # a broken check must never stop Claude Code from starting
         print(f"almanac: the skill check failed: {exc}", file=sys.stderr)
     try:
-        from . import mine
+        from getplaybook import build
 
-        mine.launch_check(cfg)
-        mine.keep_checking()
+        from . import _pbind  # noqa: F401
+
+        build.launch_check(cfg)
+        build.keep_checking()
     except Exception:  # the playbook miner is an extra: it must never stop Claude Code from starting
         pass
     # A base URL the user already set (a company gateway) becomes the upstream.

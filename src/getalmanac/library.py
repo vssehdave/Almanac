@@ -17,7 +17,10 @@ import re
 import sqlite3
 import time
 
-from . import config, mine
+from getplaybook import mine
+
+from . import _pbind  # noqa: F401  (the miner reads Almanac's home and settings)
+from . import config
 from . import request as rq
 from .match import STOP, tokens
 from .memory import QUOTED, _first_line, clean, exchange, redact

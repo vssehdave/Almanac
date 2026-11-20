@@ -127,12 +127,14 @@ DEFAULTS = {
     "cheatsheet": {"mode": "on"},
     "playbooks": {
         "enabled": True,
-        "inject": True,  # tell Claude which playbook matches a request (see playbook.py)
+        "inject": True,  # tell Claude which playbook matches a request (see playbook_layer.py and the getplaybook package)
         "route": True,  # offer a playbook from what a thread is doing (its tool calls and narration), main thread and sub-agents
         "auto_run": True,  # run a playbook's approved script in the proxy when `approve --auto` allowed it; false never runs one
-        # Claude Code config folders to mine for repeated tasks, besides ~/.claude and $CLAUDE_CONFIG_DIR (see mine.py),
+        # Claude Code config folders to mine for repeated tasks, besides ~/.claude and $CLAUDE_CONFIG_DIR (see the getplaybook package),
         # for example ["~/.claude-work"]
         "transcript_dirs": [],
+        # parts of session folder names the miner leaves out (scratch and temporary work, its own compile sessions)
+        "skip_folders": ["AppData-Local-Temp", "-Temp-", "almanac-compile", "playbook-compile", "claude-mem-observer"],
         "background": True,  # mine past sessions and compile the best repeat into a playbook draft, in the background
         "nudge_after": 25,  # a turn of this many tool calls, with no playbook saved or matched, is flagged to the next request; 0 is off
         "compile_per_day": 1,  # most Sonnet sessions a day that do the compiling; 0 turns it off

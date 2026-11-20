@@ -10,7 +10,9 @@ import test_compact as tc
 import test_memory as tm
 import test_playbook as tp
 import test_rawmemory as tr
-from getalmanac import cloud, compact, library, mcp, playbook, routing
+from helpers import playbook
+
+from getalmanac import cloud, compact, library, mcp, routing
 from getalmanac import request as rq
 from getalmanac.memory import Memory, clean
 from getalmanac.store import Store
