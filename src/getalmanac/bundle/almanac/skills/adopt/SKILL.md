@@ -76,6 +76,9 @@ description and no model. Descriptions cut to one sentence of what the agent
 is plus when to use it, a `model:` set per agent by job, a "Skills to use"
 section added to each naming skills the user had adopted, and every reference
 to the pack's own slash commands removed.
+The 17 per-language reviewers and 10 per-language build resolvers were later merged into `code-reviewer`
+and `build-error-resolver`: each keeps its old body as `references/<agent>/<language>.md`, and the agent reads the
+one that matches the code.
 
 **A skill with an MCP server (`api-anything`).** The server was pinned to an
 exact version (`0.4.0`) and its environment set to local-only, because its
