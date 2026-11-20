@@ -35,6 +35,25 @@ def user_dir() -> Path:
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
 
 
+def trust(path: Path):
+    """Mark the profile folder trusted in this account's Claude Code state, once. Claude Code keeps trust for a folder
+    given with --add-dir for one session only, so without this it asks at the start of every session. Only this one
+    entry is added; nothing else in the file changes, and a file Claude Code has not made yet is left alone."""
+    state = Path(os.environ["CLAUDE_CONFIG_DIR"]) / ".claude.json" if os.environ.get("CLAUDE_CONFIG_DIR") else Path.home() / ".claude.json"
+    try:
+        data = json.loads(state.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return
+    key = path.resolve().as_posix()
+    entry = (data.get("projects") or {}).get(key) or {}
+    if entry.get("hasTrustDialogAccepted") is True:
+        return
+    data.setdefault("projects", {})[key] = {**entry, "hasTrustDialogAccepted": True}
+    spare = state.with_name(state.name + ".almanac-tmp")
+    spare.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.replace(spare, state)  # whole file at once: Claude Code never reads half of it
+
+
 def folder() -> Path:
     """This account's profile folder. Accounts (config folders) run at the same time, so each one has its own."""
     key = os.path.normcase(str(user_dir().resolve()))
@@ -283,7 +302,12 @@ def prepare(cfg, args, cwd=None):
         (mine / "CLAUDE.md").unlink(missing_ok=True)  # an old copy must not outlive the user's file
     _put(mine / "settings.json", json.dumps(curated_settings(user, cfg, md.as_posix() if text else ""), indent=2))
     mirror(source, mine, cfg)
+    notes = []
+    try:
+        trust(mine)
+    except (OSError, ValueError) as exc:  # unreadable or odd state: Claude Code just asks, as before
+        notes.append(f"could not mark {mine} trusted ({exc}); Claude Code will ask about it")
     # --add-dir takes every value up to the next flag, so it must not be the last one before the user's own arguments
     flags = ["--add-dir", str(mine), "--setting-sources", "project,local", "--settings", str(mine / "settings.json")]
-    notes = [f"{path} runs a hook this profile leaves out; it will still run here" for path in leaks(cwd or os.getcwd(), cfg)]
+    notes += [f"{path} runs a hook this profile leaves out; it will still run here" for path in leaks(cwd or os.getcwd(), cfg)]
     return flags, notes
