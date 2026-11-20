@@ -275,6 +275,16 @@ class CompactLayerTest(LayerCase):
         self.send(messages)  # and it is not tried again for this conversation
         self.assertEqual(len(self.rig.upstream.requests), 3)
 
+    def test_a_refused_compaction_is_tried_again_after_the_conversation_grows(self):
+        from getalmanac import compact
+        lane = "x"
+        ctx = type("C", (), {"store": self.store, "lane": lane})()
+        self.store.put(f"nocompact:{lane}", {"detail": "bad block", "at": 10})
+        self.assertTrue(compact.blocked(ctx, [{}] * (10 + compact.RETRY_AFTER - 1)))
+        self.assertFalse(compact.blocked(ctx, [{}] * (10 + compact.RETRY_AFTER)))
+        self.store.put(f"nocompact:{lane}", "bad block")  # a mark from before the count was kept lapses at once
+        self.assertFalse(compact.blocked(ctx, [{}] * 11))
+
     def test_a_size_refusal_does_not_switch_compaction_off_but_another_one_does(self):
         refusal = [b'{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 250000 tokens > 200000 maximum"}}']
 
@@ -293,7 +303,7 @@ class CompactLayerTest(LayerCase):
         other[0]["content"][1]["text"] = "A different first question"  # a new conversation: the first one is no longer rewritten
         self.send(other)
         lane = self.rig.records()[-1]["lane"]
-        self.assertIn("bad block", self.store.get(f"nocompact:{lane}"))
+        self.assertIn("bad block", self.store.get(f"nocompact:{lane}")["detail"])
 
     def test_an_edit_to_covered_history_drops_the_prefix(self):
         messages = history(8)
@@ -517,7 +527,7 @@ class LongTurnTest(LayerCase):
         messages = long_turn(30)
         self.assertEqual(self.go(messages), messages)
         self.assertEqual(len(self.rig.upstream.requests), 2)
-        self.assertIn("bad block", self.store.get(f"nocompact:{self.lane()}"))
+        self.assertIn("bad block", self.store.get(f"nocompact:{self.lane()}")["detail"])
         self.assertIn("bad block", self.rig.records()[-1]["fallback"])
         longer = long_turn(31)
         self.assertEqual(self.go(longer), longer)  # and it is not tried again for this conversation
