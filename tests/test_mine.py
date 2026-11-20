@@ -724,5 +724,91 @@ class BackgroundTest(Fake):
         self.assertEqual(len(self.calls()), 1)
 
 
+class SubAgentTest(Fake):
+    """Sub-agent transcripts (<session>/subagents/agent-<id>.jsonl, the type in agent-<id>.meta.json) are mined too."""
+
+    LOOP = [("Bash", {"command": "python -m unittest"}), ("Bash", {"command": "python -m unittest tests.test_a"}),
+            ("Read", {}), ("Bash", {"command": "python -m unittest"})]
+    WAIT = [("Bash", {"command": "until gh run view 1 | grep -q done; do sleep 5; done"}), ("Read", {}), ("Read", {})]
+    TASKS = ["run the unit tests of the billing module and fix what fails", "run the unit tests for the invoice module and fix failures",
+             "run unit tests of the payments module and fix every failure"]
+
+    def sub(self, sid, agent, text, tools, kind="verifier", folder="C--code-billing-app"):
+        path = write_session(self.cfg_dir, folder, agent, [(text, tools)])
+        raw = path.read_text(encoding="utf-8").replace('"isSidechain": false', '"isSidechain": true')
+        target = path.parent / sid / "subagents" / f"agent-{agent}.jsonl"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(raw, encoding="utf-8")
+        path.unlink()
+        if kind is not None:
+            target.with_suffix(".meta.json").write_text(json.dumps({"agentType": kind, "description": "x"}), encoding="utf-8")
+        return target
+
+    def test_the_miner_reads_a_sub_agent_transcript_and_tags_its_type(self):
+        write_session(self.cfg_dir, "C--code-billing-app", "sess-0", [(REPORT[0], BUILD)])
+        self.sub("sess-0", "a1", self.TASKS[0], self.LOOP)
+        self.sub("sess-0", "a2", "unknown type task words here", self.LOOP, kind=None)  # no meta file: not mined
+        turns = {t["text"]: t for t in mine.read_turns(30, self.cfg)}
+        self.assertEqual(set(turns), {REPORT[0], self.TASKS[0]})
+        self.assertEqual((turns[REPORT[0]]["agent_type"], turns[self.TASKS[0]]["agent_type"]), ("", "verifier"))
+        self.assertEqual(turns[self.TASKS[0]]["chains"], ["test-loop"])
+        self.assertEqual(turns[REPORT[0]]["chains"], [])
+        self.assertNotIn("SECRET-RESULT", json.dumps(list(turns.values())))
+
+    def test_a_wait_loop_and_git_inspection_before_a_commit_are_chains(self):
+        poll = mine.read_file(self.sub("s", "a1", self.TASKS[0], self.WAIT), "f", "0", "verifier")
+        self.assertEqual(poll[0]["chains"], ["poll"])
+        look = [("Bash", {"command": "git status"}), ("Bash", {"command": "git diff"}), ("Bash", {"command": "git commit -m x"})]
+        self.assertEqual(mine.read_file(self.sub("s", "a2", self.TASKS[1], look), "f", "0", "verifier")[0]["chains"], ["inspect"])
+
+    def test_a_chain_in_one_agent_type_is_a_candidate_with_that_type_and_a_route(self):
+        for n, task in enumerate(self.TASKS):
+            self.sub(f"sess-{n % 2}", f"a{n}", task, self.LOOP)
+        (c,) = [c for c in mine.mine(30, 3, self.cfg, out=lambda *_: None) if c.get("kind") == "chain"]
+        self.assertEqual((c["chain"], c["agent_type"], c["phases"], c["count"]), ("test-loop", "verifier", ["test"], 3))
+
+    def test_a_main_thread_chain_needs_different_workflows_to_be_a_building_block(self):
+        flows = [[("Bash", {"command": "git checkout -b x"}), ("Edit", {}), ("Bash", {"command": "python -m unittest"}), ("Bash", {"command": "python -m unittest"}),
+                  ("Bash", {"command": "git commit -m x"})],
+                 [("Edit", {}), ("Bash", {"command": "python -m unittest"}), ("Bash", {"command": "python -m unittest"}), ("Bash", {"command": "git commit -m x"}),
+                  ("Bash", {"command": "git push"}), ("Bash", {"command": "gh pr create"})]]
+        for n in range(4):
+            write_session(self.cfg_dir, "C--code-billing-app", f"m{n}", [(f"task number {n} on the billing module please", flows[n % 2])])
+        found = mine.mine(30, 3, self.cfg, out=lambda *_: None)
+        self.assertEqual([c["chain"] for c in found if c.get("kind") == "chain"], ["test-loop"])
+        self.assertTrue(all(c["agent_type"] == "" for c in found))
+        for n in range(4):  # the same workflow only: it carries the loop itself
+            write_session(self.cfg_dir, "C--code-billing-app", f"m{n}", [(f"task number {n} on the billing module please", flows[0])])
+        self.assertEqual([c for c in mine.mine(30, 3, self.cfg, out=lambda *_: None) if c.get("kind") == "chain"], [])
+
+    def test_compiling_saves_route_and_agent_type_and_a_same_route_draft_is_merged_into(self):
+        chain = dict(self.cand, id="chain1", kind="chain", chain="test-loop", seed=["test"], phases=["test"], agent_type="verifier")
+        mine._save(mine.candidates_path(), {"candidates": [chain]})
+        self.compile()
+        pb = playbook.load("weekly-sales-report")
+        self.assertEqual((pb["route"], pb["agent_type"], pb["phases"], pb["status"]), (["test"], "verifier", ["test"], "draft"))
+        playbook.remove("weekly-sales-report")
+        playbook.save({"name": "test-it", "title": "t", "when": "w", "triggers": ["run tests"], "steps": ["x"], "route": ["test"],
+                       "agent_type": "verifier", "source": "claude"}, script="print(1)\n")
+        mine._save(mine.state_path(), {})
+        self.compile()
+        self.assertEqual(playbook.names(), ["test-it"])  # no new folder
+        self.assertEqual(playbook.load("test-it")["triggers"], ["run tests", "weekly sales report"])
+
+    def test_a_workflow_includes_the_compiled_building_blocks_it_runs_through(self):
+        flow = dict(self.cand, id="flow1", kind="workflow", seed=["commit", "edit", "test"], phases=["edit", "test", "commit"], blocks=["test-loop", "poll"])
+        self.assertEqual(mine._includes(flow), [])
+        playbook.save({"name": "verify-tests", "title": "t", "when": "w", "triggers": ["run tests"], "steps": ["x"], "route": ["test"]})
+        mine._save(mine.state_path(), {"compiled": {mine.chain_id("", "test-loop"): "verify-tests"}})
+        self.assertEqual(mine._includes(flow), ["verify-tests"])
+        self.assertIn("verify-tests already do parts of this work", mine.build_prompt(flow))
+        self.assertEqual(mine._includes(dict(flow, agent_type="verifier")), [])
+        mine._save(mine.candidates_path(), {"candidates": [flow, dict(self.cand, id="chain1", kind="chain", chain="test-loop", seed=["test"])]})
+        mine._save(mine.state_path(), {"compiled": {"chain1": "verify-tests"}})
+        self.assertEqual(mine.next_candidate()["id"], "flow1")
+        mine._save(mine.state_path(), {})
+        self.assertEqual(mine.next_candidate()["id"], "chain1")  # blocks before the workflows that include them
+
+
 if __name__ == "__main__":
     unittest.main()

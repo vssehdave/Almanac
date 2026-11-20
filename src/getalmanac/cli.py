@@ -47,6 +47,7 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac playbook list|show|approve [--auto]|remove|path   recorded ways of doing repeated tasks, and their scripts
   almanac playbook mine        find tasks you repeat in past sessions, no model (--days 30, --min 3)
   almanac playbook compile     have one Claude Code session write the best repeat up as a playbook (--top N, --dry-run)
+  almanac playbook dedupe      merge playbooks that do the same route into one (--include-approved to touch approved ones)
   almanac library list|show|forget   the prompt library: how past prompts were solved (list --project NAME; show ID; forget ID)
   almanac projects             projects seen; `projects merge FROM INTO`, `projects rename NAME NEW`
   almanac status               settings, files and recent activity
@@ -612,6 +613,7 @@ def _playbook(rest):
     writing.add_argument("--top", type=int, default=1)
     writing.add_argument("--dry-run", action="store_true")
     sub.add_parser("work")  # the background run started at launch
+    sub.add_parser("dedupe").add_argument("--include-approved", action="store_true", help="also merge approved playbooks")
     for name in ("show", "approve", "remove"):
         one = sub.add_parser(name)
         one.add_argument("name")
@@ -630,6 +632,10 @@ def _playbook(rest):
     if args.cmd == "path":
         print(playbook.root())
         return 0
+    if args.cmd == "dedupe":
+        merged = playbook.dedupe(args.include_approved, out=_print)
+        print(f"{merged} merged" if merged else "nothing to merge")
+        return 0
     if args.cmd == "list":
         for pb in playbook.listing():
             print(f"{pb['name']:<28} {playbook.shown_status(pb):<22} {pb['uses']:>4}  {pb['title']}")
@@ -643,6 +649,7 @@ def _playbook(rest):
               f"When: {pb['when']}\nTriggers: {', '.join(pb['triggers'])}\nProject: {pb['project'] or 'any'}")
         print("Steps:\n" + "\n".join(f"  {i}. {s}" for i, s in enumerate(pb["steps"], 1)))
         print(f"Skills: {', '.join(pb['skills'])}\nAgents: {', '.join(pb['agents'])}")
+        print(f"Route: {' > '.join(playbook.route_of(pb))}\nFor: {pb['agent_type'] or 'the main thread'}\nIncludes: {', '.join(pb['includes'])}")
         if pb["script"]:
             print(f"Script: {playbook.script_path(pb['name'])}  (hash {pb['hash'] or 'not approved'})")
         return 0

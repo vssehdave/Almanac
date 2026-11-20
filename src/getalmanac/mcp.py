@@ -49,10 +49,12 @@ TOOLS = [
                                                        "args [{name, help}], project (optional)"},
          "script": {"type": "string", "description": "The text of run.py, if the job can be done with no model"}}}},
     {"name": "playbook_run",
-     "description": "Run an approved playbook script with no model in the loop. Returns its exit code, stdout and stderr. "
-                    "A draft script is not run.",
+     "description": "Run an approved playbook (the playbooks it includes first, then its own script) with no model in the loop. "
+                    "Returns `RESULT: pass`, or `RESULT: fail (exit N)` with only what failed, and for a playbook of several steps "
+                    "`RESUME: playbook_run {...}`: fix the cause, then call that to go on from the failed step. A draft script is not run.",
      "inputSchema": {"type": "object", "required": ["name"], "properties": {
-         "name": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}}}}},
+         "name": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}},
+         "from": {"type": "string", "description": "A step to start at (its name, or its number from 1), to go on after a failure"}}}},
     {"name": "memory_list",
      "description": "List stored conversations, newest first: number, day, title, a summary and how each one ended. "
                     "Filter by time and project. Use the number as `conversation` in memory_handover and memory_user_messages.",
@@ -311,7 +313,7 @@ def call(memory, name, args, cwd) -> str:
     if name == "memory_review":  # the proxy files the review: it sees the model, this process does not
         return "Review noted. It counts only if an Opus model made this call."
     if name == "playbook_run":
-        return playbook.run(str(args.get("name") or ""), args.get("args") or [], cwd)
+        return playbook.run(str(args.get("name") or ""), args.get("args") or [], cwd, start=args.get("from"))
     raise KeyError(name)
 
 

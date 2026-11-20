@@ -29,6 +29,7 @@ from .startup import _insert_before_last
 
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]{1,48}$")
 WORD = re.compile(r"[a-z0-9]+")
+AGENT = re.compile(r"^[\w:.-]*$")
 JSON_LIMIT = 20 * 1024
 SCRIPT_LIMIT = 200 * 1024
 MAX_STEPS = 30
@@ -110,13 +111,18 @@ def clean(data) -> dict:
     status, source = data.get("status", "draft"), data.get("source", "claude")
     if status not in STATUSES or source not in SOURCES:
         raise ValueError(f"status is one of {STATUSES} and source one of {SOURCES}")
+    agent_type = _text(data, "agent_type", 0, 40, required=False)
+    includes = _list(data, "includes", 10, 49)
+    if not AGENT.match(agent_type) or not all(valid_name(n) for n in includes) or data.get("name") in includes:
+        raise ValueError("agent_type is a plain agent name, and includes lists other playbooks by name")
     out = {"name": data.get("name"), "title": _text(data, "title", 1, 120), "when": _text(data, "when", 1, 300),
            "triggers": triggers, "project": _text(data, "project", 0, 200, required=False),
            "steps": _list(data, "steps", MAX_STEPS, 400, required=True),
            "phases": _list(data, "phases", 20, 40), "skills": _list(data, "skills", 20, 80), "agents": _list(data, "agents", 20, 80),
            "script": script, "args": [{"name": a["name"], "help": a.get("help", "")} for a in args],
            "auto": auto, "status": status, "hash": _text(data, "hash", 0, 64, required=False), "uses": uses,
-           "created": _text(data, "created", 0, 32, required=False), "source": source}
+           "created": _text(data, "created", 0, 32, required=False), "source": source,
+           "route": _list(data, "route", 20, 40), "agent_type": agent_type, "includes": includes}
     if not valid_name(out["name"]):
         raise ValueError("bad name")
     return out
@@ -373,19 +379,92 @@ def _execute_auto(name, cwd, timeout) -> tuple:
         return head, _first_chars(fout), _first_chars(ferr), code
 
 
-def run(name, args, cwd=None, timeout=None) -> str:
-    """Run an approved script. Returns the report for Claude; raises ValueError when it must not run."""
-    try:
-        head, out, err, _ = _execute(name, args, cwd, timeout)
-    except NotRun as why:
-        return str(why)
-    return _report(head, out, err)
+MAX_DEPTH = 4  # how deep playbooks may include playbooks
+PASS_OUTPUT = 2000  # characters of a passing script's stdout that are shown
+FAIL_OUTPUT = 4000  # characters of the failing part that are shown
+_FAILED_TESTS = re.compile(r"(?m)^(?:(?:FAIL|ERROR): (\S+ \([\w.]+\))|FAILED (\S+::\S+))")
 
 
-def _report(head, out, err) -> str:
-    def cap(text):
-        return text if len(text) <= RUN_OUTPUT else text[:RUN_OUTPUT] + f"\n[cut: {len(text) - RUN_OUTPUT} more characters]"
-    return f"{head}\n--- stdout ---\n{cap(out)}\n--- stderr ---\n{cap(err)}"
+def plan(name, depth=0, seen=()) -> list:
+    """The scripts to run for a playbook, in order: what it includes (each flattened), then its own script. ValueError when
+    an included playbook is missing or the includes loop or nest too deep."""
+    pb = load(name)
+    if pb is None:
+        raise ValueError(f"no usable playbook called {name!r}")
+    if name in seen or depth > MAX_DEPTH:
+        raise ValueError(f"playbook {name!r} includes itself or nests too deep")
+    out = [step for inner in pb["includes"] for step in plan(inner, depth + 1, seen + (name,))]
+    return list(dict.fromkeys(out + ([name] if pb["script"] else [])))
+
+
+def inner_names(name, depth=0) -> set:
+    """Every playbook `name` includes, at any depth."""
+    pb = load(name) if valid_name(name) else None
+    if pb is None or depth > MAX_DEPTH:
+        return set()
+    return set(pb["includes"]).union(*(inner_names(n, depth + 1) for n in pb["includes"]))
+
+
+def run(name, args, cwd=None, timeout=None, start=None) -> str:
+    """Run an approved playbook: its included playbooks in order, then its own script, stopping at the first failure.
+    `start` (a step's name, or its number from 1) continues a run that stopped. Returns the report for Claude, which
+    leads with `RESULT: pass` or `RESULT: fail (...)`; raises ValueError when it must not run."""
+    if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+        raise ValueError("args must be a list of strings")
+    steps = plan(name) if valid_name(name) else []
+    if not steps:
+        raise ValueError(f"no playbook called {name!r} has a script")
+    first = 0
+    if start not in (None, ""):
+        word = str(start).strip()
+        first = int(word) - 1 if word.isdigit() else steps.index(word) if word in steps else -1
+        if not 0 <= first < len(steps):
+            raise ValueError(f"{start!r} is not a step of {name}: its steps are {', '.join(steps)}")
+    many, out = len(steps) > 1, ""
+    for place, step in enumerate(steps[first:], first):
+        try:
+            head, out, err, code = _execute(step, args if step == name else [], cwd, timeout)
+        except NotRun as why:
+            return _failure(name, steps, place, "not run", str(why), args, many)
+        if code != 0:
+            return _failure(name, steps, place, head if code is None else f"exit {code}", _failing(out, err), args, many)
+    ran = f"Steps run: {', '.join(steps[first:])}\n" if many else ""
+    return f"RESULT: pass\n{ran}--- stdout ---\n{_tail(out, PASS_OUTPUT)}"
+
+
+def _failure(name, steps, place, why, body, args, many) -> str:
+    text = f"RESULT: fail ({why})\n" + (f"FAILED STEP: {steps[place]} ({place + 1} of {len(steps)})\n" if many else "") + body
+    if many:  # the model fixes the cause, then goes on from that step: the steps before it are not run again
+        resume = {"name": name, "from": steps[place], **({"args": args} if args else {})}
+        text += f"\nRESUME: playbook_run {json.dumps(resume)}"
+    return text
+
+
+def _cap(text, limit) -> str:
+    return text if len(text) <= limit else text[:limit] + f"\n[cut: {len(text) - limit} more characters]"
+
+
+def _failing(out, err) -> str:
+    """Only what failed: the names and tracebacks of failing tests when the output is a unittest or pytest run, else the end of it."""
+    text = (err + "\n" + out).replace("\r\n", "\n")
+    names = [a or b for a, b in _FAILED_TESTS.findall(text)]
+    found = re.search(r"(?m)^={70}\n(?:FAIL|ERROR): ", text)
+    if found:  # unittest: every failure's block, up to the line that counts the run
+        end = re.search(r"(?m)^-{70}\nRan \d+ tests?", text[found.start():])
+        body = text[found.start():found.start() + end.start()] if end else text[found.start():]
+    elif (found := re.search(r"(?m)^=+ (FAILURES|ERRORS) =+$", text)):
+        end = re.search(r"(?m)^=+ short test summary info =+$", text[found.start():])
+        body = text[found.start():found.start() + end.start()] if end else text[found.start():]
+    else:  # a script's own failure report may be on either stream (a JSON line on stdout, git's complaint on stderr): the end of both
+        body = "\n".join(f"--- {label} ---\n{_tail(text_, FAIL_OUTPUT // 2)}" for label, text_ in (("stdout", out), ("stderr", err)) if text_.strip())
+    head = f"Failing: {', '.join(list(dict.fromkeys(names))[:20])}\n" if names else ""
+    return head + _cap(body.strip(), FAIL_OUTPUT)
+
+
+def _tail(text, limit) -> str:
+    """The last 20 lines of the text, at most `limit` characters: what a script prints last (a link, a result) is what matters."""
+    text = "\n".join(text.replace("\r\n", "\n").strip().split("\n")[-20:])
+    return text if len(text) <= limit else f"[cut: {len(text) - limit} earlier characters]\n" + text[-limit:]
 
 
 # ---- matching ----------------------------------------------------------------------------------
@@ -403,9 +482,11 @@ def strong(pb, request: str) -> bool:
     return any(len(w) >= 2 and have.issuperset(w) for w in map(WORD.findall, pb["triggers"]))
 
 
-def find(request: str, project="", limit=5) -> list:
-    """Usable playbooks for this request, best first: most trigger words, then most used, then name."""
-    scored = [(score(pb, request), pb) for pb in listing() if pb["project"] in ("", project) and pb["status"] == "approved"]
+def find(request: str, project="", limit=5, agent_type=None) -> list:
+    """Usable playbooks for this request, best first: most trigger words, then most used, then name.
+    `agent_type` "" is the main thread's, a name is that sub-agent type's, None is any."""
+    scored = [(score(pb, request), pb) for pb in listing() if pb["project"] in ("", project) and pb["status"] == "approved"
+              and agent_type in (None, pb["agent_type"])]
     scored = [(s, pb) for s, pb in scored if s]
     scored.sort(key=lambda sp: (-sp[0], -sp[1]["uses"], sp[1]["name"]))
     return [pb for _, pb in scored[:limit]]
@@ -490,12 +571,128 @@ def note(pb) -> str:
     return text
 
 
+def offer(pb) -> str:
+    """The short note of a route offer: the playbook covers the rest of the work, and how to call it."""
+    name = pb["name"]
+    if runnable(pb) or pb["includes"]:
+        given = ", ".join("<" + a["name"] + ">" for a in pb["args"])
+        spec = "".join(f"; {a['name']}: {a['help'][:80]}" for a in pb["args"][:6] if a["help"])
+        how = f'call playbook_run {{"name": "{name}", "args": [{given}]}}{spec}'
+    else:
+        how = f'read its steps with playbook_find {{"query": "{name}"}}'
+    return f'<system-reminder>\nAlmanac: playbook "{name}" covers the rest of this: {_untag(how)}\n</system-reminder>'
+
+
 def bump(name):
     pb = load(name)
     if pb:
         pb["uses"] += 1
         _write(pb)
     return pb
+
+
+# ---- one playbook per route ----------------------------------------------------------------------
+
+SAME_ROUTE = 0.8  # Jaccard of two playbooks' phases for them to be the same way of working
+SHIPS = frozenset("commit push pr merge ci release".split())  # a route with one of these ends in something that is shipped
+
+
+def route_of(pb) -> list:
+    """The phases of work a playbook's route goes through, in order: `route`, else the miner's `phases`."""
+    out = []
+    for phase in pb.get("route") or pb.get("phases") or ():
+        if not out or out[-1] != phase:
+            out.append(phase)
+    return out
+
+
+def similar(a, b) -> bool:
+    x, y = set(route_of(a)), set(route_of(b))
+    return bool(x and y) and a.get("agent_type", "") == b.get("agent_type", "") and a.get("project", "") == b.get("project", "") \
+        and len(x & y) / len(x | y) >= SAME_ROUTE
+
+
+def twin(data):
+    """The stored playbook that does the same route as this playbook's data (approved first, then most used), or None."""
+    hits = [pb for pb in listing() if similar(pb, data)]
+    return min(hits, key=lambda pb: (pb["status"] != "approved", -pb["uses"], pb["name"]), default=None)
+
+
+def absorb(keep, other):
+    """Add the triggers of `other` (a playbook or its data) to the stored playbook `keep`, whose script and approval stay as
+    they are. An automatic playbook is left alone: new words must not be able to start its script."""
+    if automatic(keep):
+        return keep
+    given = other.get("triggers")
+    extra = [t.strip().lower() for t in given if isinstance(t, str) and WORD.search(t)] if isinstance(given, list) else []
+    merged = list(dict.fromkeys(keep["triggers"] + [t for t in extra if len(t) <= 60]))[:10]
+    if merged != keep["triggers"]:
+        keep = dict(keep, triggers=merged)
+        _write(keep)
+    return keep
+
+
+def dedupe(include_approved=False, out=print) -> int:
+    """Merge playbooks that do the same route into one (an approved one first, then one with a script, then the most used).
+    Approved playbooks are left alone unless asked for. Returns how many were merged away."""
+    books = [pb for pb in listing() if include_approved or pb["status"] != "approved"]
+    books.sort(key=lambda pb: (pb["status"] != "approved", not pb["script"], -pb["uses"], pb["created"], pb["name"]))
+    used = {n for pb in listing() for n in pb["includes"]}  # one that others include keeps its name
+    gone = set()
+    for i, keep in enumerate(books):
+        for other in books[i + 1:]:
+            if keep["name"] in gone or other["name"] in gone or other["name"] in used or not similar(keep, other):
+                continue
+            keep = absorb(load(keep["name"]) or keep, other)
+            remove(other["name"])
+            gone.add(other["name"])
+            out(f"merged {other['name']} into {keep['name']}")
+    return len(gone)
+
+
+# ---- route signals -------------------------------------------------------------------------------
+
+GIT_TIMEOUT = 2  # seconds the repo-facts check may take
+
+
+def _ahead(cwd) -> bool:
+    """True when the work in this folder still has to be shipped: commits not pushed, or a branch with no upstream."""
+    if not cwd or not Path(cwd).is_dir():
+        return False
+    try:
+        done = subprocess.run(["git", "rev-list", "--count", "@{u}..HEAD"], cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True, timeout=GIT_TIMEOUT)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if done.returncode == 0:
+        return int(done.stdout.strip() or 0) > 0
+    return b"not a git repository" not in done.stderr
+
+
+def _phases(blocks) -> list:
+    """The phases the tool calls went through, in order (see mine.block_phases), each once in a row."""
+    from . import mine
+    out = []
+    for block in blocks:
+        for phase in mine.block_phases(block):
+            if not out or out[-1] != phase:
+                out.append(phase)
+    return out
+
+
+def _agrees(pb, done) -> bool:
+    """True when the phases done so far are part of the playbook's route, in its order: at least two of them, or the one
+    a one-phase route has. Phases the route does not have (reading, editing) are not counted either way."""
+    route = route_of(pb)
+    if not route:
+        return False
+    mine_ = [p for p in done if p in route]
+    mine_ = [p for i, p in enumerate(mine_) if not i or mine_[i - 1] != p]
+    if len(mine_) < min(2, len(set(route))):
+        return False
+    if not pb.get("route"):  # `phases` is a set the miner wrote sorted, not an order
+        return True
+    ahead = iter(route)
+    return all(any(p == q for q in ahead) for p in mine_)
 
 
 class PlaybookLayer:
@@ -516,10 +713,14 @@ class PlaybookLayer:
         entries = lib.get("enabled", True) and lib.get("inject", True)
         if not (books or entries) or ctx.store is None or ctx.kind != "messages":
             return
-        if not MemoryLayer._main_thread(body, ctx):
+        main, sub = MemoryLayer._main_thread(body, ctx), MemoryLayer._sub_thread(body, ctx)
+        if not (main or sub):
             return
         try:
-            self._apply(body, ctx, books, entries)
+            if main:
+                self._apply(body, ctx, books, entries)
+            if books and cfg.get("route", True):
+                self._route(body, ctx, main)
         except Exception:  # fail open: a bad playbook folder must never block a turn
             return
 
@@ -565,6 +766,90 @@ class PlaybookLayer:
             if nudge:
                 ctx.stats["playbook"]["nudge"] = True
             self._place(messages, orig, self._skipped(ctx, orig, seen[last], key))
+
+    # ---- route: offers made from what the thread is doing, not from the typed words ----
+
+    @staticmethod
+    def _carrier(msg) -> bool:
+        """A message an offer can be appended to: a user message of tool results."""
+        return isinstance(msg, dict) and isinstance(msg.get("content"), list) and rq.is_tool_result(msg)
+
+    @staticmethod
+    def _called(messages) -> set:
+        """The names of the playbooks the thread has called with playbook_run."""
+        return {str(b["input"].get("name")) for m in messages if isinstance(m, dict) and m.get("role") == "assistant" for b in rq.blocks(m)
+                if b.get("type") == "tool_use" and str(b.get("name")).endswith("playbook_run") and isinstance(b.get("input"), dict)}
+
+    def _route(self, body, ctx, main):
+        """Offer a playbook when two of three signals say it covers the rest of the work: the route so far (the phases of the
+        tool calls) is the start of its route, the assistant's own narration matches its triggers, and the repo has something
+        to ship (the last only for a route that ships). A main thread is judged from its newest typed turn on, a sub-agent from
+        its whole thread. The decision is stored per lane, turn and message, and put back byte for byte on every later request.
+        An offer is one short note at the end of the newest message, never in the cached prefix."""
+        messages, orig = body["messages"], (ctx.orig or body)["messages"]
+        seen = person_turns(orig)
+        if len(messages) != len(orig) or not seen:
+            return
+        turn, start = (len(seen) - 1, seen[-1]) if main else (0, seen[0])
+        last, offered = len(orig) - 1, {}
+        for t, first in (list(enumerate(seen)) if main else [(0, seen[0])]):  # earlier turns too: their bytes must not change
+            end = seen[t + 1] if main and t + 1 < len(seen) else len(orig)
+            key = f"playbookroute:{ctx.lane}:{t}:{_digest(person_text(orig[first]))}"
+            for i in range(first + 1, end):
+                kept = ctx.store.get(f"{key}:{i}") if self._carrier(orig[i]) else None
+                if kept:
+                    messages[i]["content"].append({"type": "text", "text": kept["text"]})
+                    if t == turn:
+                        offered[kept["name"]] = kept
+        base = f"playbookroute:{ctx.lane}:{turn}:{_digest(person_text(orig[start]))}"
+        called = self._called(orig[start:])
+        asked = ctx.store.get("playbookoffer" + self._key(ctx, turn, person_text(orig[start]))[len("playbook"):]) if main else None
+        for name in sorted((set(offered) | {asked}) & called):  # an offer that was taken: say so once
+            mark = f"playbooktaken:{ctx.lane}:{turn}:{name}"
+            if ctx.store.get(mark) is None:
+                ctx.store.put(mark, 1)
+                ctx.stats["playbook_taken"] = name
+                break
+        if self._carrier(orig[last]) and ctx.store.get(f"{base}:{last}") is None:
+            kept = self._decide(ctx, orig, start, turn, main, set(offered) | {asked}, called)
+            ctx.store.put(f"{base}:{last}", kept or "")
+            if kept:
+                messages[last]["content"].append({"type": "text", "text": kept["text"]})
+                ctx.stats["playbook_offer"], ctx.stats["signals"] = kept["name"], kept["signals"]
+
+    def _decide(self, ctx, orig, start, turn, main, offered, called):
+        """The offer to make now as {name, text, signals}, or None."""
+        kind = "" if main else ctx.agent_type
+        if not main and not kind:
+            return None
+        pool = [pb for pb in listing() if pb["status"] == "approved" and pb["project"] in ("", ctx.project or "") and pb["agent_type"] == kind
+                and pb["name"] not in offered | called and not any(pb["name"] in inner_names(c) for c in called)]  # its outer playbook ran: this is done
+        if not pool:
+            return None
+        asked = [m for m in orig[start + 1:] if isinstance(m, dict) and m.get("role") == "assistant"]
+        done = _phases(b for m in asked for b in rq.blocks(m) if b.get("type") == "tool_use")
+        told = [t.lower() for m in asked[-8:] for b in rq.blocks(m) if b.get("type") == "text" and (t := (b.get("text") or "").strip())]
+        facts = []  # decided at most once per turn, the first time a route that ships needs it
+
+        def ahead():
+            if not facts:
+                key = f"playbookfacts:{ctx.lane}:{turn}"
+                known = ctx.store.get(key)
+                if known is None:
+                    known = int(_ahead(ctx.cwd))
+                    ctx.store.put(key, known)
+                facts.append(bool(known))
+            return facts[0]
+
+        best = None
+        for pb in pool:
+            signals = (["route"] if _agrees(pb, done) else []) + (["narration"] if any(strong(pb, t) for t in told) else [])
+            if signals and SHIPS & set(route_of(pb)) and ahead():
+                signals.append("repo")
+            rank = (-len(signals), -len(route_of(pb)), -pb["uses"], pb["name"])
+            if len(signals) >= 2 and (best is None or rank < best[0]):
+                best = rank, pb, signals
+        return {"name": best[1]["name"], "text": offer(best[1]), "signals": best[2]} if best else None
 
     def _nudge(self, ctx, orig, seen, last) -> str:
         """A reminder, frozen with the turn that starts now, to record the previous turn as a playbook: it took
@@ -632,7 +917,7 @@ class PlaybookLayer:
         """The note for an automatic playbook, after running its script outside the store's lock; None when this request is not one."""
         if not (ctx.cfg.get("playbooks") or {}).get("auto_run") or not ctx.cwd or not Path(ctx.cwd).is_dir():
             return None
-        best = find(low, ctx.project, limit=1)
+        best = find(low, ctx.project, limit=1, agent_type="")
         pb = best[0] if best else None
         if pb is None or not automatic(pb) or not strong(pb, low):
             return None
@@ -663,7 +948,7 @@ class PlaybookLayer:
 
     @classmethod
     def _first(cls, ctx, low, key, books=True, entries=False) -> str:
-        best = find(low, ctx.project, limit=1) if books else []
+        best = find(low, ctx.project, limit=1, agent_type="") if books else []
         if not best:
             return cls._entry(ctx, low) if entries else ""
         done = bump(best[0]["name"]) or best[0]
