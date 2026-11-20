@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from helpers import Rig, sse
+from helpers import Rig, SESSION, sse
 from test_memory import make_repo
 
 from getalmanac import cli, report, routing
@@ -222,6 +222,12 @@ class DecisionTest(Case):
     def test_a_new_turn_is_decided_again(self):
         messages = convo([{"text": "list the files in src"}, {"text": "design a plugin system"}])
         self.assertEqual(self.send(messages, model=SMALL)["model"], LARGE)
+
+    def test_the_main_thread_keeps_one_state_key_per_session_with_the_model_it_sent(self):
+        self.send(convo([{"text": "list the files in src"}]), model=SMALL)
+        keys = [r["key"] for r in self.store.run("select key from state where key like '%main%'")]
+        self.assertEqual(keys, [f"main:{SESSION}"])
+        self.assertEqual(self.store.get(f"main:{SESSION}"), {"sent": SMALL})
 
     def test_a_model_outside_the_table_is_left_alone_and_named_in_status(self):
         sent = self.send(convo([{"text": "list the files in src"}]), model="claude-other-9")

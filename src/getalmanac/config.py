@@ -69,6 +69,7 @@ DEFAULTS = {
         "semantic": True,  # search by meaning when the optional packages and model are installed (see semantic.py)
     },
     "library": {
+        "enabled": True,  # false: the prompt library tells Claude nothing (ALMANAC_DISABLE=library)
         "min_tools": 5,  # every exchange with a tool call leaves an entry in the prompt library (no model call; deleted with its conversation); searches and lists show those with at least this many calls
         "inject": True,  # tell Claude how an earlier, matching prompt was solved, when no playbook matches (see library.py)
         "threshold": 0.6,  # share (0 to 1) of a stored prompt's words the typed text must contain before that note is shown
@@ -144,6 +145,24 @@ DEFAULTS = {
 }
 
 
+# ALMANAC_DISABLE name -> the (section, key, off value) settings that switch it off
+_OFF = {
+    "skills": [("skills", "enabled", False)],
+    "agents": [("startup", "agent_chars", 0)],
+    "tools": [("tools", "enabled", False)],
+    "memory": [("memory", "enabled", False)],
+    "compaction": [("compaction", "enabled", False)],
+    "playbooks": [("playbooks", "enabled", False)],
+    "library": [("library", "enabled", False)],
+    "profile": [("profile", "enabled", False)],
+    "bundle": [("bundle", "enabled", False)],
+    "routing": [("routing", "mode", "off")],
+    "cheatsheet": [("cheatsheet", "mode", "off")],
+    "cloud": [("cloud", "auto", False)],
+    "accounts": [("accounts", "fallback", [])],
+    "startup": [("startup", "agent_chars", 0), ("startup", "lean_rules", False), ("startup", "system_prefix", False)],
+}
+
 POSIX = os.name != "nt"
 
 
@@ -209,23 +228,11 @@ def load() -> dict:
     cfg = _routing_ok(_merge(copy.deepcopy(DEFAULTS), _file()))
     if os.environ.get("ALMANAC_UPSTREAM"):
         cfg["upstream"] = os.environ["ALMANAC_UPSTREAM"]
-    # ALMANAC_DISABLE=skills,agents,tools,memory,compaction turns layers off for one run
-    for name in filter(None, (os.environ.get("ALMANAC_DISABLE") or "").replace(" ", "").split(",")):
-        if name == "all":
-            for layer in ("skills", "tools", "memory", "compaction"):
-                cfg[layer]["enabled"] = False
-            cfg["startup"]["agent_chars"] = 0
-            cfg["startup"]["system_prefix"] = False
-            cfg["cheatsheet"]["mode"] = "off"  # "all" means no change to the request at all
-            cfg["startup"]["lean_rules"] = False
-            cfg["profile"]["enabled"] = False
-            cfg["playbooks"]["enabled"] = False
-            cfg["library"]["inject"] = False
-            cfg["accounts"]["fallback"] = []
-        elif name == "agents":
-            cfg["startup"]["agent_chars"] = 0
-        elif isinstance(cfg.get(name), dict):
-            cfg[name]["enabled"] = False
+    # ALMANAC_DISABLE=skills,agents,... turns those off for one run; "all" is every name in _OFF
+    names = list(filter(None, (os.environ.get("ALMANAC_DISABLE") or "").replace(" ", "").split(",")))
+    for name in _OFF if "all" in names else names:
+        for section, key, off in _OFF.get(name, ()):
+            cfg[section][key] = copy.deepcopy(off)
     return cfg
 
 

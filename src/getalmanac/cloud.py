@@ -178,19 +178,9 @@ def _repo_text(cwd, on_branch=False) -> str:
 
 def _exchanges(memory, convo_id) -> list:
     """The stored exchanges of one conversation, oldest first: what was asked and how it ended, secrets taken out."""
-    rows = memory.store.run("select lane from convo where id = ?", (convo_id,))
-    ids = memory.leaves(rows[0]["lane"]) if rows else {}
-    out = []
-    for seq in sorted(ids):
-        node = memory.read(ids[seq])
-        body = node["text"]
-        if node["summary"]:  # a model summary sits in front of the rule-written text
-            body = body[len("Summary: " + node["summary"]) + 2:]
-        asked, _, rest = body.removeprefix("Asked: ").partition("\n\nAnswer: ")
-        # Rule-written only: a model summary and title were built from transcripts that hold tool output and web pages.
-        out.append({"id": node["id"], "title": redact(_first_line(asked)), "asked": redact(asked),
-                    "said": redact(rest.split("\n\n", 1)[0])})
-    return out
+    # Rule-written only: a model summary and title were built from transcripts that hold tool output and web pages.
+    return [{"id": e["id"], "title": redact(_first_line(e["asked"])), "asked": redact(e["asked"]), "said": redact(e["said"])}
+            for e in memory.exchanges(convo_id)]
 
 
 def _no_results(text) -> str:

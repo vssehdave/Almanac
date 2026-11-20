@@ -77,6 +77,18 @@ def message_text(msg) -> str:
     return "\n".join(o for o in out if o.strip())
 
 
+def thread(ctx, body):
+    """The kind of conversation thread a request belongs to, from its headers: "main", "sub" (a sub-agent), "fork" (shares
+    its parent's cached prefix and model), or None for requests that are not a thread (titles, classifiers)."""
+    if not body.get("tools"):
+        return None
+    if ctx.agent_type.lower() == "fork":
+        return "fork"
+    if ctx.klass == "subagent" or (ctx.agent and ctx.klass in ("", "subagent")):
+        return "sub"
+    return "main" if ctx.klass in ("", "main") and not ctx.agent else None
+
+
 def lane_key(session: str, agent: str, messages) -> str:
     """One conversation thread: the session, the subagent if any, and its first human text.
 

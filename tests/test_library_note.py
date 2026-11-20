@@ -133,6 +133,25 @@ class NoteTest(NoteCase):
             self.assertLessEqual(len(text), cap)
             self.assertTrue(text.endswith("</system-reminder>"), cap)
 
+    def test_an_exchange_the_recall_note_already_cites_gets_no_second_note(self):
+        self.solved()
+        node = self.store.run("select n.id from node n join library l on n.convo = l.convo and n.kind = 'leaf' and n.seq = l.seq")[0]["id"]
+        lane = rq.lane_key("s1", "", [human(TYPED)])
+        self.store.put(f"recall:{lane}", f"Almanac memory for this project: [{node + 1000}] something else")
+        self.assertEqual(len(notes(self.send(self.rig(), human(TYPED), session="s1"))), 1)  # another number: no overlap
+        self.assertEqual(self.rows()[0]["uses"], 1)
+        self.store.put(f"recall:{rq.lane_key('s2', '', [human(TYPED)])}", f"Almanac memory for this project: [{node}] this very exchange")
+        self.assertEqual(notes(self.send(self.rig(), human(TYPED), session="s2")), [])
+        self.assertEqual(self.rows()[0]["uses"], 1)  # not counted as used either
+
+    def test_the_note_names_no_tool_when_the_memory_tools_are_off(self):
+        self.solved()
+        (on,) = notes(self.send(self.rig(), human(TYPED)))
+        (off,) = notes(self.send(self.rig(**{"memory.tools": False}), human(TYPED)))
+        self.assertIn("memory_read", on)
+        self.assertNotIn("memory_read", off)
+        self.assertTrue(off.endswith("</system-reminder>"))
+
     def test_the_threshold_decides(self):
         self.solved("Fix the failing parser test in the proxy module after the cache refactor")
         near = "fix the parser test in the proxy and update the docs"  # 4 of the stored prompt's 8 words: 0.5

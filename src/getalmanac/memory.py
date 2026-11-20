@@ -21,6 +21,7 @@ import time
 import zlib
 
 from . import embed, semantic
+from .cheatsheet import family
 from . import request as rq
 from .match import STOP, tokens
 from .project import Projects, tool_paths
@@ -255,6 +256,11 @@ def asked(text: str) -> str:
     if text.startswith("Summary: "):
         text = text.split("\n\n", 1)[-1]
     return text[len("Asked: "):].split("\n\nAnswer: ", 1)[0] if text.startswith("Asked: ") else text
+
+
+def said(text: str) -> str:
+    """How the answer began, from a stored exchange's text: its rule-written Answer paragraph, or ""."""
+    return text.split("\n\nAnswer: ", 1)[1].split("\n\n", 1)[0] if "\n\nAnswer: " in text else ""
 
 
 def ended(convo, summary=220) -> str:
@@ -830,9 +836,10 @@ class Memory:
     def gate(self, session, holds=2) -> str:
         """The reason to keep an Opus main thread from ending its turn while its sub-agents' work is unreviewed, or "".
         Each conversation is held at most `holds` times, so a model that cannot review is never stuck."""
-        lane = self.store.get(f"mainlane:{session}") or ""
+        main = self.store.get(f"main:{session}") or {}
+        lane = main.get("lane") or ""
         own = self.convo_of(lane)
-        if not own or "opus" not in (self.store.get(f"mainmodel:{session}") or ""):
+        if not own or family(main.get("answered") or "") != "opus":
             return ""
         pending = self.store.run("select id, title from convo where parent = ? and review = 'pending' order by id", (own["id"],))
         held = self.store.get(f"gateheld:{lane}") or 0
@@ -873,7 +880,7 @@ class Memory:
                                 "on c.id = n.convo where n.convo = ? and n.kind = 'leaf' order by n.seq", (convo_id,)):
             shown = self.statuses(r["lane"]).get(r["seq"], r["status"])
             out.append({"id": r["id"], "number": r["seq"] + 1, "ts": r["ts"], "status": shown, "summary": r["summary"], "title": r["title"],
-                        "asked": asked(r["text"])})
+                        "asked": asked(r["text"]), "said": said(r["text"])})
         return out
 
     def user_messages(self, project=None, convo_id=None, since=None, until=None, query="", limit=30) -> list:
@@ -1034,7 +1041,7 @@ class Memory:
         self._drop_lane(row["lane"])
 
     def _drop_lane(self, lane):
-        self.store.run("delete from state where key like ?", ("%:" + lane,))  # compact:, recall:, project:, usage: ...
+        self.store.run("delete from state where key like ? or key like ?", ("%:" + lane, "%:" + lane + ":%"))  # compact:, recall:, project:, route:<lane>:<turn> ...
         self.store.run("delete from raw where lane = ?", (lane,))
 
     def _cap_raw(self):
@@ -1090,11 +1097,11 @@ class Memory:
                         self._drop_lane(lane)
                         extra += 1
             if convo_id is not None or project:
-                # A recall note quotes other conversations and cannot be traced back to them, so every closed
-                # conversation loses its note; one that is resumed gets a new note.
-                busy = {"recall:" + r["lane"] for r in self.store.run("select lane from convo where updated > ?", (old,))}
-                for r in self.store.run("select key from state where key like 'recall:%' and ts < ?", (old,)):
-                    if r["key"] not in busy:
+                # A recall note (a sub-agent's too) quotes other conversations and cannot be traced back to them, so every
+                # closed conversation loses its note; one that is resumed gets a new note.
+                busy = {r["lane"] for r in self.store.run("select lane from convo where updated > ?", (old,))}
+                for r in self.store.run("select key from state where (key like 'recall:%' or key like 'subnote:%') and ts < ?", (old,)):
+                    if r["key"].partition(":")[2] not in busy:
                         self.store.run("delete from state where key = ?", (r["key"],))
                         extra += 1
             if convo_id is None and not project:  # everything: no saved choice of a closed conversation stays, whoever's it was
@@ -1154,13 +1161,12 @@ class MemoryLayer:
 
     @staticmethod
     def _main_thread(body, ctx) -> bool:
-        return not ctx.agent and rq.has_client_tools(body) and bool(rq.human_turns(body.get("messages") or []))
+        return ctx.thread == "main" and rq.has_client_tools(body) and bool(rq.human_turns(body.get("messages") or []))
 
     @staticmethod
     def _sub_thread(body, ctx) -> bool:
         """A sub-agent's own thread. A fork is not one: it shares its parent's prefix and is left alone."""
-        from .routing import RoutingLayer  # routing imports this module
-        return bool(ctx.agent) and RoutingLayer._kind(ctx, body) == "sub" and rq.has_client_tools(body) \
+        return ctx.thread == "sub" and rq.has_client_tools(body) \
             and bool(rq.human_turns(body.get("messages") or []))
 
     @staticmethod
@@ -1175,14 +1181,14 @@ class MemoryLayer:
 
     def _parent(self, ctx) -> dict:
         """The conversation a sub-agent belongs to, {"id", "project"}, or {} while it is not stored yet (nothing is kept then).
-        Its session's main thread leaves its lane in `mainlane:` when it sends a request; the sub-agent keeps the lane it
+        Its session's main thread leaves its lane in `main:` when it sends a request; the sub-agent keeps the lane it
         found on its first request, so a later /clear cannot move it, and the id once the conversation is stored."""
         store, key = ctx.store, f"subparent:{ctx.lane}"
         with store.lock:
             kept = store.get(key)
             if kept:
                 return kept
-            lane = store.get(f"subparentlane:{ctx.lane}") or store.get(f"mainlane:{ctx.session}") or ""
+            lane = store.get(f"subparentlane:{ctx.lane}") or (store.get(f"main:{ctx.session}") or {}).get("lane") or ""
             if not lane:
                 return {}
             store.put(f"subparentlane:{ctx.lane}", lane)
@@ -1205,8 +1211,8 @@ class MemoryLayer:
             return
         messages = body.get("messages") or []
         main = self._main_thread(body, ctx)
-        if main and ctx.store.get(f"mainlane:{ctx.session}") != ctx.lane:  # before the reply is stored (that is queued), so a sub-agent that starts at once can find this conversation
-            ctx.store.put(f"mainlane:{ctx.session}", ctx.lane)
+        if main:  # before the reply is stored (that is queued), so a sub-agent that starts at once can find this conversation
+            ctx.store.merge(f"main:{ctx.session}", lane=ctx.lane)
         if not cfg["recall"]:
             return
         if self._sub_thread(body, ctx):
@@ -1243,7 +1249,7 @@ class MemoryLayer:
     def _review(self, ctx, orig, reply):
         """File the verdict of a memory_review call in the reply, when the model that was asked is an Opus one. The tool
         itself only acknowledges: this is the one place that knows the model. Only pending sub-agent work changes."""
-        if "opus" not in self._model(ctx, orig):
+        if family(self._model(ctx, orig)) != "opus":
             return
         for block in reply.get("content") or []:
             if not (isinstance(block, dict) and block.get("type") == "tool_use" and str(block.get("name") or "").endswith("memory_review")
@@ -1273,7 +1279,7 @@ class MemoryLayer:
             return
         if not self._main_thread(orig, ctx):
             return
-        self.memory.store.put(f"mainmodel:{ctx.session}", self._model(ctx, orig))  # what the review gate checks
+        self.memory.store.merge(f"main:{ctx.session}", answered=self._model(ctx, orig))  # what the review gate checks
         self.memory.index(ctx.lane, ctx.session, ctx.project, orig["messages"], reply)
         if reply.get("stop_reason") == "tool_use":  # a long turn: keep what it has done so far searchable
             self.memory.index_partial(ctx.lane, ctx.project, orig["messages"], reply)

@@ -10,7 +10,7 @@ import sys
 import time
 from urllib.parse import urlsplit
 
-from . import __version__, accounts, autoimport, config, launcher, report, summarize, upstream
+from . import __version__, accounts, autoimport, config, launcher, profile, report, summarize, upstream
 
 USAGE = """almanac: a local proxy for Claude Code
 
@@ -701,7 +701,7 @@ def _review_gate(_rest):
     """Claude Code's Stop hook: hold the turn open while an Opus main thread has unreviewed sub-agent work. Never fails."""
     try:
         cfg = config.load()
-        if not (cfg["memory"]["enabled"] and cfg["memory"].get("review_gate", True)):
+        if not profile.review_gate_on(cfg):
             return 0
         session = str((json.loads(sys.stdin.read() or "{}") or {}).get("session_id") or "")
         reason = _memory_handle().gate(session) if session else ""

@@ -11,7 +11,7 @@ from unittest import mock
 from helpers import Rig, sse
 from test_routing import LARGE, MAIN, MEDIUM, SMALL, SetProject, body, convo, sub_headers
 
-from getalmanac import cheatsheet, cli, config, playbook, proxy as proxy_mod
+from getalmanac import cheatsheet, cli, config, playbook, proxy as proxy_mod, request as rq
 from getalmanac.cheatsheet import CheatsheetLayer
 from getalmanac.routing import RoutingLayer
 from getalmanac.store import Store
@@ -35,9 +35,14 @@ def ctx(klass="main", agent="", agent_type="", mode="on", lean=False, **start):
     return SimpleNamespace(cfg=cfg, kind="messages", klass=klass, agent=agent, agent_type=agent_type)
 
 
+def transform(work, there):
+    there.thread = rq.thread(there, work)
+    CheatsheetLayer().transform(work, there)
+
+
 def run(model, system=None, tools=None, **kw):
     work = body(convo([{"text": "hello"}]), model, tools=tools, system=claude_system() if system is None else system)
-    CheatsheetLayer().transform(work, ctx(**kw))
+    transform(work, ctx(**kw))
     return work
 
 
@@ -98,7 +103,7 @@ class LayerTest(Fresh):
         for system in (claude_system(), IDENTITY):
             work = run(LARGE, system=system)
             once = copy.deepcopy(work)
-            CheatsheetLayer().transform(work, ctx())
+            transform(work, ctx())
             self.assertEqual(work, once)
 
     def test_threads_get_it_and_other_requests_do_not(self):
@@ -163,7 +168,7 @@ class LeanTest(Fresh):
         self.assertEqual(json.dumps(first), json.dumps(second))
         self.assertEqual(cache_marks(first), cache_marks(claude_system()))
         once = copy.deepcopy(first)
-        CheatsheetLayer().transform(first, ctx(lean=True))
+        transform(first, ctx(lean=True))
         self.assertEqual(first, once)
 
     def test_off_and_a_text_of_your_own(self):
@@ -265,11 +270,11 @@ class IndexTest(Fresh):
     def save(self, name="weekly-report", **over):
         playbook.save({"name": name, "title": "Weekly report", "when": "w", "triggers": ["weekly report"], "steps": ["Run it"], "source": "owner", **over})
 
-    def sent(self, inject=True, model=MEDIUM, **kw):
+    def sent(self, inject=True, model=MEDIUM, enabled=True, **kw):
         work = body(convo([{"text": "hello"}]), model, system=claude_system())
         there = ctx(**kw)
-        there.cfg["playbooks"]["inject"] = inject
-        CheatsheetLayer().transform(work, there)
+        there.cfg["playbooks"].update(inject=inject, enabled=enabled)
+        transform(work, there)
         return work
 
     def test_nothing_without_playbooks(self):
@@ -304,11 +309,18 @@ class IndexTest(Fresh):
         self.assertEqual(self.sent(klass="subagent", agent="a1")["system"][-1]["text"], "Main prompt.\n\n" + cheatsheet.text_for(MEDIUM, True))
         self.assertEqual(self.sent(model=SMALL)["system"][-1]["text"], "Main prompt.\n\n" + cheatsheet.text_for(SMALL))
 
-    def test_not_added_when_inject_is_off_or_there_is_no_sheet(self):
+    def test_not_added_when_inject_or_the_playbooks_are_off(self):
         self.save()
         self.assertIn("Playbooks on hand", json.dumps(self.sent()))
         self.assertEqual(self.sent(inject=False)["system"][-1]["text"], "Main prompt.\n\n" + cheatsheet.text_for(MEDIUM))
-        self.assertEqual(self.sent(model="some-model")["system"], claude_system())
+        self.assertEqual(self.sent(enabled=False)["system"][-1]["text"], "Main prompt.\n\n" + cheatsheet.text_for(MEDIUM))
+
+    def test_the_list_follows_the_playbook_settings_not_the_cheatsheet(self):
+        self.save()
+        alone = "Main prompt.\n\n" + cheatsheet.index()
+        self.assertEqual(self.sent(mode="off")["system"][-1]["text"], alone)  # the sheet is off, the list is not
+        self.assertEqual(self.sent(model="some-model")["system"][-1]["text"], alone)  # a model with no sheet still gets it
+        self.assertEqual(self.sent(mode="off", enabled=False)["system"], claude_system())
 
     def test_a_broken_playbook_folder_gives_nothing(self):
         Path(self.home, "playbooks").write_text("a file where the folder should be")

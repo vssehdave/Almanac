@@ -57,6 +57,8 @@ class SettingsTest(unittest.TestCase):
         self.assertTrue(stop[0]["hooks"][0]["command"].endswith("-m getalmanac review-gate"))
         cfg["memory"]["enabled"] = False
         self.assertNotIn("hooks", profile.curated_settings({"model": "x"}, cfg))
+        cfg["memory"].update(enabled=True, tools=False)  # the verdict is filed by a memory tool: no tool, no gate
+        self.assertNotIn("hooks", profile.curated_settings({"model": "x"}, cfg))
 
     def test_a_setting_without_hooks_gets_none(self):
         self.assertNotIn("hooks", profile.curated_settings({"model": "x"}, CFG))

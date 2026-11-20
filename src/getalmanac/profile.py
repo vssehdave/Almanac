@@ -66,6 +66,12 @@ def strip_hooks(hooks, cfg):
     return out
 
 
+def review_gate_on(cfg) -> bool:
+    """The Stop hook that makes Opus review sub-agent work: it needs the memory and the tool that files the verdict."""
+    mem = cfg.get("memory") or {}
+    return bool(mem.get("enabled") and mem.get("review_gate", True) and mem.get("tools", True))
+
+
 def curated_settings(user: dict, cfg, md_path: str = "") -> dict:
     """The user's settings with the off plugins, hooks and skills removed. Pure."""
     out = json.loads(json.dumps(user))
@@ -74,7 +80,7 @@ def curated_settings(user: dict, cfg, md_path: str = "") -> dict:
     out["skillOverrides"] = {**out.get("skillOverrides", {}), **{name: "off" for name in p["off_skills"]}}
     if "hooks" in out:
         out["hooks"] = strip_hooks(out["hooks"], cfg)
-    if (cfg.get("memory") or {}).get("enabled") and cfg["memory"].get("review_gate", True):  # Opus reviews sub-agent work before a turn ends
+    if review_gate_on(cfg):  # Opus reviews sub-agent work before a turn ends
         gate = {"type": "command", "command": f'"{Path(sys.executable).as_posix()}" -m getalmanac review-gate', "timeout": 10}
         out["hooks"] = {**out.get("hooks", {}), "Stop": [*out.get("hooks", {}).get("Stop", []), {"hooks": [gate]}]}
     if md_path:  # the filtered CLAUDE.md is read from the profile folder instead: do not read the original too

@@ -26,7 +26,7 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-from . import request as rq
+from . import config, request as rq
 from .memory import OPEN_SECONDS, Memory
 from .project import describe, normalize, repo_root, tool_paths
 from .status import aged, combine, rule
@@ -38,8 +38,29 @@ _CD = re.compile(r"(?<![\w./-])(?:cd|pushd)\s+(?:/d\s+)?" + _ARG)
 _GIT_C = re.compile(r"\bgit\s+(?:-[\w-]+\s+)*?-C\s+" + _ARG)
 
 
-def projects_dir() -> Path:
-    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects"
+def transcript_dirs(cfg, purpose) -> list:
+    """The Claude Code config folders (each with a projects/ folder of session files) one reader may use. The one
+    place that states which reader sees which:
+      "autoimport": ~/.claude only. It runs unasked every hour, so another config folder (a work account, a sandbox)
+                    is never imported, whatever CLAUDE_CONFIG_DIR says;
+      "import":     what `almanac memory import` looks in for a folder name it was given: $CLAUDE_CONFIG_DIR, else ~/.claude;
+      "mine":       ~/.claude, $CLAUDE_CONFIG_DIR and playbooks.transcript_dirs, those that exist. The miner only reads."""
+    home, env = Path.home() / ".claude", os.environ.get("CLAUDE_CONFIG_DIR") or ""
+    if purpose == "autoimport":
+        return [home]
+    if purpose == "import":
+        return [Path(env).expanduser() if env else home]
+    extra = ((cfg if cfg is not None else config.load()).get("playbooks") or {}).get("transcript_dirs") or []
+    found, seen = [], set()
+    for raw in [home, env, *extra]:
+        if not isinstance(raw, (str, Path)) or not str(raw):
+            continue
+        path = Path(raw).expanduser()
+        real = os.path.normcase(os.path.realpath(path))
+        if real not in seen and (path / "projects").is_dir():
+            seen.add(real)
+            found.append(path)
+    return found
 
 
 def transcripts(words) -> list:
@@ -49,13 +70,13 @@ def transcripts(words) -> list:
     for word in words:
         path = Path(word)
         if not path.exists() and not path.is_absolute():
-            path = projects_dir() / word
+            path = transcript_dirs(None, "import")[0] / "projects" / word
         if path.is_file():
             found.append(path)
         elif path.is_dir():
             found.extend(sorted(path.glob("*.jsonl")))
         else:
-            raise FileNotFoundError(f"no transcript folder or file {word!r} (looked in {projects_dir()})")
+            raise FileNotFoundError(f"no transcript folder or file {word!r} (looked in {transcript_dirs(None, 'import')[0] / 'projects'})")
     return found
 
 
@@ -239,7 +260,22 @@ def _store_run(memory, lane, session, key, messages, stamps):
     cut = memory_mod.BACKFILL - 1
     for end in range(cut, len(turns), cut) if len(turns) > memory_mod.BACKFILL else ():
         written += memory.index(lane, session, key, messages[:turns[end]], finished=True, assign=lambda g, p: key, stamps=stamps)
-    return written + memory.index(lane, session, key, messages, finished=True, assign=lambda g, p: key, stamps=stamps)
+    written += memory.index(lane, session, key, messages, finished=True, assign=lambda g, p: key, stamps=stamps)
+    _record_library(memory, lane, messages)
+    return written
+
+
+def _record_library(memory, lane, messages):
+    """The prompt-library row of each finished exchange, as the live path writes them, so an imported session counts
+    for usage pinning and library_find. The last exchange is skipped while it still ends on a tool call (the file is
+    still being written): a row is written once and never updated."""
+    from . import library
+    turns, low = rq.human_turns(messages), library.min_tools()
+    for seq, start in enumerate(turns):
+        group = messages[start:turns[seq + 1] if seq + 1 < len(turns) else len(messages)]
+        if seq + 1 == len(turns) and (group[-1].get("role") != "assistant" or any(b.get("type") == "tool_use" for b in rq.blocks(group[-1]))):
+            continue
+        library.record(memory, lane, group, seq, low)
 
 
 def _restatus_last(memory, lane, messages, following, newest):

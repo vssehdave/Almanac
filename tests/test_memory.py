@@ -4,11 +4,12 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from unittest import mock
 from contextlib import redirect_stdout
 
 from helpers import Rig, SESSION, sse
 
-from getalmanac import config, embed, mcp, project
+from getalmanac import cheatsheet, config, embed, mcp, project
 from getalmanac.memory import Memory, MemoryLayer, ProjectLayer, exchange, redact
 from getalmanac.store import Store
 
@@ -248,6 +249,14 @@ class IndexTest(Case):
         self.assertEqual(self.memory.prune(365), 1)
         self.assertEqual(self.memory.counts()["convos"], 1)
 
+    def test_exchanges_carry_the_answer_paragraph_even_behind_a_model_summary(self):
+        key = self.memory.projects.see(self.alpha)
+        self.memory.index("lane-1", "s1", key, self.convo(), reply("Added it.\n\nMore detail after."))
+        convo = self.store.run("select id from convo")[0]["id"]
+        self.assertEqual([e["said"] for e in self.memory.exchanges(convo)][-1], "Added it.")
+        self.store.run("update node set text = 'Summary: a model wrote this' || char(10) || char(10) || text where kind = 'leaf'")
+        self.assertEqual([e["said"] for e in self.memory.exchanges(convo)][-1], "Added it.")
+
     def test_forget(self):
         key = self.memory.projects.see(self.alpha)
         self.memory.index("lane-1", "s1", key, self.convo(), reply("Added it."))
@@ -281,6 +290,20 @@ class RecallTest(Case):
         self.assertIn("rewrote the tools array", note)
         self.assertIn("Most recent conversations:", note)
         self.assertEqual(self.rig.records()[-1]["memory"]["recall_chars"], len(note))
+
+    def test_the_main_thread_leaves_its_lane_and_answering_model_under_one_key(self):
+        self.rig.messages(self.body("the proxy cache drops again after loading a tool"))
+        self.rig.records()  # waits for the reply to be observed
+        state = self.store.get(f"main:{SESSION}")
+        self.assertEqual(state, {"lane": self.rig.records()[-1]["lane"], "answered": "m"})
+
+    def test_memory_and_routing_classify_a_request_alike(self):
+        odd = {"x-claude-code-request-class": "classifier"}  # neither main nor sub: no note, no stored lane
+        self.rig.messages(self.body("the proxy cache drops again after loading a tool"), extra=odd)
+        self.assertNotIn("memory", self.rig.records()[-1])
+        self.assertIsNone(self.store.get(f"main:{SESSION}"))
+        self.rig.messages(self.body("the proxy cache drops again after loading a tool"))
+        self.assertIn("memory", self.rig.records()[-1])
 
     def test_recall_is_frozen_even_as_memory_grows(self):
         request = self.body("the proxy cache drops again after loading a tool")
@@ -343,7 +366,7 @@ class SubagentTest(Case):
         # the main conversation, stored by its first reply
         self.memory.index("main-lane", SESSION, self.key, [human("Find out why requests are retried twice")], reply("Looking.", "tool_use"))
         self.parent = self.store.run("select id from convo where lane = 'main-lane'")[0]["id"]
-        self.store.put(f"mainlane:{SESSION}", "main-lane")  # what the main thread's own request leaves behind
+        self.store.merge(f"main:{SESSION}", lane="main-lane")  # what the main thread's own request leaves behind
 
     def body(self, prompt="Search the code for the retry helper and report where it lives"):
         env = f"# Environment\n - Primary working directory: {self.alpha}\n"
@@ -368,7 +391,7 @@ class SubagentTest(Case):
             self.sub(self.body())
         # a newer main conversation appears in the same session: the note this lane already has does not change
         self.memory.index("main-2", SESSION, self.key, [human("A different main task entirely")], reply("ok", "tool_use"))
-        self.store.put(f"mainlane:{SESSION}", "main-2")
+        self.store.merge(f"main:{SESSION}", lane="main-2")
         self.rig.cfg["memory"]["tools"] = False  # nor does turning the tools off mid-run
         fifth = self.sub(self.body())
         self.assertEqual(self.rig.upstream.requests[-1]["body"], self.rig.upstream.requests[-5]["body"])
@@ -454,7 +477,7 @@ class SubagentTest(Case):
 
     def test_a_subagent_that_starts_before_its_parent_is_stored_gets_the_note_later_and_is_filed_under_it(self):
         late = "99999999-aaaa-bbbb-cccc-000000000001"
-        self.store.put(f"mainlane:{late}", "late-lane")  # the main thread has sent its request; its row is not written yet
+        self.store.merge(f"main:{late}", lane="late-lane")  # the main thread has sent its request; its row is not written yet
         replies = [sse("Checking.", tool=("Bash", {"command": "ls"})), sse("Found the retry helper in net.py.")]
         self.rig.upstream.respond = lambda req: (200, {"content-type": "text/event-stream"}, replies[min(len(self.rig.upstream.requests) - 1, 1)])
         raw = json.dumps(self.body()).encode()
@@ -480,7 +503,7 @@ class SubagentTest(Case):
         self.assertEqual([r["parent"] for r in self.store.run("select parent from convo where parent != 0")], [new])
 
     def test_a_subagent_started_just_after_clear_never_takes_the_old_conversation_as_its_parent(self):
-        self.store.put(f"mainlane:{SESSION}", "new-lane")  # cleared: the new main thread has sent its request, its row is still queued
+        self.store.merge(f"main:{SESSION}", lane="new-lane")  # cleared: the new main thread has sent its request, its row is still queued
         raw = json.dumps(self.body()).encode()
         self.rig.messages(raw, extra=self.HEADERS)
         self.assertEqual(self.rig.upstream.requests[-1]["body"], raw)
@@ -607,9 +630,13 @@ class SubagentTest(Case):
         self.sub(self.body())
         self.rig.records()
         child = self.store.run("select id from convo where parent = ?", (self.parent,))[0]["id"]
-        self.store.put(f"mainmodel:{SESSION}", "claude-sonnet-5")
+        self.store.merge(f"main:{SESSION}", answered="claude-sonnet-5")
         self.assertEqual(self.memory.gate(SESSION), "")  # a model whose review would not count is never held
-        self.store.put(f"mainmodel:{SESSION}", "claude-opus-5")
+        with mock.patch.dict(cheatsheet.ALIASES, {"zenith": "opus"}):  # the one rule for "is this Opus" knows aliases
+            self.store.merge(f"main:{SESSION}", answered="zenith-1")
+            self.assertIn(f"{child}:", self.memory.gate(SESSION))
+        self.store.run("delete from state where key = 'gateheld:main-lane'")
+        self.store.merge(f"main:{SESSION}", answered="claude-opus-5")
         self.assertIn(f"{child}:", self.memory.gate(SESSION))
         self.assertIn("memory_review", self.memory.gate(SESSION))
         self.assertEqual(self.memory.gate(SESSION), "")  # held twice at most: never stuck
@@ -653,6 +680,19 @@ class McpTest(Case):
                           "memory_list", "memory_handover", "memory_user_messages", "library_find", "memory_review"])
         self.assertIsNone(mcp.handle(self.memory, {"jsonrpc": "2.0", "method": "notifications/initialized"}, self.alpha))
         self.assertEqual(self.ask("nope")["error"]["code"], -32601)
+
+    def test_the_tool_list_follows_the_memory_and_playbook_switches(self):
+        def names(**sections):
+            cfg = config.load()
+            for section, over in sections.items():
+                cfg[section].update(over)
+            with mock.patch.object(config, "load", return_value=cfg):
+                return [t["name"] for t in self.ask("tools/list")["result"]["tools"]]
+        self.assertEqual([n for n in names(memory={"tools": False}) if not n.startswith("playbook_")], [])
+        self.assertEqual(len(names(memory={"tools": False})), 3)
+        self.assertEqual([n for n in names(playbooks={"enabled": False}) if n.startswith("playbook_")], [])
+        self.assertIn("library_find", names(playbooks={"enabled": False}))
+        self.assertNotIn("library_find", names(memory={"tools": False}))
 
     def test_initialize_carries_constant_instructions(self):
         first, second = (self.ask("initialize", {"protocolVersion": "2025-06-18"}, ident=n)["result"] for n in (1, 2))

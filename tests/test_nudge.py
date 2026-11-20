@@ -6,6 +6,7 @@ from helpers import Rig
 from test_playbook import ASK, Home, SetProject, body, call, human, make, result, said
 from getalmanac import playbook
 from getalmanac import request as rq
+from getalmanac.memory import Memory
 from getalmanac.playbook import PlaybookLayer
 from getalmanac.store import Store
 
@@ -21,6 +22,7 @@ class NudgeTest(Home):
     def setUp(self):
         super().setUp()
         self.store = Store(os.path.join(self.home, "a.db"))
+        Memory(self.store)  # makes the tables, the library's included, as the proxy's own store has them
         self.addCleanup(self.store.close)
 
     def rig(self, **overrides):
@@ -60,6 +62,14 @@ class NudgeTest(Home):
     def test_not_when_a_playbook_matched_that_turn(self):
         playbook.save(make())
         self.assertEqual(nudges(self.next_turn(self.rig(), ASK, 30)), [])
+
+    def test_not_when_a_draft_or_a_candidate_already_covers_it(self):
+        playbook.save(make(source="claude", triggers=["refactor parser"]))  # a draft: nobody approved it yet
+        self.assertEqual(nudges(self.next_turn(self.rig(), OLD, 30)), [])
+        self.assertEqual(len(nudges(self.next_turn(self.rig(), "write the release notes for friday", 30))), 1)  # the control
+        from getalmanac import mine
+        mine._save(mine.candidates_path(), {"candidates": [{"id": "c1", "tools": [], "examples": ["write the release notes for friday"]}]})
+        self.assertEqual(nudges(self.next_turn(self.rig(), "write the release notes for friday again", 30)), [])
 
     def test_same_bytes_on_the_next_request_of_the_turn_and_after(self):
         rig = self.rig()

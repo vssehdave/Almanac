@@ -11,7 +11,6 @@ import functools
 from importlib import resources
 
 from . import config
-from .routing import RoutingLayer
 
 FAMILIES = ("opus", "sonnet", "haiku", "fable")
 NAMES = (*FAMILIES, "common", "skills", "agent", "lean")
@@ -89,25 +88,21 @@ def index() -> str:
             "with `playbook_run` instead of doing its steps by hand.\n" + "\n".join(lines))
 
 
-def _thread(ctx, body) -> bool:
-    # a fork shares its parent's cached prefix, so it needs the same system prompt
-    return bool(RoutingLayer._kind(ctx, body) or (body.get("tools") and ctx.agent_type.lower() == "fork"))
-
-
 class CheatsheetLayer:
     def transform(self, body, ctx):
         if ctx.kind != "messages" or not isinstance(body.get("model"), str):
             return
-        if not _thread(ctx, body):
+        if not ctx.thread:
             return
-        sub = RoutingLayer._kind(ctx, body) == "sub"  # a fork is not "sub": it keeps its parent's text
+        sub = ctx.thread == "sub"  # a fork is not "sub": it keeps its parent's text
         sheet = text_for(body["model"], sub) if ctx.cfg["cheatsheet"]["mode"] == "on" else ""
         lean = lean_text(ctx.cfg)
         books = ctx.cfg.get("playbooks") or {}
-        # the main thread and its forks only (a fork shares its parent's cached prefix); Haiku's sheet is short on purpose
-        main = RoutingLayer._kind(ctx, body) == "main" or ctx.agent_type.lower() == "fork"
-        if sheet and main and family(body["model"]) != "haiku" and books.get("enabled") and books.get("inject") and index():
-            sheet += "\n\n" + index()
+        # the main thread and its forks only (a fork shares its parent's cached prefix); Haiku's sheet is short on purpose.
+        # The list follows the playbook settings, not the cheatsheet's: it is there with the sheet off or no sheet for the model.
+        main = ctx.thread in ("main", "fork")
+        if main and family(body["model"]) != "haiku" and books.get("enabled") and books.get("inject") and index():
+            sheet = sheet + "\n\n" + index() if sheet else index()
         if lean:  # every thread, whatever the model: the lean rules come first, the model's own sheet after them
             sheet = lean + "\n\n" + sheet if sheet else lean
         system = body.get("system")
