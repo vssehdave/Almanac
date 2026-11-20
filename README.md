@@ -1156,10 +1156,13 @@ trigger has to wait in the cloud already. It works like this:
 
 - While a task runs, Almanac pushes a snapshot of it to the branch
   `cloud/handoff` on `origin`, once every heartbeat (10 minutes by default).
-  The snapshot is your current commit plus your uncommitted changes to tracked
-  files, plus the hand-off packet as `ALMANAC_HANDOFF.md` and a small
-  `almanac-handoff.json` (state, time, base branch and commit). Untracked files
-  never go in. A changed tracked file whose name looks like a credential
+  The branch holds **one sealed file**, `almanac-handoff.sealed`: the hand-off
+  packet, a small record (state, time, base branch and commit) and your
+  uncommitted changes to tracked files as a binary diff against your current
+  commit, all encrypted and authenticated with your hand-off key (HMAC-SHA256
+  in counter mode, built from the Python standard library). Nothing readable
+  is on the branch, so a public repository exposes nothing; the commit's
+  parent is your current commit, as before. Untracked files never go in. A changed tracked file whose name looks like a credential
   (`.env`, `*.pem`, `id_rsa`, ...), that holds a common secret pattern, that is
   not text or that is over 1 MB stays at its committed version, and the packet
   lists it. It is built with a separate index, so your index, HEAD, branches
@@ -1204,13 +1207,32 @@ the repository, then in that repository run `/schedule` and create an hourly tas
 watchdog` prints.
 
 Then put the secret that `almanac cloud watchdog` prints in that task's
-environment as `ALMANAC_HANDOFF_KEY`. Each snapshot's `almanac-handoff.json` is
-signed (HMAC-SHA256 over its fields and the packet text) with a key kept in the
-OS keyring when the `keyring` module is installed, else in `cloud.key` in the
-Almanac home. The watchdog prompt checks the signature first and stops when it
-does not match, so a commit that someone else pushed to `cloud/handoff` is
-never acted on. The packet holds rule-written titles and answers only, never
+environment as `ALMANAC_HANDOFF_KEY`. The key is kept in the OS keyring when the
+`keyring` module is installed, else in `cloud.key` in the Almanac home. The
+watchdog prompt opens the sealed file first (a one-line Python check that
+verifies the tag, then decrypts, then checks the signed time and that the diff
+applies) and stops when anything is wrong, so a commit that someone else pushed
+to `cloud/handoff` is never acted on, and one with a wrong or missing key is
+never read. The packet holds rule-written titles and answers only, never
 model summaries.
+
+**Only watch while live.** The scheduled task costs usage every hour even when no
+hand-off is running. Set `cloud.routine` to its id, and Almanac always enables
+the task when a hand-off starts, disables it when the hand-off goes idle or
+Almanac exits, and disables it while the login that the session uses is out of
+usage, re-enabling it after the reset only if the hand-off is still live. This is
+not a setting: a routine is never left running on a depleted subscription. It uses
+that session's own login (kept in memory only, never logged). **Unverified:** the host, path and beta header
+of the API this calls (all in `cloud.py`, `ROUTINE_*`) are guesses. Check them
+from your own login before relying on it:
+
+```bash
+almanac config set cloud.routine <routine id>
+almanac cloud routine check             # prints status, enabled flag and next run, nothing else
+almanac cloud routine check --login ~/.claude-work   # another login's config folder
+```
+
+A failure is one log line and never affects the session.
 
 When a takeover happened, `almanac cloud status` names the branch. Pull the
 work back with `claude --teleport` or `git fetch origin <branch>`.
@@ -1227,7 +1249,8 @@ Know this before you turn it on:
 - **What is sent where.** To the `origin` remote of each repository you turned
   on, branch `cloud/handoff`, force-pushed (that
   branch only): your uncommitted edits to tracked files, every local commit
-  not pushed yet (they are the snapshot's history), and the packet. The packet
+  not pushed yet (they are the snapshot's history and are **not** sealed),
+  and the sealed file holding the packet and your uncommitted edits. The packet
   is your conversation's task and recent transcript, including tool output
   such as file contents and command output from outside the repository, and
   absolute paths. Common secret patterns are taken out of it; that is best
@@ -1235,8 +1258,14 @@ Know this before you turn it on:
 - **Only repositories you turned on.** `almanac cloud on` lists the repository
   by its project (its remote's address), so every clone of it on this machine
   takes part. `almanac cloud off` stops it at the next heartbeat check, without
-  a restart; a branch already on origin stays until you delete it. On a public
-  repository the branch is public.
+  a restart; a branch already on origin stays until you delete it. Before each push
+  Almanac asks `gh repo view --json visibility` (when `gh` is installed, once an hour per folder) and,
+  if the repository is public and `cloud.allow_public` is off (the default), does
+  not push and logs one line. The sealed file would be safe on a public
+  repository; `cloud.allow_public` is the deliberate opt-in. Unknown visibility
+  pushes. **An older branch from before the file was sealed holds readable files
+  and the packet: delete it yourself with `git push origin --delete cloud/handoff`
+  (Almanac never deletes a branch).**
 - Your pre-push hooks run on every push. The commit says `[skip ci]`, which
   stops GitHub Actions, but other services that build every branch may still
   build it.

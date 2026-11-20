@@ -20,6 +20,24 @@
   own `cheatsheet path` copy), and `skill add` asks at a terminal before
   refusing a CAUTION verdict.
 
+- **The hand-off branch is sealed, and the watchdog stops costing usage when idle.**
+  `cloud/handoff` now holds one file, `almanac-handoff.sealed`: the packet, the
+  record and your uncommitted changes (a binary diff against the parent commit),
+  encrypted and authenticated with the hand-off key (HMAC-SHA256 stream, standard
+  library only). Nothing readable is on the branch. The watchdog prompt opens it
+  with one Python check (tag first, then decrypt, signed time, parent commit, diff
+  applies), then branches from the parent and applies the diff. `ALMANAC_HANDOFF.md`
+  and `almanac-handoff.json` are gone. **An older branch from before this holds
+  readable files: delete it yourself** (`git push origin --delete cloud/handoff`);
+  Almanac deletes nothing. Unpushed local commits are still ordinary commits in the
+  branch's history. New settings: `cloud.allow_public` (default off: no push when
+  `gh` says the repository is public), and `cloud.routine` (the scheduled task's id).
+  With a routine set, Almanac always enables it only while a hand-off is live and
+  its login has usage left, and disables it otherwise, so it never runs on a
+  depleted subscription. `almanac cloud routine check` reads the routine and prints
+  its status, enabled flag and next run; the endpoint it uses is unverified. Update
+  the watchdog prompt of an existing scheduled task from `almanac cloud watchdog`.
+
 - **One record per finished exchange.** The prompt library row is now written for
   every exchange that made a tool call (sub-agent exchanges too) and also holds the
   distinct tool names and the call count. `library.min_tools` became a read-time

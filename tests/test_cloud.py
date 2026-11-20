@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import hmac
 import io
@@ -16,9 +17,10 @@ from unittest import mock
 from helpers import Rig, sse
 from test_memory import Case, human, reply, result, said
 
-from getalmanac import cli, cloud, config, proxy as proxy_mod
+from getalmanac import accounts, cli, cloud, config, proxy as proxy_mod
 from getalmanac.report import Log
 
+REAL_VISIBILITY = cloud._visibility  # the tests below patch the module attribute
 TASK = "Finish the retry work.\n" + "\n".join(f"Step {n}: check case {n} of the backoff table and write it down." for n in range(60))
 
 
@@ -244,12 +246,52 @@ class SendTest(CloudCase):
 QUIET_GIT = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}  # the machine's hooks, signing and identity stay out
 
 
+class SealTest(unittest.TestCase):
+    # the same vector worked out by hand with hashlib alone: HMAC-SHA256(enc, nonce || counter) keystream, tag over version, nonce, ciphertext
+    VECTOR = {"v": 1, "nonce": "000102030405060708090a0b0c0d0e0f", "ct": "m/f/f5egY7XeCcaI71oaiGdy62OM",
+              "tag": "0effdb448f95738d263999941c5ab2d7401aaccb35f22e712f289052368c8387"}
+
+    def test_a_fixed_vector_seals_and_opens(self):
+        sealed = cloud.seal(b"almanac sealed vector", "test-key", nonce=bytes(range(16)))
+        self.assertEqual(json.loads(sealed), self.VECTOR)
+        self.assertEqual(cloud.unseal(json.dumps(self.VECTOR), "test-key"), b"almanac sealed vector")
+
+    def test_any_length_round_trips_with_a_new_nonce_each_time(self):
+        for plain in (b"", b"a", bytes(range(256)) * 3, b"x" * 32, b"x" * 33):
+            sealed = cloud.seal(plain, "k")
+            self.assertEqual(cloud.unseal(sealed, "k"), plain)
+        self.assertNotEqual(cloud.seal(b"same", "k"), cloud.seal(b"same", "k"))
+        self.assertNotIn("same", cloud.seal(b"same", "k"))
+
+    def test_a_wrong_key_or_a_changed_byte_is_refused_before_anything_is_decrypted(self):
+        sealed = json.loads(cloud.seal(b"secret packet text", "k"))
+        flipped = base64.b64decode(sealed["ct"])
+        flipped = bytes([flipped[0] ^ 1]) + flipped[1:]
+        for bad in (dict(sealed, ct=base64.b64encode(flipped).decode()), dict(sealed, tag="0" * 64), dict(sealed, nonce="1" * 32),
+                    dict(sealed, v=2), {k: v for k, v in sealed.items() if k != "tag"}, dict(sealed, nonce="zz")):
+            with self.assertRaises(ValueError):
+                cloud.unseal(json.dumps(bad), "k")
+        for key in ("other", ""):
+            with self.assertRaises(ValueError):
+                cloud.unseal(json.dumps(sealed), key)
+        for junk in ("", "not json", "[]", "null"):
+            with self.assertRaises(ValueError):
+                cloud.unseal(junk, "k")
+        with self.assertRaises(ValueError):
+            cloud.seal(b"x", "")
+
+
 class HandoffTest(CloudCase):
     def setUp(self):
         super().setUp()
         patcher = mock.patch.dict(os.environ, dict(QUIET_GIT, ALMANAC_HOME=tempfile.mkdtemp(prefix="almanac-cfg-")))
         patcher.start()
         self.addCleanup(patcher.stop)
+        for patch in (mock.patch.object(cloud, "_keyring", return_value=None),  # the owner's keyring stays out
+                      mock.patch.object(cloud, "_visibility", return_value="")):  # no gh, no network
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.addCleanup(accounts.reset)
         git(self.alpha, "config", "user.name", "t")
         git(self.alpha, "config", "user.email", "t@example.com")
         self.bare = os.path.join(self.tmp, "origin.git")
@@ -267,11 +309,39 @@ class HandoffTest(CloudCase):
         self.layer.transform(body, self.ctx)
         self.layer.observe(self.ctx, body, reply("Working on it.", stop=stop))
 
+    def opened(self):
+        """The sealed file on the branch, opened with the hand-off key: {"meta", "packet", "diff"}."""
+        return json.loads(cloud.unseal(git(self.bare, "show", "cloud/handoff:almanac-handoff.sealed"), cloud.handoff_key()))
+
     def pushed(self, name=None):
         ref = "cloud/handoff"
         if name is None:
             return git(self.bare, "rev-parse", "--verify", "-q", ref) if self.has(ref) else ""
+        if name == "ALMANAC_HANDOFF.md":
+            return self.opened()["packet"].strip()
+        if name == "almanac-handoff.json":
+            return json.dumps(self.opened()["meta"])
         return git(self.bare, "show", f"{ref}:{name}")
+
+    def takeover(self):
+        """A clone that does what the watchdog does after the check: branch from the snapshot's parent and apply its diff.
+        Returns the clone's folder."""
+        folder = tempfile.mkdtemp(prefix="almanac-takeover-")
+        self.addCleanup(shutil.rmtree, folder, True)
+        git(folder, "clone", "-q", self.alpha, os.path.join(folder, "c"))
+        clone = os.path.join(folder, "c")
+        git(clone, "fetch", "-q", self.bare, "cloud/handoff")
+        git(clone, "checkout", "-q", "-b", "takeover", "FETCH_HEAD^")
+        diff = os.path.join(folder, "h.diff")
+        with open(diff, "wb") as handle:
+            handle.write(base64.b64decode(self.opened()["diff"]))
+        if os.path.getsize(diff):
+            git(clone, "apply", "--binary", diff)
+        return clone
+
+    def read(self, folder, name):
+        with open(os.path.join(folder, name)) as handle:
+            return handle.read()
 
     def has(self, ref):
         return subprocess.run(["git", "--git-dir", self.bare, "rev-parse", "--verify", "-q", ref], capture_output=True).returncode == 0
@@ -307,8 +377,11 @@ class HandoffTest(CloudCase):
         self.assertEqual(look(), before)
         head = git(self.alpha, "rev-parse", "HEAD")
         files = git(self.bare, "ls-tree", "-r", "--name-only", "cloud/handoff").splitlines()
-        self.assertEqual(sorted(files), [".gitignore", "ALMANAC_HANDOFF.md", "almanac-handoff.json", "src/app.py"])  # untracked new.txt stays home
-        self.assertEqual(self.pushed("src/app.py"), "print('two')")  # the work tree, not the index
+        self.assertEqual(files, ["almanac-handoff.sealed"])  # one file: no work tree, no packet, nothing readable
+        clone = self.takeover()
+        self.assertEqual(self.read(clone, "src/app.py"), "print('two')\n")  # the work tree, not the index
+        self.assertFalse(os.path.exists(os.path.join(clone, "new.txt")))  # untracked stays home
+        self.assertFalse(os.path.exists(os.path.join(clone, "secret.log")))
         self.assertEqual(git(self.bare, "rev-parse", "cloud/handoff^"), head)
         meta = self.state()
         self.assertEqual((meta["state"], meta["base_branch"], meta["base_commit"], meta["session"]), ("working", "work", head, "s1"))
@@ -349,16 +422,18 @@ class HandoffTest(CloudCase):
         refs = git(self.bare, "for-each-ref", "--format=%(refname)").split()
         self.assertEqual(refs, ["refs/heads/cloud/handoff"])
         files = git(self.bare, "ls-tree", "-r", "--name-only", "cloud/handoff").split()
-        self.assertNotIn(".env", files)
-        self.assertEqual(self.pushed("config.py"), "x = 1")  # held at its HEAD version
-        self.assertEqual(self.pushed("deploy.pem"), "placeholder")
-        self.assertEqual(self.pushed("src/app.py"), "print('two')")
+        self.assertEqual(files, ["almanac-handoff.sealed"])
+        clone = self.takeover()
+        self.assertEqual(self.read(clone, "config.py"), "x = 1\n")  # held at its HEAD version
+        self.assertEqual(self.read(clone, "deploy.pem"), "placeholder\n")
+        self.assertEqual(self.read(clone, "src/app.py"), "print('two')\n")
+        self.assertFalse(os.path.exists(os.path.join(clone, ".env")))
         text = self.pushed("ALMANAC_HANDOFF.md")
         self.assertIn("Left out of this branch", text)
         self.assertIn("config.py, deploy.pem", text)
         self.assertIn("almanac hand-off: working [skip ci]", git(self.bare, "log", "-1", "--format=%s", "cloud/handoff"))
         revs = git(self.bare, "rev-list", "--all").split()
-        for needle in (stripe, ghp, hf, "Zq9x8c7v6b5n4m", "0f0f0f0f0f", "MIIEpAIBAAKCAQEA"):
+        for needle in (stripe, ghp, hf, "Zq9x8c7v6b5n4m", "0f0f0f0f0f", "MIIEpAIBAAKCAQEA", "print('two')", "Wire the payment client"):
             found = subprocess.run(["git", "--git-dir", self.bare, "grep", "-F", needle, *revs], capture_output=True, text=True)
             self.assertEqual(found.stdout, "", needle)
 
@@ -482,7 +557,7 @@ class HandoffTest(CloudCase):
         self.assertEqual(self.pushed(), "")  # outcome only counts: git runs on the heartbeat thread
         self.layer.beat(time.time() + 5)  # well inside the heartbeat interval
         self.assertEqual(self.state()["state"], "stalled")
-        self.assertIn("task", git(self.bare, "show", "cloud/handoff:ALMANAC_HANDOFF.md"))
+        self.assertIn("task", self.pushed("ALMANAC_HANDOFF.md"))
         first = self.pushed()
         self.failures(3, 502)
         self.layer.beat(time.time() + 5000)
@@ -648,45 +723,123 @@ class HandoffTest(CloudCase):
         self.assertIn("almanac config set cloud.auto on", out.getvalue())
         self.assertIn(text, out.getvalue())
 
-    def verify(self, meta_text, packet_text, key):
-        """Run the watchdog's own check, as printed in its prompt, on these two files. True or False."""
-        folder = tempfile.mkdtemp(prefix="almanac-verify-")
+    def opens(self, key):
+        """Run the watchdog's own check, as printed in its prompt, in a clone that fetched the branch. (True or False, the clone's
+        folder, the three files it writes)."""
+        folder = tempfile.mkdtemp(prefix="almanac-open-")
         self.addCleanup(shutil.rmtree, folder, True)
-        paths = [os.path.join(folder, "h.json"), os.path.join(folder, "h.md")]
-        for path, body in zip(paths, (meta_text, packet_text)):
-            with open(path, "w", encoding="utf-8", newline="\n") as handle:
-                handle.write(body)
-        code = cloud.VERIFY.format(json=paths[0].replace(os.sep, "/"), md=paths[1].replace(os.sep, "/"))
+        clone = os.path.join(folder, "c")
+        git(folder, "clone", "-q", self.alpha, clone)  # the base commit is there, as in the cloud checkout
+        git(clone, "fetch", "-q", self.bare, "cloud/handoff")  # the check reads FETCH_HEAD
+        paths = [os.path.join(folder, name).replace(os.sep, "/") for name in ("h.json", "h.md", "h.diff")]
+        code = cloud.OPEN.format(json=paths[0], md=paths[1], diff=paths[2])
         env = {k: v for k, v in os.environ.items() if k != "ALMANAC_HANDOFF_KEY"}
         if key is not None:
             env["ALMANAC_HANDOFF_KEY"] = key
-        git(self.alpha, "fetch", "-q", self.bare, "cloud/handoff")  # the check reads FETCH_HEAD, as the watchdog's clone does
-        done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, cwd=self.alpha)
-        return done.stdout.strip() == "True"
+        done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, cwd=clone)
+        return done.stdout.strip() == "True", clone, paths
 
-    def forged(self, key, **change):
-        """The pushed hand-off json with fields changed and signed with `key`, the way an attacker who has that key would."""
-        meta = {k: v for k, v in self.state().items() if k != "sig"}
-        meta.update(change)
-        data = json.dumps(meta, sort_keys=True, separators=(",", ":")).encode() + b"\n" + self.pushed("ALMANAC_HANDOFF.md").encode("utf-8")
-        return json.dumps(dict(meta, sig=hmac.new(key.encode(), data, hashlib.sha256).hexdigest()))
+    def forge(self, key=None, **change):
+        """Replace the branch with a snapshot whose metadata has `change` in it, sealed with `key` (default: the real one;
+        "" is sealed with the empty key, the way an attacker who guessed it would)."""
+        real = cloud.seal
 
-    def test_an_empty_key_never_verifies_or_signs(self):
-        with mock.patch.object(cloud, "_keyring", return_value=None):
-            self.turn([human("Make it print two")], "tool_use")
-            self.layer.beat(time.time() + 601)
-            key = cloud.handoff_key()
-        text = self.pushed("ALMANAC_HANDOFF.md")
-        self.assertTrue(self.verify(self.forged(key), text, key))
-        self.assertFalse(self.verify(self.forged(""), text, ""))  # a forger who signs with the empty key
-        self.assertFalse(self.verify(self.forged(""), text, None))
+        def tamper(plain, own):
+            box = json.loads(plain)
+            box["meta"].update(change)
+            plain = json.dumps(box).encode()
+            if key == "":
+                nonce = bytes(16)
+                ct = cloud._xor(plain, cloud._blocks(b"", nonce, len(plain)))
+                return json.dumps({"v": 1, "nonce": nonce.hex(), "ct": base64.b64encode(ct).decode(), "tag": cloud._tag(b"", nonce, ct).hex()})
+            return real(plain, key or own)
+        with mock.patch.object(cloud, "seal", tamper):
+            commit, _ = cloud.snapshot(self.alpha, "the task text", "working", "s1")
+        git(self.alpha, "push", "-q", "--force", self.bare, f"{commit}:refs/heads/cloud/handoff")
+
+    def replace_file(self, sealed_text):
+        """Replace the branch with a snapshot whose sealed file is exactly `sealed_text`."""
+        with mock.patch.object(cloud, "seal", lambda plain, own: sealed_text):
+            commit, _ = cloud.snapshot(self.alpha, "t", "working", "s1")
+        git(self.alpha, "push", "-q", "--force", self.bare, f"{commit}:refs/heads/cloud/handoff")
+
+    def test_the_branch_is_sealed_and_the_printed_check_opens_it(self):
+        self.write("src/app.py", "print('two')" + chr(10))
+        self.turn([human("Make it print two")], "tool_use")
+        self.layer.beat(time.time() + 601)
+        key = cloud.handoff_key()
+        blob = git(self.bare, "show", "cloud/handoff:almanac-handoff.sealed")
+        self.assertEqual(set(json.loads(blob)), {"v", "nonce", "ct", "tag"})
+        for plain in ("Make it print two", "print('two')", "base_commit", "ALMANAC_HANDOFF"):
+            self.assertNotIn(plain, blob)
+        ok, clone, (meta_path, md_path, diff_path) = self.opens(key)
+        self.assertTrue(ok)
+        meta = self.state()
+        with open(meta_path) as handle:
+            self.assertEqual(json.load(handle), meta)
+        with open(md_path) as handle:
+            self.assertIn("The last message the person typed:" + chr(10) + chr(10) + "Make it print two", handle.read())
+        with open(diff_path, "rb") as handle:
+            self.assertIn(b"+print('two')", handle.read())
+        self.assertEqual(meta["sig"], cloud.sign(meta, self.opened()["packet"], key))
+
+    def test_the_check_fails_for_a_wrong_missing_or_empty_key_and_for_any_change(self):
+        self.turn([human("Make it print two")], "tool_use")
+        self.layer.beat(time.time() + 601)
+        key = cloud.handoff_key()
+        self.assertTrue(self.opens(key)[0])
+        for wrong in ("not-the-key", "", None):
+            self.assertFalse(self.opens(wrong)[0], wrong)
+        box = json.loads(git(self.bare, "show", "cloud/handoff:almanac-handoff.sealed"))
+        for field, value in (("ct", base64.b64encode(b"x" + base64.b64decode(box["ct"])[1:]).decode()), ("tag", "0" * 64),
+                             ("nonce", "1" * 32), ("v", 2)):
+            self.replace_file(json.dumps(dict(box, **{field: value})))
+            self.assertFalse(self.opens(key)[0], field)
+
+    def test_an_empty_key_never_opens_seals_or_signs(self):
+        self.turn([human("Make it print two")], "tool_use")
+        self.layer.beat(time.time() + 601)
+        self.forge(key="")  # sealed with the empty key
+        self.assertFalse(self.opens("")[0])
+        self.assertFalse(self.opens(None)[0])
         with self.assertRaises(ValueError):
-            cloud.sign(self.state(), text, "")
+            cloud.seal(b"x", "")
+        with self.assertRaises(ValueError):
+            cloud.unseal(git(self.bare, "show", "cloud/handoff:almanac-handoff.sealed"), "")
+        with self.assertRaises(ValueError):
+            cloud.sign(self.state(), "text", "")
+
+    def test_the_time_and_the_parent_are_checked(self):
+        self.turn([human("Make it print two")], "tool_use")
+        self.layer.beat(time.time() + 601)
+        key = cloud.handoff_key()
+        soon = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 120))
+        later = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 3600))
+        self.forge(time=soon)
+        self.assertTrue(self.opens(key)[0])  # small clock skew is fine
+        self.forge(time=later)
+        self.assertFalse(self.opens(key)[0])
+        self.forge(base_commit="0" * 40)  # the signed base is not the commit's parent
+        self.assertFalse(self.opens(key)[0])
+        age = subprocess.run([sys.executable, "-c", cloud.AGE.format(json=os.path.join(self.alpha, "h.json").replace(os.sep, "/"))],
+                             capture_output=True, text=True)
+        self.assertEqual(age.returncode, 1)  # no file: it fails rather than printing an age
+        self.assertNotIn("%ct", cloud.watchdog(10))
+
+    def test_a_diff_that_does_not_apply_is_not_opened(self):
+        self.write("src/app.py", "print('two')" + chr(10))
+        self.turn([human("Make it print two")], "tool_use")
+        self.layer.beat(time.time() + 601)
+        key = cloud.handoff_key()
+        self.assertTrue(self.opens(key)[0])
+        box = self.opened()
+        box["diff"] = base64.b64encode(base64.b64decode(box["diff"]).replace(b"print('one')", b"print('zero')")).decode()
+        self.replace_file(cloud.seal(json.dumps(box).encode(), key))
+        self.assertFalse(self.opens(key)[0])
 
     def test_the_takeover_is_keyed_on_the_signature_not_the_commit(self):
-        with mock.patch.object(cloud, "_keyring", return_value=None):
-            self.turn([human("Make it print two")], "tool_use")
-            self.layer.beat(time.time() + 601)
+        self.turn([human("Make it print two")], "tool_use")
+        self.layer.beat(time.time() + 601)
         sig = self.state()["sig"]
         path = os.path.join(self.tmp, "h.json")
         with open(path, "w", encoding="utf-8") as handle:
@@ -694,6 +847,7 @@ class HandoffTest(CloudCase):
         done = subprocess.run([sys.executable, "-c", cloud.SIG.format(json=path.replace(os.sep, "/"))], capture_output=True, text=True)
         self.assertEqual(done.stdout.strip(), sig[:12])
         self.assertFalse({"$", "`", '"'} & set(cloud.SIG))  # it sits inside a double-quoted shell argument
+        self.assertFalse({"$", "`", '"'} & set(cloud.OPEN))
         for bad in ("zz" * 32, sig[:12], sig.upper(), sig + "0", "$(id)"):
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(json.dumps({"sig": bad}))
@@ -704,53 +858,9 @@ class HandoffTest(CloudCase):
         self.assertIn("cloud/almanac-takeover-SIG", text)
         self.assertNotIn("rev-parse --short=12 FETCH_HEAD", text)
 
-    def test_the_check_passes_when_the_checkout_tracks_another_hand_off_file(self):
-        with mock.patch.object(cloud, "_keyring", return_value=None):
-            self.turn([human("Make it print two")], "tool_use")
-            self.layer.beat(time.time() + 601)
-            key = cloud.handoff_key()
-        self.write("ALMANAC_HANDOFF.md", "someone else's file")
-        git(self.alpha, "add", "ALMANAC_HANDOFF.md")
-        git(self.alpha, "commit", "-q", "-m", "a tracked hand-off file")
-        self.assertTrue(self.verify(self.pushed("almanac-handoff.json"), self.pushed("ALMANAC_HANDOFF.md"), key))
-
-    def test_the_signed_tree_and_time_are_checked(self):
-        with mock.patch.object(cloud, "_keyring", return_value=None):
-            self.turn([human("Make it print two")], "tool_use")
-            self.layer.beat(time.time() + 601)
-            key = cloud.handoff_key()
-        text = self.pushed("ALMANAC_HANDOFF.md")
-        base = git(self.bare, "rev-parse", "cloud/handoff^{tree}")
-        self.assertNotEqual(self.state().get("tree"), base)  # signed hash leaves out the two hand-off files
-        self.assertTrue(self.verify(self.forged(key), text, key))
-        self.assertFalse(self.verify(self.forged(key, tree="0" * 40), text, key))
-        soon = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 120))
-        later = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 3600))
-        self.assertTrue(self.verify(self.forged(key, time=soon), text, key))  # small clock skew is fine
-        self.assertFalse(self.verify(self.forged(key, time=later), text, key))
-        age = subprocess.run([sys.executable, "-c", cloud.AGE.format(json=os.path.join(self.alpha, "h.json").replace(os.sep, "/"))],
-                             capture_output=True, text=True)
-        self.assertEqual(age.returncode, 1)  # no file: it fails rather than printing an age
-        self.assertNotIn("%ct", cloud.watchdog(10))
-
-    def test_the_snapshot_is_signed_and_a_changed_task_fails_the_printed_check(self):
-        with mock.patch.object(cloud, "_keyring", return_value=None):
-            self.turn([human("Make it print two")], "tool_use")
-            self.layer.beat(time.time() + 601)
-            key = cloud.handoff_key()
-        meta_text, packet_text = self.pushed("almanac-handoff.json"), self.pushed("ALMANAC_HANDOFF.md")
-        self.assertEqual(self.state()["sig"], cloud.sign(self.state(), packet_text, key))
-        self.assertTrue(self.verify(meta_text, packet_text, key))
-        self.assertFalse(self.verify(meta_text, packet_text.replace("Make it print two", "Make it print rm -rf"), key))
-        self.assertFalse(self.verify(meta_text.replace("working", "stalled"), packet_text, key))
-        self.assertFalse(self.verify(meta_text.replace("base_branch", "base_branch2"), packet_text, key))
-        self.assertFalse(self.verify(meta_text, packet_text, "not-the-key"))
-        self.assertFalse(self.verify(meta_text, packet_text, None))
-
     def test_the_key_is_made_once_in_a_private_file_without_a_keyring(self):
-        with mock.patch.object(cloud, "_keyring", return_value=None):
-            key = cloud.handoff_key()
-            self.assertEqual(cloud.handoff_key(), key)
+        key = cloud.handoff_key()
+        self.assertEqual(cloud.handoff_key(), key)
         path = config.home() / "cloud.key"
         self.assertEqual(path.read_text().strip(), key)
         self.assertGreaterEqual(len(key), 32)
@@ -767,13 +877,174 @@ class HandoffTest(CloudCase):
 
     def test_watchdog_prints_the_key_line_and_the_prompt_the_check(self):
         out = io.StringIO()
-        with mock.patch.object(cloud, "_keyring", return_value=None), redirect_stdout(out), \
-                mock.patch.object(cli, "_memory_handle", return_value=self.memory):
+        with redirect_stdout(out), mock.patch.object(cli, "_memory_handle", return_value=self.memory):
             self.assertEqual(cli.main(["cloud", "watchdog"]), 0)
             key = cloud.handoff_key()
         self.assertIn("ALMANAC_HANDOFF_KEY=" + key, out.getvalue())
-        self.assertIn(cloud.VERIFY.format(json="/tmp/almanac-h.json", md="/tmp/almanac-h.md"), cloud.watchdog(10))
+        self.assertIn(cloud.OPEN.format(json="/tmp/almanac-h.json", md="/tmp/almanac-h.md", diff="/tmp/almanac-h.diff"), cloud.watchdog(10))
         self.assertIn("If it does not print True", cloud.watchdog(10))
+        self.assertIn("git apply --binary /tmp/almanac-h.diff", cloud.watchdog(10))
+        self.assertIn("FETCH_HEAD^", cloud.watchdog(10))
+
+    def test_a_public_repository_is_refused_unless_allowed_and_asked_once_an_hour(self):
+        with mock.patch.object(cloud, "_visibility", return_value="PUBLIC") as asked:
+            self.turn([human("A long task")], "tool_use")
+            self.layer.beat(time.time() + 601)
+            self.layer.beat(time.time() + 1300)
+            self.assertEqual(self.pushed(), "")
+            lines = Log(self.log_path).tail()
+            self.assertEqual((len(lines), lines[0]["where"]), (1, "handoff"))  # one line, however many beats
+            self.assertIn("public", lines[0]["error"])
+            self.assertEqual(asked.call_count, 1)
+            self.layer.allow_public = True
+            self.layer.beat(time.time() + 2000)
+            self.assertEqual(self.state()["state"], "working")  # sealed, so a deliberate opt-in pushes
+        for unsure in ("", "PRIVATE", "INTERNAL"):
+            self.layer.seen.clear()
+            self.layer.allow_public = False
+            with mock.patch.object(cloud, "_visibility", return_value=unsure):
+                self.layer.beat(time.time() + 5000)
+            self.assertNotEqual(self.pushed(), "")
+
+    def test_gh_is_asked_for_the_visibility_and_failures_mean_unknown(self):
+        done = mock.Mock(returncode=0, stdout="PUBLIC" + chr(10))
+        with mock.patch.object(cloud.shutil, "which", return_value="/bin/gh"), mock.patch.object(cloud.subprocess, "run", return_value=done) as run:
+            self.assertEqual(REAL_VISIBILITY(self.alpha), "PUBLIC")
+        self.assertEqual(run.call_args.args[0], ["/bin/gh", "repo", "view", "--json", "visibility", "-q", ".visibility"])
+        self.assertEqual(run.call_args.kwargs["cwd"], self.alpha)
+        with mock.patch.object(cloud.shutil, "which", return_value=None):
+            self.assertEqual(REAL_VISIBILITY(self.alpha), "")
+        with mock.patch.object(cloud.shutil, "which", return_value="/bin/gh"):
+            with mock.patch.object(cloud.subprocess, "run", return_value=mock.Mock(returncode=1, stdout="PUBLIC")):
+                self.assertEqual(REAL_VISIBILITY(self.alpha), "")  # gh failed: not public as far as we know
+            with mock.patch.object(cloud.subprocess, "run", side_effect=subprocess.TimeoutExpired("gh", 20)):
+                self.assertEqual(REAL_VISIBILITY(self.alpha), "")
+
+    def test_the_config_defaults_for_the_hand_off(self):
+        cfg = config.load()["cloud"]
+        self.assertEqual((cfg["allow_public"], cfg["routine"]), (False, ""))
+        self.assertNotIn("routine_control", cfg)  # pausing on a depleted login is not optional
+
+    def routine_layer(self, token="tokA"):
+        cfg = config.load()
+        cfg["cloud"].update(auto=True, routine="trg_1")
+        layer = cloud.HandoffLayer(self.memory, cfg, background=False)
+        self.ctx.headers = {"Authorization": "Bearer " + token}
+        return layer
+
+    def run_turn(self, layer, stop):
+        body = {"messages": [human("A long task")], "tools": [{"name": "Bash", "input_schema": {}}]}
+        layer.transform(body, self.ctx)
+        layer.observe(self.ctx, body, reply("Working on it.", stop=stop))
+
+    def test_the_routine_is_left_alone_without_a_routine_id(self):
+        with mock.patch.object(cloud, "routine_call", side_effect=AssertionError("routine call with no routine set")):
+            self.turn([human("A long task")], "tool_use")
+            self.layer.beat(time.time() + 601)
+            self.layer.close()
+
+    def test_the_routine_is_on_while_a_hand_off_is_live_and_off_when_it_goes_idle(self):
+        layer = self.routine_layer()
+        with mock.patch.object(cloud, "routine_call", return_value=(200, {})) as call:
+            self.run_turn(layer, "tool_use")
+            layer.beat(time.time() + 60)
+            call.assert_called_once_with("trg_1", "tokA", "POST", {"enabled": False}, timeout=15)  # nothing live yet: a stale "on" is cleared once
+            layer.beat(time.time() + 601)
+            self.assertEqual((call.call_count, call.call_args.args[3]), (2, {"enabled": True}))
+            layer.beat(time.time() + 1300)
+            self.assertEqual(call.call_count, 2)  # one call per change, not per heartbeat
+            self.run_turn(layer, "end_turn")
+            layer.beat()
+            self.assertEqual((call.call_count, call.call_args.args[3]), (3, {"enabled": False}))
+            layer.beat(time.time() + 5000)
+            self.assertEqual(call.call_count, 3)
+
+    def test_a_usage_limit_disables_the_routine_until_the_reset_and_it_comes_back_if_still_live(self):
+        layer = self.routine_layer()
+        with mock.patch.object(cloud, "routine_call", return_value=(200, {})) as call:
+            self.run_turn(layer, "tool_use")
+            layer.beat(time.time() + 601)
+            self.assertEqual(call.call_args.args[3], {"enabled": True})
+            accounts.mark(config.load(), "tokA", time.time() + 3600)  # the proxy saw a usage-limit 429 for this login
+            layer.beat(time.time() + 650)
+            self.assertEqual((call.call_count, call.call_args.args[3]), (2, {"enabled": False}))
+            layer.beat(time.time() + 700)
+            self.assertEqual(call.call_count, 2)
+            accounts.mark(config.load(), "tokA", time.time() - 1)  # the reset has passed
+            layer.beat(time.time() + 750)
+            self.assertEqual((call.call_count, call.call_args.args[3]), (3, {"enabled": True}))
+            accounts.mark(config.load(), "tokA", time.time() + 3600)
+            self.run_turn(layer, "end_turn")
+            layer.beat()
+            self.assertEqual(call.call_args.args[3], {"enabled": False})
+            accounts.mark(config.load(), "tokA", time.time() - 1)
+            layer.beat(time.time() + 5000)
+            self.assertEqual(call.call_args.args[3], {"enabled": False})  # not live: it stays off after the reset
+            self.assertEqual(call.call_count, 4)
+
+    def test_close_turns_the_routine_off(self):
+        layer = self.routine_layer()
+        with mock.patch.object(cloud, "routine_call", return_value=(200, {})) as call:
+            self.run_turn(layer, "tool_use")
+            layer.beat(time.time() + 601)
+            layer.close()
+        self.assertEqual((call.call_args.args[3], call.call_args.kwargs["timeout"]), ({"enabled": False}, 8))
+
+    def test_a_routine_failure_is_one_log_line_and_the_token_is_not_in_it(self):
+        layer = self.routine_layer(token="tok-SECRET-123")
+        with mock.patch.object(cloud, "routine_call", side_effect=RuntimeError("routine POST: HTTP 500")) as call:
+            self.run_turn(layer, "tool_use")
+            layer.beat(time.time() + 601)
+            self.assertEqual(self.state()["state"], "working")  # the hand-off itself is unaffected
+            layer.beat(time.time() + 650)  # a retry waits an interval
+            self.assertEqual(call.call_count, 1)
+        lines = Log(self.log_path).tail()
+        self.assertEqual(len(lines), 1)
+        self.assertIn("routine enable failed", lines[0]["error"])
+        with open(self.log_path, encoding="utf-8") as handle:
+            self.assertNotIn("tok-SECRET-123", handle.read())
+        with mock.patch.object(cloud, "routine_call", return_value=(200, {})) as call:
+            layer.beat(time.time() + 1500)
+        self.assertEqual(call.call_args.args[3], {"enabled": True})
+
+    def test_the_routine_call_sends_the_login_in_one_header_and_never_in_an_error(self):
+        conn = mock.Mock()
+        conn.getresponse.return_value = mock.Mock(status=200, read=mock.Mock(return_value=b'{"enabled": true}'))
+        with mock.patch.object(cloud.http.client, "HTTPSConnection", return_value=conn) as made:
+            self.assertEqual(cloud.routine_call("trg 1", "tokA", "POST", {"enabled": True}), (200, {"enabled": True}))
+        self.assertEqual(made.call_args.args[0], cloud.ROUTINE_HOST)
+        method, path, body, headers = conn.request.call_args.args
+        self.assertEqual((method, path, json.loads(body)), ("POST", cloud.ROUTINE_PATH + "trg%201", {"enabled": True}))
+        self.assertEqual(headers["authorization"], "Bearer tokA")
+        self.assertEqual(headers["anthropic-beta"], cloud.ROUTINE_HEADERS["anthropic-beta"])
+        conn.close.assert_called_once()
+        conn.getresponse.return_value = mock.Mock(status=403, read=mock.Mock(return_value=b"Bearer tokA denied"))
+        with mock.patch.object(cloud.http.client, "HTTPSConnection", return_value=conn):
+            with self.assertRaises(RuntimeError) as caught:
+                cloud.routine_call("trg_1", "tokA", "GET")
+        self.assertNotIn("tokA", str(caught.exception))
+        self.assertIn("403", str(caught.exception))
+
+    def test_routine_check_prints_only_status_enabled_and_the_next_run(self):
+        answer = (200, {"enabled": True, "next_run_at": "2026-11-20T01:00:00Z", "prompt": "SECRET PROMPT", "id": "trg_1"})
+        out, err = io.StringIO(), io.StringIO()
+        cfg = config.load()
+        cfg["cloud"]["routine"] = "trg_1"
+        with redirect_stdout(out), redirect_stderr(err), mock.patch.object(cli, "_memory_handle", return_value=self.memory):
+            with mock.patch.object(config, "load", return_value=cfg), mock.patch.object(accounts, "token", return_value="tokA"):
+                with mock.patch.object(cloud, "routine_call", return_value=answer) as call:
+                    self.assertEqual(cli.main(["cloud", "routine", "check"]), 0)
+                    self.assertEqual(call.call_args.args[:3], ("trg_1", "tokA", "GET"))
+                    call.side_effect = RuntimeError("routine GET: HTTP 404")
+                    self.assertEqual(cli.main(["cloud", "routine", "check"]), 2)
+        self.assertEqual(out.getvalue().split(), ["status", "HTTP", "200", "enabled", "True", "next", "run", "2026-11-20T01:00:00Z"])
+        self.assertIn("HTTP 404", err.getvalue())
+        shown = out.getvalue() + err.getvalue()
+        self.assertNotIn("SECRET PROMPT", shown)
+        self.assertNotIn("tokA", shown)
+        with redirect_stdout(io.StringIO()), redirect_stderr(err), mock.patch.object(cli, "_memory_handle", return_value=self.memory):
+            with mock.patch.object(accounts, "token", return_value=None):
+                self.assertEqual(cli.main(["cloud", "routine", "check"]), 2)  # no routine id set, or no valid login
 
     def test_config_takes_on_and_off(self):
         home = tempfile.mkdtemp(prefix="almanac-cfg-")

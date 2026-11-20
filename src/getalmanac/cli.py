@@ -30,6 +30,7 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac cloud watchdog       the setup and the prompt for a scheduled cloud task that takes over a stalled one
   almanac cloud on|off         let this repository take part in the automatic hand-off, or stop it
   almanac cloud status         hand-off on or off, its last heartbeat, and any takeover branch on origin
+  almanac cloud routine check  read cloud.routine and print its status, enabled flag and next run (--login FOLDER)
   almanac semantic [install|status|index|on|off]   search memory by meaning (optional model)
   almanac route [status]       what model routing is set to and what it decided lately
   almanac route pin TIER       keep this project on small, medium or large (`pin off` lifts it)
@@ -304,9 +305,10 @@ WATCHDOG_STEPS = """One-time setup, so a cloud task can take over when this mach
    This repository is {here}.
 4. In Claude Code, in this repository, run /schedule and create an hourly task with the prompt below
    (or create it at claude.ai/code/routines).
-5. Put the same secret in that task's environment, so it can check that a snapshot came from this machine:
+5. Put the same secret in that task's environment, so it can open the snapshot (the branch holds one file,
+   encrypted with it):
    ALMANAC_HANDOFF_KEY={key}
-   (keep it private: anyone with it can sign a snapshot the task will act on)
+   (keep it private: anyone with it can read the snapshot and write one the task will act on)
 
 The prompt for the scheduled task:
 
@@ -326,8 +328,23 @@ def _cloud(rest):
     sub.choices["send"].add_argument("--yes", action="store_true", help="send without asking")
     for name in ("status", "watchdog", "on", "off"):
         sub.add_parser(name)
+    routine = sub.add_parser("routine")
+    routine.add_argument("action", choices=["check"])
+    routine.add_argument("--login", help="Claude config folder whose login is used (default: $CLAUDE_CONFIG_DIR or ~/.claude)")
     args = parser.parse_args(rest)
     memory, cwd, cfg = _memory_handle(), os.getcwd(), config.load()
+    if args.cmd == "routine":
+        from . import accounts
+        tok = accounts.token(args.login or os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude")
+        if not cfg["cloud"]["routine"] or not tok:
+            print("almanac: set cloud.routine to the routine's id, and use a login that is valid (--login FOLDER).", file=sys.stderr)
+            return 2
+        try:
+            _print(cloud.routine_check(cfg["cloud"]["routine"], tok))
+        except Exception as exc:  # the message holds a status or a network error, never the token
+            print(f"almanac: could not read the routine: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 2
+        return 0
     if args.cmd in ("on", "off"):
         text = cloud.turn(memory, cwd, args.cmd == "on")
         _print(text)
