@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Compaction adds to its outline instead of rebuilding it.** The prefix is now the
+  session context, then the outline in generations, then the recent exchanges. A
+  later compaction keeps every earlier byte and adds one generation for the
+  exchanges since (a cache breakpoint on the newest one lets the cache read up to
+  it), so only the tail is written. With `memory.summary_model` set, each
+  generation gets one small-model note that joins its decisions and open items and
+  marks reversals; failure or off means the rule-written outline, and a sent
+  generation is never edited. When the generations pass the new
+  `compaction.outline_share` (0.35 of `target_tokens`) the oldest are merged into one
+  "earlier work" generation, the only step that rewrites earlier bytes. The request
+  log records each compaction's `kind` (append or rollup) and `kept_chars`, and
+  `almanac report` summarizes them. The related-exchanges list moved to the head of
+  the recent block. A prefix stored before this change is rebuilt once.
+
 - **A cold return is compacted.** A request that comes back after its cache has
   expired rewrites the whole prefix whatever Almanac sends, so with
   `compaction.on_cold` (on by default) it is compacted from twice
