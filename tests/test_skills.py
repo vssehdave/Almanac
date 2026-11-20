@@ -388,6 +388,80 @@ class Launch(Base):
         self.assertEqual((todo, len(unhashed)), ([], 1))
 
 
+class Bundle(Base):
+    def plugin(self, verdict=None):
+        """A source with a skill that blocks the model, an agent, a hook, two MCP servers and a licence."""
+        make_skill(self.src / "skills", "inner", None, {"scripts/run.sh": "echo never run\n"})
+        (self.src / "skills" / "inner" / "SKILL.md").write_bytes(
+            b"---\r\nname: inner\r\ndisable-model-invocation: true\r\ndescription: d\r\n---\r\nbody\r\n")
+        (self.src / "verdict.txt").write_text(verdict or "SAFE 5")  # what the fake scanner reads at the top
+        (self.src / "agents").mkdir()
+        (self.src / "agents" / "helper.md").write_text("---\nname: helper\n---\nhi\n")
+        (self.src / "LICENSE").write_text("MIT License\n\nPermission is hereby granted, free of charge, to any person\n")
+        (self.src / ".claude-plugin").mkdir()
+        (self.src / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "x", "version": "1.2.0", "mcpServers": {
+            "pinned": {"command": "npx", "args": ["-y", "pkg@1.2.3"]}, "loose": {"command": "npx", "args": ["-y", "other"]}}}))
+        (self.src / "hooks").mkdir()
+        (self.src / "hooks" / "hooks.json").write_text(json.dumps(
+            {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "node start.js"}]}]}}))
+
+    def sources(self):
+        return [ln for ln in (self.tmp / "home" / "bundle" / "SOURCES.md").read_text().splitlines() if ln.startswith("| `mine`")]
+
+    def test_installs_a_plugin_folder_with_a_manifest_and_a_sources_row(self):
+        self.plugin()
+        rc, text = self.add(str(self.src), bundle=True, name="mine")
+        dest = self.tmp / "home" / "bundle" / "mine"
+        self.assertEqual(rc, 0, text)
+        self.assertEqual(self.installed(), [])  # not in the Claude config folder
+        manifest = json.loads((dest / ".claude-plugin" / "plugin.json").read_text())
+        self.assertEqual((manifest["name"], manifest["version"], manifest["license"]), ("mine", "1.2.0", "MIT"))
+        self.assertEqual(manifest["mcpServers"], {"pinned": {"command": "npx", "args": ["-y", "pkg@1.2.3"]}})
+        self.assertEqual((dest / "skills" / "inner" / "SKILL.md").read_bytes(),
+                         b"---\r\nname: inner\r\ndescription: d\r\n---\r\nbody\r\n")  # flag gone, line endings kept
+        self.assertTrue((dest / "agents" / "helper.md").is_file() and (dest / "LICENSE").is_file())
+        self.assertFalse((dest / "hooks").exists())
+        self.assertIn("hook NOT installed (your call): SessionStart: node start.js", text)
+        self.assertIn("MCP server loose: left out", text)
+        self.assertIn(f"bundle folder: {dest}", text)
+        row = self.sources()
+        self.assertEqual(len(row), 1)
+        for want in (str(self.src), "local", "MIT", "disable-model-invocation removed from 1", "hooks not installed (1)",
+                     "pinned: pinned", "left out, no exact version: loose"):
+            self.assertIn(want, row[0])
+        self.assertTrue(self.quarantine_empty())
+
+    def test_do_not_install_caution_and_existing_folders(self):
+        self.plugin("DO_NOT_INSTALL 90")
+        rc, text = self.add(str(self.src), bundle=True, name="mine", accept_caution=True)
+        self.assertEqual((rc, (self.tmp / "home" / "bundle").exists()), (2, False), text)
+        (self.src / "verdict.txt").write_text("CAUTION 30")
+        self.assertEqual(self.add(str(self.src), bundle=True, name="mine")[0], 1)
+        self.assertEqual(self.add(str(self.src), bundle=True, name="mine", ask=lambda q: False)[0], 1)
+        self.assertFalse((self.tmp / "home" / "bundle" / "mine").exists())
+        self.assertEqual(self.add(str(self.src), bundle=True, name="mine", ask=lambda q: True)[0], 1)  # installed; the verdict is still reported
+        self.assertTrue((self.tmp / "home" / "bundle" / "mine").is_dir())
+        rc, text = self.add(str(self.src), bundle=True, name="mine", accept_caution=True)
+        self.assertEqual(rc, skills.ERROR)
+        self.assertIn("--replace", text)
+        self.assertEqual(self.add(str(self.src), bundle=True, name="mine", accept_caution=True, replace=True)[0], 1)
+        self.assertEqual(len(self.sources()), 1)  # replaced, not repeated
+        self.assertEqual(self.add(str(self.src), bundle=True, name="almanac")[0], skills.ERROR)
+
+    def test_a_picked_skill_comes_without_agents_or_servers_and_the_launch_check_knows_it(self):
+        self.plugin()
+        make_skill(self.src / "skills", "other")
+        rc, text = self.add(str(self.src), ["inner"], bundle=True, name="one")
+        dest = self.tmp / "home" / "bundle" / "one"
+        self.assertEqual(rc, 0, text)
+        self.assertEqual(sorted(p.name for p in (dest / "skills").iterdir()), ["inner"])
+        self.assertFalse((dest / "agents").exists())
+        self.assertNotIn("mcpServers", json.loads((dest / ".claude-plugin" / "plugin.json").read_text()))
+        self.assertIn(("bundle/one", "plugin", os.path.realpath(dest)), skills.installed_items())
+        flagged, todo, _ = skills.triage(skills.installed_items())
+        self.assertEqual((flagged, todo), ([], []))  # the scan at install is remembered
+
+
 class ImportBundle(Base):
     def test_copies_plugin_folders_without_links_and_keeps_existing_ones(self):
         old = self.tmp / "old"

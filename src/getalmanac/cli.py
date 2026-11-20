@@ -515,6 +515,8 @@ def _skill(rest):
     add.add_argument("--ref", help="a full commit SHA to fetch instead of the default branch")
     add.add_argument("--accept-caution", action="store_true", help="install even when the verdict is CAUTION")
     add.add_argument("--replace", action="store_true", help="overwrite a skill with the same name")
+    add.add_argument("--bundle", action="store_true", help="install as a plugin in your Almanac bundle (folder, manifest, SOURCES.md row)")
+    add.add_argument("--name", help="with --bundle: the folder and plugin name (default: the source's name)")
     sub.add_parser("import-bundle").add_argument("path", help="a folder of plugin folders, such as an old copy of the bundle")
     sub.add_parser("accept").add_argument("item", help="an installed skill or plugin, by name or path")
     sub.add_parser("unaccept").add_argument("item")
@@ -529,7 +531,9 @@ def _skill(rest):
     if args.cmd == "audit":
         return skills.audit(args.pending, args.again, out=_print)
     if args.cmd == "add":
-        return skills.add(args.source, args.skill, args.ref, args.accept_caution, args.replace, out=_print)
+        ask = (lambda q: input(q).strip().lower() in ("y", "yes")) if sys.stdin.isatty() else None
+        return skills.add(args.source, args.skill, args.ref, args.accept_caution, args.replace, out=_print,
+                          bundle=args.bundle, name=args.name, ask=ask)
     if os.path.exists(args.target):
         res = skills.scan(args.target)
     else:
