@@ -120,6 +120,23 @@ class PrepareTest(unittest.TestCase):
         self.dir = Path(flags[1]) if flags else None  # the folder this run was given with --add-dir
         return flags, notes
 
+    def test_the_profile_folder_is_trusted_once_and_nothing_else_changes(self):
+        state = self.user / ".claude.json"
+        other = {"numStartups": 7, "projects": {"C:/elsewhere": {"hasTrustDialogAccepted": False, "x": 1}}}
+        state.write_text(json.dumps(other), encoding="utf-8")
+        self.prep(["-p", "hi"])
+        data = json.loads(state.read_text(encoding="utf-8"))
+        self.assertEqual(data["projects"][self.dir.resolve().as_posix()], {"hasTrustDialogAccepted": True})
+        self.assertEqual(data["projects"]["C:/elsewhere"], other["projects"]["C:/elsewhere"])
+        self.assertEqual(data["numStartups"], 7)
+        before = state.stat().st_mtime_ns
+        self.prep(["-p", "hi"])
+        self.assertEqual(state.stat().st_mtime_ns, before)  # already trusted: the file is not written again
+
+    def test_no_state_file_is_left_alone(self):
+        self.prep(["-p", "hi"])
+        self.assertFalse((self.user / ".claude.json").exists())
+
     def test_flags_and_files(self):
         flags, notes = self.prep(["-p", "hi"], self.home)
         self.assertEqual(notes, [])
