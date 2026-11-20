@@ -326,7 +326,7 @@ project (lane `import:<session>:<n>`).
 - **Summaries.** The import itself makes no model calls and never reads your login.
   Imported exchanges keep their rule-written title and status until you run
   `almanac memory summarize`, which asks the summary model for each one (newest
-  first) with the login in `~/.claude`. It never reads `CLAUDE_CONFIG_DIR`, sends the
+  first) with the login Almanac runs with (`$CLAUDE_CONFIG_DIR`, else `~/.claude`), sends the
   token only to api.anthropic.com, and stops on a 429. Work older than 14 days stays
   closed whatever the model says.
 
@@ -1436,7 +1436,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac memory search WORDS` | Search stored conversations (`--project NAME`, `--all`) |
 | `almanac memory show ID` | Read one stored exchange or topic |
 | `almanac memory recent` | The latest conversations, by project |
-| `almanac memory summarize` | Ask the summary model (`memory.summary_model`) for a title, summary and status for imported exchanges that have none, newest first. Uses the login in `~/.claude` only, sent to api.anthropic.com only. `--project NAME`, `--limit N` (default: what is left of `memory.summary_daily_calls` today; an explicit number may pass it), `--dry-run`, `--facts` (add searchable facts to exchanges summarized before facts existed). Stops when the API answers 401, 403, 429 or 529 |
+| `almanac memory summarize` | Ask the summary model (`memory.summary_model`) for a title, summary and status for imported exchanges that have none, newest first. Uses the login Almanac runs with (`$CLAUDE_CONFIG_DIR`, else `~/.claude`), sent to api.anthropic.com only. `--project NAME`, `--limit N` (default: what is left of `memory.summary_daily_calls` today; an explicit number may pass it), `--dry-run`, `--facts` (add searchable facts to exchanges summarized before facts existed). Stops when the API answers 401, 403, 429 or 529 |
 | `almanac memory import PATH...` | Store past Claude Code transcripts (a folder name under `~/.claude/projects`, a folder or a `.jsonl`), grouped by the project each exchange worked on. `--days N`, `--dry-run` |
 | `almanac memory forget` | Delete conversations and their saved choices (`--project NAME`, `--conversation ID`, `--all`). Keeps any changed in the last hour unless you add `--force` |
 | `almanac cloud packet` | Print the hand-off packet for a cloud session (`--conversation ID`). Sends nothing |
@@ -1495,7 +1495,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `memory.keep_days` | `365` | Delete conversations untouched this long (`0` keeps all) |
 | `memory.summary_model` | `claude-haiku-5-5` | Model that writes exchange summaries in the background (`""` turns it off) |
 | `memory.summary_daily_calls` | `300` | Most summary calls per day |
-| `memory.auto_import` | `true` | While the proxy runs, import new Claude Code transcripts (from `~/.claude` only) of projects already stored, once an hour; then summarize them and make their vectors |
+| `memory.auto_import` | `true` | While the proxy runs, import new Claude Code transcripts (from the login Almanac runs with: `$CLAUDE_CONFIG_DIR`, else `~/.claude`) of projects already stored, once an hour; then summarize them and make their vectors |
 | `memory.auto_import_days` | `14` | Transcripts older than this many days are not imported |
 | `memory.always_load` | `false` | List the memory tools in every session start (adds their schemas) instead of loading them through ToolSearch |
 | `memory.semantic` | `true` | Search by meaning when the packages and the model are installed |
@@ -1533,6 +1533,9 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `playbooks.compile_per_day` | `1` | Most Sonnet sessions a day that write a playbook from a repeated task (`0` is off) |
 | `cheatsheet.mode` | `"on"` | `"off"` stops adding the working rules for each model |
 | `offline.hold_minutes` | `480` | Minutes a model request waits for the network to return (`0` fails at once) |
+| `keepalive.enabled` | `false` | Opt in to cache pings: while a conversation is paused, a tiny request restarts its cache's life (see Cache keepalive) |
+| `keepalive.max_idle_minutes` | `240` | Stop pinging a conversation this long after its last real request |
+| `keepalive.max_lanes` | `4` | Conversation threads kept alive at once; the least recently active is dropped first |
 | `cloud.auto` | `false` | Keep a running task's snapshot on `origin`'s `cloud/handoff` branch (`on`/`off`) |
 | `cloud.heartbeat_minutes` | `10` | How often that snapshot is pushed while a task runs |
 | `cloud.stall_after` | `5` | Failed upstream attempts in a row (connection error or status 500+) before the snapshot is pushed at once as `stalled`; `0` is off |
@@ -1718,6 +1721,42 @@ Things to know:
 - Only Claude Code's own model requests are switched. Its side requests that
   Almanac does not touch still use the login Claude Code started with.
 - Tested against a fake upstream and fake credential folders, not a real limit.
+
+## Cache keepalive
+
+Off by default (`keepalive.enabled`). A prompt cache entry lives 5 minutes or an
+hour from its last read, so a pause makes the next message rewrite the whole
+prefix at 1.25 to 2 times the input price. With keepalive on, Almanac repeats a
+conversation's last request at 0.9 times the shortest cache life its request
+asked for (270 seconds for 5 minutes, 54 minutes for 1 hour). The repeat has
+`stream` off and `max_tokens` 1, so it reads the cached prefix for about a tenth
+of its price and starts the clock again. A pause of a few hours then costs a
+few reads instead of one rewrite. A very long pause can cost more than the
+rewrite, which is why `keepalive.max_idle_minutes` (default 240) stops it.
+
+- Only the main thread and sub-agents are kept alive, never titles or
+  classifiers, and only requests that carry cache marks. A new real request on
+  the same thread resets the timer. A tick is skipped while a real request on
+  that thread is running. At most `keepalive.max_lanes` threads are kept (4).
+- The body and headers (login included) of each thread's last request are kept
+  in memory only, never on disk or in the log, and are gone when Almanac stops.
+- A thread stops being pinged on a 429 (a usage limit: it is never pinged into),
+  any other 4xx, 3 failures in a row, a reply that read nothing from the cache
+  (the entry had already expired), or the idle cap.
+- Pings go straight to the upstream, through `upstream_proxy` and `upstream_ca`
+  as usual, not through the layers. Each is logged as kind `keepalive` with its
+  usage, and `almanac status` counts its tokens and shows the pings and their
+  cache reads on a line of their own.
+- Only `stream` and `max_tokens` change. The thinking and effort settings are
+  part of the cached prefix, so they are sent as they were. A request with a
+  thinking budget gets `max_tokens` of the budget plus 1, since the API needs
+  `max_tokens` above the budget.
+
+Tested against a fake upstream, not a real API or a real Claude Code session:
+the ttl arithmetic comes from the request's own marks, and the claim that
+`max_tokens` is outside the cached prefix comes from the Anthropic caching docs,
+not from a live run. The first ping's `cache_read_input_tokens` is what shows it
+working; if it ever reads 0, that thread is dropped.
 
 ## When the network drops
 

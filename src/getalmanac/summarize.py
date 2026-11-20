@@ -290,7 +290,7 @@ class SummaryLayer:
         cfg = ctx.cfg["memory"]
         if not (cfg["enabled"] and cfg["summary_model"] and MemoryLayer._main_thread(orig, ctx)):
             return
-        if reply.get("stop_reason") == "tool_use" or not ctx.project:  # nothing finished yet
+        if reply.get("stop_reason") in ("tool_use", None) or not ctx.project:  # nothing finished yet (None: cut off)
             return
         self._arm(ctx, orig)
         store = ctx.store

@@ -177,17 +177,22 @@ def meter(records, now=None) -> dict:
     seen = {}
     for name, span in (("5h", 5 * 3600), ("24h", 86400)):
         total = {"requests": 0, **dict.fromkeys(keys, 0), "cold_returns": 0, "cold_write_tokens": 0,
-                 "cold_compacted": 0, "cold_saved_tokens": 0}
+                 "cold_compacted": 0, "cold_saved_tokens": 0, "keepalive_pings": 0, "keepalive_read_tokens": 0}
         for r in records:
-            if not isinstance(r, dict) or r.get("kind") != "messages" or not isinstance(r.get("ts"), (int, float)) or r["ts"] <= now - span:
+            if not isinstance(r, dict) or r.get("kind") not in ("messages", "keepalive") or not isinstance(r.get("ts"), (int, float)) or r["ts"] <= now - span:
                 continue
             usage = r.get("usage")
             if not isinstance(usage, dict):
                 continue
-            total["requests"] += 1
-            for k in keys:
+            for k in keys:  # a keepalive ping is real usage, so its tokens count here, but it is not a request
                 n = usage.get(k)
                 total[k] += n if isinstance(n, int) else 0
+            if r["kind"] == "keepalive":
+                total["keepalive_pings"] += 1
+                n = usage.get("cache_read_input_tokens")
+                total["keepalive_read_tokens"] += n if isinstance(n, int) else 0
+                continue
+            total["requests"] += 1
             c = r.get("cache")
             ttls = [t for t in c.get("ttl") or [] if isinstance(t, str)] if isinstance(c, dict) else []
             if name == "24h":
@@ -219,10 +224,13 @@ def render_meter(records, now=None) -> list:
 
     def lines(label, t):
         share = "no input yet" if t["cold_share"] is None else f"{t['cold_share']:.1%} of cache writes + input"
-        return [f"  {label:<10} {t['requests']} requests, input {t['input_tokens']:,}, cache write "
+        out = [f"  {label:<10} {t['requests']} requests, input {t['input_tokens']:,}, cache write "
                 f"{t['cache_creation_input_tokens']:,}, cache read {t['cache_read_input_tokens']:,}, output {t['output_tokens']:,}",
                 f"  {'cold':<10} {t['cold_returns']} returns wrote {t['cold_write_tokens']:,} cache tokens ({share}); "
                 f"{t['cold_compacted']} compacted, {t['cold_saved_tokens']:,} tokens saved"]
+        if t["keepalive_pings"]:  # counted in the totals above; shown apart so its cost and effect are visible
+            out.append(f"  {'keepalive':<10} {t['keepalive_pings']} pings, cache read {t['keepalive_read_tokens']:,} (included above)")
+        return out
 
     c = m["cache"]
     share = "no usage yet" if c["read_share"] is None else f"{c['read_share']:.0%} of input read from cache"

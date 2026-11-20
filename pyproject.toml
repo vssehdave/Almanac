@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "getalmanac"
 version = "0.2.0"
-description = "A local proxy for Claude Code: smaller startup context and per-project memory, with nothing leaving your machine (stdlib only)."
+description = "A local proxy for Claude Code: smaller startup context and per-project memory, with nothing leaving your machine (stdlib only, plus its Playbook package)."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -24,7 +24,7 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Topic :: Software Development",
 ]
-dependencies = ["getplaybook @ git+https://github.com/vssehdave/Playbook"]
+dependencies = ["getplaybook @ git+https://github.com/vssehdave/Playbook@ab9d4645ec96db9a99eaa1405b908f24d4e8d691"]
 
 [project.optional-dependencies]
 semantic = ["onnxruntime", "tokenizers", "numpy", "huggingface_hub"]

@@ -343,6 +343,18 @@ def _size(content) -> int:
         return 0
 
 
+RETRY_AFTER = 40  # messages: a refused compaction is tried again after this much growth, since Claude Code's own is off
+
+
+def blocked(ctx, messages) -> bool:
+    """True while a refusal of this conversation's compacted form still holds. It lapses after RETRY_AFTER more messages,
+    so a long conversation is never left with no compaction at all (an old mark without a count lapses at once)."""
+    mark = ctx.store.get(f"nocompact:{ctx.lane}")
+    if not mark:
+        return False
+    at = mark.get("at") if isinstance(mark, dict) else None
+    return isinstance(at, int) and len(messages) < at + RETRY_AFTER
+
 class CompactLayer:
     def __init__(self, memory):
         self.memory = memory
@@ -362,7 +374,7 @@ class CompactLayer:
             self._relieve_agent(body, ctx)
             return
         cfg, messages, key = ctx.cfg["compaction"], body["messages"], f"compact:{ctx.lane}"
-        if ctx.store.get(f"nocompact:{ctx.lane}"):  # the upstream refused this conversation's compacted form
+        if blocked(ctx, messages):  # the upstream refused this conversation's compacted form not long ago
             return
         state = ctx.store.get(key)
         if state and not (len(messages) >= state["covered"] and fingerprint(messages[:state["covered"]]) == state["hash"]):
@@ -423,7 +435,7 @@ class CompactLayer:
     def _relieve_agent(self, body, ctx):
         """A sub-agent thread has no stored prefix, but a long one still fills its window: only the stubs apply to it."""
         cfg, messages = ctx.cfg["compaction"], body.get("messages") or []
-        if not (cfg["enabled"] and ctx.agent and rq.has_client_tools(body) and len(messages) > 2)                 or ctx.store.get(f"nocompact:{ctx.lane}"):
+        if not (cfg["enabled"] and ctx.agent and rq.has_client_tools(body) and len(messages) > 2)                 or blocked(ctx, messages):
             return
         had, size = self._stubs(ctx), self._size_if_cold(body, ctx, messages)
         stubbed = self._relieve(body, ctx, cfg, messages, False)
@@ -445,7 +457,7 @@ class CompactLayer:
             ids = dict(kept.get("ids") or {})
             # The wording is chosen when a set is first written and stored with it: a set written by an earlier
             # version has none and keeps the old wording, so a turn in progress sends the same bytes.
-            tpl = kept.get("tpl") or (STUB if ids else STUB_RAW if ctx.cfg["memory"]["enabled"] else STUB)
+            tpl = kept.get("tpl") or (STUB if ids else STUB_RAW if ctx.cfg["memory"]["enabled"] and ctx.cfg["memory"].get("tools", True) else STUB)  # memory_read only when its server is loaded
             same = [b for b in _results(out) if b["tool_use_id"] in ids]
             for block in same:  # the stubs of earlier requests, wherever those results now sit
                 block["content"] = tpl.format(n=ids[block["tool_use_id"]], id=block["tool_use_id"])

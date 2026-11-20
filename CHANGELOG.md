@@ -15,6 +15,13 @@
   log records each compaction's `kind` (append or rollup) and `kept_chars`, and
   `almanac report` summarizes them. The related-exchanges list moved to the head of
   the recent block. A prefix stored before this change is rebuilt once.
+- **Opt-in prompt-cache keepalive.** With `keepalive.enabled` (off by default), a paused main or
+  sub-agent thread gets a tiny request at 0.9 times its shortest cache ttl (270 seconds, or 54
+  minutes for a 1-hour mark) that reads the cached prefix and restarts its life, for about a tenth
+  of the prefix's price instead of a rewrite on return. The body and login stay in memory. It
+  stops on a 429 or other 4xx, 3 failures, a reply that read nothing from the cache,
+  `keepalive.max_idle_minutes` (240) or shutdown, at most `keepalive.max_lanes` (4) threads at a time.
+  Pings are logged as kind `keepalive` and `almanac status` shows them and their cache reads apart.
 
 - **A cold return is compacted.** A request that comes back after its cache has
   expired rewrites the whole prefix whatever Almanac sends, so with
