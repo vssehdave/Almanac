@@ -23,7 +23,7 @@ import threading
 import time
 from urllib.parse import parse_qs, urlsplit
 
-from . import accounts, autoimport, config
+from . import accounts, autoimport, config, keepalive
 from . import request as rq
 from . import sse
 from . import upstream
@@ -124,6 +124,7 @@ class Proxy:
         self.last_seen = {}  # lane -> start time of its previous request
         self.fused = {}  # lane -> why its rewrites were switched off
         self.tls = None  # a tls.Session when running as an HTTPS proxy
+        self.keepalive = keepalive.Keepalive(self)  # opt-in cache pings for paused conversations (keepalive.py)
         self.started, self.count = time.time(), 0
         self.importing = None  # the background import thread (autoimport.py), once serve() has started it
         self._jobs, self._slow = queue.Queue(), queue.Queue()
@@ -301,6 +302,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     _conn = None
     hold = None
     tunneled = False
+    switched = None  # the Authorization value a usage-limit switch sent this request with
 
     def log_message(self, *args):
         pass
@@ -454,6 +456,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return original, folder
             new = self._send(sent, identity=True, authorization="Bearer " + alt[1])
             if new.status < 400:
+                self.switched = "Bearer " + alt[1]
                 accounts.announce(cfg, used, alt[0])
                 return new, alt[0]
             if new.status == 429:
@@ -588,7 +591,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             sent, orig = proxy.rewrite(raw, ctx) if ctx else (raw, None)
         except Exception:  # fail open, whatever went wrong
             sent, orig = raw, None
-        self.hold = None
+        proxy.keepalive.begin(ctx.lane if ctx else "")  # a tick of the cache keepalive waits while a real request is in flight
+        try:
+            self._forward(proxy, ctx, raw, sent, orig, started)
+        finally:
+            proxy.keepalive.end(ctx.lane if ctx else "")
+
+    def _forward(self, proxy, ctx, raw, sent, orig, started):
+        self.hold, self.switched = None, None
         try:
             seconds = proxy.cfg["offline"]["hold_minutes"] * 60 if ctx else 0
             if seconds > 0:
@@ -625,7 +635,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                             if SIZE_ERROR.search(detail):  # too long says nothing against the rewrite: estimate by size next time
                                 proxy.store.run("delete from state where key = ?", (f"usage:{ctx.lane}",))
                             else:
-                                proxy.store.put(f"nocompact:{ctx.lane}", detail)
+                                proxy.store.put(f"nocompact:{ctx.lane}", {"detail": detail, "at": len((ctx.orig or {}).get("messages") or [])})
                         except Exception:  # without the mark the retry may compact again, be refused again, and go out raw
                             pass
                     del ctx.stats[mark]
@@ -668,6 +678,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         tee = self._pipe(resp, tee=ctx is not None)
         if ctx:
             proxy.finish(ctx, orig, raw, sent, resp.status, tee, started)
+            if ctx.kind == "messages":  # remember what went upstream, in memory only, for a keepalive ping
+                kept = {k: v for k, v in self.headers.items() if k.lower() not in REQUEST_SKIP and k.lower() != "accept-encoding"}
+                for k in kept:
+                    if k.lower() == "authorization" and (self.switched or auth):
+                        kept[k] = self.switched or auth
+                proxy.keepalive.arm(ctx, sent, kept, self.path, resp.status)
 
     do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = do_HEAD = do_OPTIONS = do_CONNECT = _handle
 

@@ -5,13 +5,27 @@ everything before that message is replaced by:
 
 - the session-start context exactly as it was (instructions, environment, the
   skill listing, tools added in the session),
-- an outline of every earlier exchange, and
+- an outline of the earlier exchanges, written in generations, oldest first, and
 - the most recent exchanges written out in full.
 
 The replacement is stored. Every later request sends the same stored prefix
 followed by the messages that came after it, so the prompt cache keeps hitting.
-It is rebuilt only when the conversation outgrows the trigger again, and dropped
-if the covered messages change (a rewind or an edit).
+It is dropped if the covered messages change (a rewind or an edit).
+
+A later compaction does not rebuild it. It keeps the session context and every
+generation byte for byte, adds ONE generation for the exchanges since (the ones
+that were verbatim included) and writes new recent exchanges after it, so the
+cache still reads up to the last old generation and only the tail is written. A
+cache breakpoint on the newest generation makes that prefix a cache entry. Each
+generation has its own sections (see below) and, when the small model is on, a
+short note joining its exchanges' decisions and open items (summarize.py, one
+call per generation; without it the generation is the rule-written outline, and
+a generation is never edited once sent). When the generations together outgrow
+`compaction.outline_share` of the target, the oldest are merged into one "earlier
+work" generation (another call, rule outline as the fallback) that keeps the
+standing decisions and open work. That is the only step that rewrites earlier
+bytes, and it merges enough at once to stay rare. The request log records
+each compaction's kind (append or rollup) and how many prefix characters were kept.
 
 The outline is built from the stored titles and summaries: a small model's when
 it has written them (see summarize.py), the rule-written ones otherwise. What it
@@ -39,7 +53,7 @@ import json
 import time
 
 from . import request as rq
-from . import sse
+from . import sse, summarize
 from .memory import QUOTED, _first_line, clean, exchange, result_text, transcript
 
 CHARS_PER_TOKEN = 3.0  # conservative: real text runs a little over 3 characters a token
@@ -60,10 +74,18 @@ NO_TEXT = "(this result held no text, for example only an image, so nothing was 
 MIN_STUB = 2000  # characters: a smaller tool result is not worth a stub
 FLOOR_KEEP = 4  # a long turn never keeps fewer than this many of its newest results
 RELIEF_TO = 0.75  # a pass frees room down to this share of the limit, so the next request needs no second pass
+MAX_MARKS = 4  # cache breakpoints the API takes in one request
 COLD_FLOOR = 2  # x target_tokens: a cold return is compacted from this size, since its prefix is rewritten anyway
 RELATED = 5  # most related exchanges listed
 RELATED_HEAD = "Earlier exchanges related to your new message:"
 MORE ="- ({n} more {what} not listed; find them with memory_search)"
+RECENT = "The most recent exchanges before this point, in full:"
+JOINED = "Decisions and open items in this stretch, joined across its exchanges (a later item can replace an earlier one):"
+GEN_SHARE = 0.5  # most of the outline budget one generation may take
+ROLLUP_TO = 0.5  # a roll-up leaves the generations at about this share of the outline budget, so it does not repeat soon
+ROLLUP_SHARE = 0.25  # most of the outline budget the merged "earlier work" generation may take
+SYNTH_MIN = 4  # a stretch of fewer exchanges is not worth a model call
+SYNTH_RESERVE = 1000  # characters a model's joined notes may add to a generation, counted before deciding on a roll-up
 
 
 def _strip(value):
@@ -108,10 +130,10 @@ def _fill(lines, room):
     return kept, room, len(lines) - len(kept)
 
 
-def _sections(groups, first_full, tag, told, statuses, room, related="") -> list:
-    """The outline by status: decisions, open work, done, and a count of what is left out on purpose."""
+def _sections(groups, lo, hi, tag, told, statuses, room, skip_done=False) -> list:
+    """The outline of exchanges lo..hi-1 by status: decisions, open work, done, and a count of what is left out on purpose."""
     lines, hidden = {"decision": [], "open": [], "done": []}, 0
-    for seq in range(first_full):
+    for seq in range(lo, hi):
         status = statuses.get(seq, "done")
         if status not in lines:  # superseded and noise
             hidden += 1
@@ -131,80 +153,160 @@ def _sections(groups, first_full, tag, told, statuses, room, related="") -> list
     shown["decision"], room, left["decision"] = _fill(lines["decision"], room)
     kept, room, left["open"] = _fill(lines["open"][::-1], room)
     shown["open"] = kept[::-1]
-    shown["done"], room, left["done"] = _fill(lines["done"][::-1], room)
+    shown["done"], room, left["done"] = ([], room, len(lines["done"])) if skip_done else _fill(lines["done"][::-1], room)
     names = {"decision": "standing decisions", "open": "open exchanges", "done": "finished exchanges"}
     parts = []
     for key in heads:
         body = shown[key] + ([MORE.format(n=left[key], what=names[key])] if left[key] else [])
         if body:
             parts.append(heads[key] + "\n" + "\n".join(body))
-        if key == "open" and related:
-            parts.append(related)
     return parts + ([closing] if closing else [])
 
 
-def build_prefix(messages, covered, ids, budget_chars, told=None, statuses=None, related=None) -> list:
+def _gen(groups, lo, hi, tag, told, statuses, room, title, first, joined=(), skip_done=False) -> str:
+    """One generation of the outline: exchanges lo..hi-1, under a title, with the model's joined notes when it wrote some."""
+    parts = ([HEADER] if first else []) + [title]
+    room -= len(title)
+    if joined:
+        parts.append(JOINED + "\n" + "\n".join("- " + line for line in joined))
+        room -= len(parts[-1])
+    if statuses:
+        return "\n\n".join(parts + _sections(groups, lo, hi, tag, told, statuses, room, skip_done))
+    flat = []
+    for seq in range(hi - 1, lo - 1, -1):  # without statuses: one list, newest first until the room is out
+        record = exchange(groups[seq][1])
+        name, said = told.get(seq) or (record["title"], _first_line(record["answer"], 200))
+        line = f"- {tag(seq)}{name} -> {said}"
+        if record["notes"]:
+            line += f" ({_first_line(record['notes'], 160)})"
+        if len(line) > room:
+            flat.append(f"- ({seq + 1 - lo} earlier exchange{'s' if seq > lo else ''} not listed; find them with memory_search)")
+            break
+        flat.append(line)
+        room -= len(line) + 1
+    return "\n\n".join(parts + (["Earlier exchanges, oldest first:\n" + "\n".join(flat[::-1])] if flat else []))
+
+
+def _digest(groups, lo, hi, tag, told, statuses, only=None) -> list:
+    """One line per exchange lo..hi-1 for the model that joins them: id, status, title, summary. Noise is left out."""
+    out = []
+    for seq in range(lo, hi):
+        status = statuses.get(seq, "done")
+        if status == "noise" or (only and status not in only):
+            continue
+        record = exchange(groups[seq][1])
+        title, said = told.get(seq) or (record["title"], record["answer"])
+        out.append(f"{tag(seq) or f'[{seq + 1}] '}({status}) {title}: {_first_line(said, 240)}")
+    return out
+
+
+def _rolled(sizes, budget) -> int:
+    """How many of the oldest generations to merge (0: none). Enough at once that the total lands well under the budget."""
+    if len(sizes) < 2 or sum(sizes) <= budget:
+        return 0
+    return next((k for k in range(2, len(sizes)) if sum(sizes[k:]) + budget * ROLLUP_SHARE + len(HEADER) <= budget * ROLLUP_TO), len(sizes))
+
+
+def _wrap(text) -> dict:
+    return {"type": "text", "text": "<system-reminder>\n" + clean(text) + "\n</system-reminder>"}  # model text and stored titles too
+
+
+def build_prefix(messages, covered, ids, budget_chars, told=None, statuses=None, related=None,
+                 outline_chars=None, prev=None, synth=None, info=None) -> list:
     """The messages that stand in for `messages[:covered]`.
 
     `told` maps seq -> (title, summary) written by a model; `statuses` maps seq -> status (see status.py).
     Without statuses the outline is one list in order, with them it is in sections.
     `related` is the search hits (id, title, snippet) for the message that triggers the compaction.
+
+    The user message holds the session-start reminders, then one block per generation of the outline (oldest
+    first), then the recent exchanges in full. With `outline_chars` (the room for all generations together) and the
+    `prev` state of an earlier compaction, the earlier generations are kept byte for byte and one is added for the
+    exchanges since; only when they outgrow `outline_chars` are the oldest merged into one. Without `outline_chars`
+    there is one generation, which may take what the recent exchanges leave over.
+    `synth(kind, text)` asks a small model for ([lines], why) joining a generation's exchanges ("append") or the
+    oldest generations ("rollup"); with no lines the generation is the rule-written outline alone.
+    `info` is filled with what was done, for the caller to store and log.
     """
-    told = told or {}
+    told, info = told or {}, {} if info is None else info
     old = messages[:covered]
-    turns = rq.human_turns(old)
-    groups = list(_groups(old, turns))
+    groups = list(_groups(old, rq.human_turns(old)))
+    legacy = outline_chars is None
+    synth = None if legacy or not ids else synth
 
     def tag(seq):
         return f"[{ids[seq]}] " if seq in ids else ""
 
-    # Newest first: write whole exchanges until about two thirds of the budget is used.
+    if prev:
+        content, nopen = prev["prefix"][0]["content"], prev["nopen"]
+        opening, blocks = content[:nopen], [dict(b) for b in content[nopen:nopen + len(prev["gens"])]]
+        gens, lo = [dict(g) for g in prev["gens"]], min(prev["recent_from"], len(groups))
+    else:  # session-start context survives as it was: the reminders of the first message
+        opening = [_strip(b) for b in rq.blocks(old[0])
+                   if b.get("type") == "text" and (b.get("text") or "").lstrip().startswith(rq.REMINDER)]
+        blocks, gens, lo = [], [], 0
+
+    # Newest first: write whole exchanges until the recent share of the budget is used.
+    recent_budget = budget_chars * 2 // 3 if legacy else budget_chars - outline_chars
     full, used = [], 0
-    for seq, group in reversed(groups):
-        text = transcript(group, limit=max(4000, budget_chars // 3))
-        if full and used + len(text) > budget_chars * 2 // 3:
+    for seq in range(len(groups) - 1, lo - 1, -1):
+        text = transcript(groups[seq][1], limit=max(4000, budget_chars // 3))
+        if full and used + len(text) > recent_budget:
             break
         full.append((seq, text))
         used += len(text)
     full.reverse()
     first_full = full[0][0] if full else len(groups)
-
-    outline, room = [], budget_chars - used - len(HEADER) - 400
     seqs = {node: seq for seq, node in ids.items()}
-    lines = [f"- [{h['id']}] {h['title']} -> {_first_line(h['snippet'], 200)}" for h in (related or [])
-             if seqs.get(h["id"], first_full) < first_full][:RELATED]  # those in full are already there
-    note = (RELATED_HEAD + "\n" + "\n".join(lines)) if lines else ""
-    room -= len(note)
-    sections = _sections(groups, first_full, tag, told, statuses, room, note) if statuses else []
-    for seq, group in reversed([] if statuses else groups[:first_full]):
-        record = exchange(group)
-        title, said = told.get(seq) or (record["title"], _first_line(record["answer"], 200))
-        line = f"- {tag(seq)}{title} -> {said}"
-        if record["notes"]:
-            line += f" ({_first_line(record['notes'], 160)})"
-        if len(line) > room:
-            outline.append(f"- ({seq + 1} earlier exchange{'s' if seq else ''} not listed; find them with memory_search)")
-            break
-        outline.append(line)
-        room -= len(line) + 1
-    outline.reverse()
+    near = [f"- [{h['id']}] {h['title']} -> {_first_line(h['snippet'], 200)}" for h in (related or [])
+            if seqs.get(h["id"], first_full) < first_full][:RELATED]  # those in full are already there
+    note = (RELATED_HEAD + "\n" + "\n".join(near)) if near else ""
+    recent = [p for p in (note, (RECENT + "\n\n" + "\n\n".join(
+        f"--- Exchange {seq + 1} {tag(seq)}---\n{text}" for seq, text in full)) if full else "") if p]
 
-    parts = [HEADER] + sections + ([note] if note and not statuses else [])
-    if outline:
-        parts.append("Earlier exchanges, oldest first:\n" + "\n".join(outline))
-    if full:
-        parts.append("The most recent exchanges before this point, in full:\n\n"
-                     + "\n\n".join(f"--- Exchange {seq + 1} {tag(seq)}---\n{text}" for seq, text in full))
-    summary = {"type": "text", "text": "<system-reminder>\n" + clean("\n\n".join(parts)) + "\n</system-reminder>"}  # model text and stored titles too
+    def build(glo, ghi, room, title, first, kind, skip_done=False, known=()):
+        """(text, meta) of the generation over glo..ghi-1, with a model's joined notes when there is something to join."""
+        found, why = [], "off"
+        if synth:
+            digest = list(known) + _digest(groups, glo, ghi, tag, told, statuses or {}, ("decision", "open") if kind == "rollup" else None)
+            found, why = [], "short"
+            if len(digest) >= (1 if kind == "rollup" else SYNTH_MIN):
+                try:
+                    found, why = synth(kind, "\n".join(digest))
+                except Exception:  # fail open: the rule-written outline stands
+                    found, why = [], "error"
+        if synth:
+            info["rollup_synth" if kind == "rollup" else "synth"] = "ok" if found else (why or "empty")
+        return (_gen(groups, glo, ghi, tag, told, statuses, room, title, first, found, skip_done),
+                {"lo": glo, "hi": ghi, "kind": kind, "lines": list(found)})
 
-    # Session-start context survives as it was: reminders in the first message, and
-    # every system message (hook output, environment, skill listing, tools added).
-    opening = [_strip(b) for b in rq.blocks(old[0])
-               if b.get("type") == "text" and (b.get("text") or "").lstrip().startswith(rq.REMINDER)]
-    prefix = [{"role": "user", "content": opening + [summary]}]
-    # The API takes a system message only directly before an assistant message, so the
-    # kept system messages become one, and a short assistant message closes the prefix.
-    system = [_strip(b) for m in old[1:] if m.get("role") == "system" for b in rq.blocks(m)]
+    cap = int(outline_chars * GEN_SHARE) if not legacy else budget_chars - used - len(HEADER) - 400 - len(note)
+    new, title = first_full > lo, f"Exchanges {lo + 1} to {first_full}:"
+    sizes = [len(b["text"]) for b in blocks]
+    if new and not legacy:
+        sizes.append(len(_gen(groups, lo, first_full, tag, told, statuses, cap, title, not gens)) + (SYNTH_RESERVE if synth else 0))
+    k = 0 if legacy else _rolled(sizes, outline_chars)
+    info.update(kind="rollup" if k else "append", rolled=min(k, len(gens)), gen_chars=0,
+                kept_chars=len(json.dumps(opening + (blocks if not k else []))) if prev else 0)
+    if k:  # the one change to earlier bytes: the oldest generations merge, and every later byte moves with them
+        n, absorb = min(k, len(gens)), new and k > len(gens)
+        end = first_full if absorb else gens[n - 1]["hi"]
+        text, meta = build(0, end, int(outline_chars * ROLLUP_SHARE), f"Earlier work, rolled up (exchanges 1 to {end}):", True,
+                           "rollup", skip_done=True, known=[line for g in gens[:n] for line in g["lines"]])
+        gens, blocks, new = [meta] + gens[n:], [_wrap(text)] + blocks[n:], new and not absorb
+        info["gen_chars"] = len(text)
+    if new:
+        text, meta = build(lo, first_full, cap, title, not gens, "append")
+        gens, blocks = gens + [meta], blocks + [_wrap(text)]
+        info["gen_chars"] = len(text)
+    recent = recent if blocks else [HEADER] + recent  # with no earlier generation the recent block carries the explanation
+    prefix = [{"role": "user", "content": opening + blocks + ([_wrap("\n\n".join(recent))] if recent else [])}]
+    info.update(gens=gens, recent_from=first_full, nopen=len(opening))
+    # Every system message of the covered range (hook output, environment, skill listing, tools added) survives.
+    # The API takes a system message only directly before an assistant message, so the kept system messages
+    # become one, and a short assistant message closes the prefix. A later generation adds to the end of it.
+    before = prev["prefix"][1]["content"] if prev and prev["prefix"][1].get("role") == "system" else []
+    system = list(before) + [_strip(b) for m in old[prev["covered"] if prev else 1:] if m.get("role") == "system" for b in rq.blocks(m)]
     if system:
         prefix.append({"role": "system", "content": system})
     prefix.append({"role": "assistant", "content": [{"type": "text", "text": ACK}]})
@@ -241,6 +343,18 @@ def _size(content) -> int:
         return 0
 
 
+RETRY_AFTER = 40  # messages: a refused compaction is tried again after this much growth, since Claude Code's own is off
+
+
+def blocked(ctx, messages) -> bool:
+    """True while a refusal of this conversation's compacted form still holds. It lapses after RETRY_AFTER more messages,
+    so a long conversation is never left with no compaction at all (an old mark without a count lapses at once)."""
+    mark = ctx.store.get(f"nocompact:{ctx.lane}")
+    if not mark:
+        return False
+    at = mark.get("at") if isinstance(mark, dict) else None
+    return isinstance(at, int) and len(messages) < at + RETRY_AFTER
+
 class CompactLayer:
     def __init__(self, memory):
         self.memory = memory
@@ -260,7 +374,7 @@ class CompactLayer:
             self._relieve_agent(body, ctx)
             return
         cfg, messages, key = ctx.cfg["compaction"], body["messages"], f"compact:{ctx.lane}"
-        if ctx.store.get(f"nocompact:{ctx.lane}"):  # the upstream refused this conversation's compacted form
+        if blocked(ctx, messages):  # the upstream refused this conversation's compacted form not long ago
             return
         state = ctx.store.get(key)
         if state and not (len(messages) >= state["covered"] and fingerprint(messages[:state["covered"]]) == state["hash"]):
@@ -279,12 +393,15 @@ class CompactLayer:
             # every turn would rewrite the prefix each time and waste the cache.
             grown = not state or sum(len(json.dumps(m, ensure_ascii=False)) for m in tail) / CHARS_PER_TOKEN >= cfg["target_tokens"] / 2
             if grown and self._estimate(body, ctx, current) >= self._trigger(ctx, cfg):
-                state, fresh = self._compact(ctx, messages, covered, cfg), True
+                state, fresh = self._compact(ctx, body, messages, covered, cfg, state), True
         out = messages
         if state:
             out = json.loads(json.dumps(state["prefix"])) + messages[state["covered"]:]
+            self._mark(body, out, state)
             ctx.stats["compaction"] = {"covered": state["covered"], "fresh": fresh,
                                        "prefix_chars": len(json.dumps(state["prefix"], ensure_ascii=False))}
+            if fresh:
+                ctx.stats["compaction"].update(state["log"])
         had = self._stubs(ctx)
         stubbed = self._relieve(body, ctx, cfg, out, at_human_turn)
         if stubbed:
@@ -318,7 +435,7 @@ class CompactLayer:
     def _relieve_agent(self, body, ctx):
         """A sub-agent thread has no stored prefix, but a long one still fills its window: only the stubs apply to it."""
         cfg, messages = ctx.cfg["compaction"], body.get("messages") or []
-        if not (cfg["enabled"] and ctx.agent and rq.has_client_tools(body) and len(messages) > 2)                 or ctx.store.get(f"nocompact:{ctx.lane}"):
+        if not (cfg["enabled"] and ctx.agent and rq.has_client_tools(body) and len(messages) > 2)                 or blocked(ctx, messages):
             return
         had, size = self._stubs(ctx), self._size_if_cold(body, ctx, messages)
         stubbed = self._relieve(body, ctx, cfg, messages, False)
@@ -340,7 +457,7 @@ class CompactLayer:
             ids = dict(kept.get("ids") or {})
             # The wording is chosen when a set is first written and stored with it: a set written by an earlier
             # version has none and keeps the old wording, so a turn in progress sends the same bytes.
-            tpl = kept.get("tpl") or (STUB if ids else STUB_RAW if ctx.cfg["memory"]["enabled"] else STUB)
+            tpl = kept.get("tpl") or (STUB if ids else STUB_RAW if ctx.cfg["memory"]["enabled"] and ctx.cfg["memory"].get("tools", True) else STUB)  # memory_read only when its server is loaded
             same = [b for b in _results(out) if b["tool_use_id"] in ids]
             for block in same:  # the stubs of earlier requests, wherever those results now sit
                 block["content"] = tpl.format(n=ids[block["tool_use_id"]], id=block["tool_use_id"])
@@ -386,14 +503,36 @@ class CompactLayer:
                                 "est": {"messages": len(body["messages"]), "tokens": int(tokens - freed)}})
         return len(same) + len(fresh)
 
-    def _compact(self, ctx, messages, covered, cfg) -> dict:
+    @staticmethod
+    def _mark(body, out, state):
+        """A cache breakpoint on the newest generation, so that a later compaction still reads the prefix up to it.
+
+        Only where the request has room (the API takes four) and with the life of the client's own breakpoints
+        after it, since a longer one may not follow a shorter one. The stored prefix never holds it.
+        """
+        if not state.get("gens"):
+            return
+        later = [b["cache_control"] for m in out[len(state["prefix"]):] for b in rq.blocks(m) if isinstance(b.get("cache_control"), dict)]
+        if not later or json.dumps([body.get("tools"), body.get("system"), out]).count('"cache_control"') >= MAX_MARKS:
+            return
+        out[0]["content"][state["nopen"] + len(state["gens"]) - 1]["cache_control"] = (
+            {"type": "ephemeral", "ttl": "1h"} if any(c.get("ttl") == "1h" for c in later) else {"type": "ephemeral"})
+
+    def _compact(self, ctx, body, messages, covered, cfg, state) -> dict:
+        """Build the prefix: a new generation added to the stored ones, or the oldest merged (see build_prefix)."""
         ids, told, statuses = {}, {}, {}
         if ctx.cfg["memory"]["enabled"]:  # make sure every covered exchange can be read back
             self.memory.index(ctx.lane, ctx.session, ctx.project, messages[:covered], finished=True)
             ids, told, statuses = self.memory.leaves(ctx.lane), self.memory.summaries(ctx.lane), self.memory.statuses(ctx.lane)
         near = self.memory.related(ctx.lane, rq.human_text(messages[covered])) if ids else []
-        prefix = build_prefix(messages, covered, ids, int(cfg["target_tokens"] * CHARS_PER_TOKEN), told, statuses, near)
-        state = {"covered": covered, "hash": fingerprint(messages[:covered]), "prefix": prefix, "ts": time.time()}
+        target, info = int(cfg["target_tokens"] * CHARS_PER_TOKEN), {}
+        prefix = build_prefix(messages, covered, ids, target, told, statuses, near, outline_chars=int(target * cfg["outline_share"]),
+                              prev=state if state and state.get("gens") else None, info=info,
+                              synth=lambda kind, text: summarize.outline_lines(ctx, getattr(ctx, "orig", None) or body, kind, text))
+        log = {k: info[k] for k in ("kind", "rolled", "gen_chars", "kept_chars", "synth", "rollup_synth") if k in info}
+        log["gens"] = len(info["gens"])
+        state = {"covered": covered, "hash": fingerprint(messages[:covered]), "prefix": prefix, "ts": time.time(),
+                 "gens": info["gens"], "recent_from": info["recent_from"], "nopen": info["nopen"], "log": log}
         ctx.store.put(f"compact:{ctx.lane}", state)
         ctx.store.run("delete from state where key = ?", (f"usage:{ctx.lane}",))  # the old count no longer describes it
         ctx.store.run("delete from state where key = ?", (f"stubs:{ctx.lane}",))  # the prefix now stands for those results

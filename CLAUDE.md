@@ -42,7 +42,7 @@ body, in five ways:
     cloud option, only when the person runs it.
   - With `cloud.auto` on (off by default), the proxy pushes a snapshot of a
     running task, packet included, to the user's own `origin` remote on the
-    `almanac/handoff` branch, only in repositories turned on with
+    `cloud/handoff` branch, only in repositories turned on with
     `almanac cloud on`. Off, or a repository not turned on, must mean no git
     command runs at all.
 - **Never read, store or log credentials.** Auth headers are forwarded as

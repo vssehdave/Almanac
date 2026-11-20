@@ -65,6 +65,7 @@ class Round(Base):
         self.stored()  # Alpha only
         self.assertEqual(self.round()["exchanges"], 0)
         self.assertEqual(self.store.run("select count(*) n from convo where project = ?", (self.key(self.b),))[0]["n"], 0)
+        self.assertEqual(self.round()["exchanges"], 0)  # a second round with nothing new must not forget why it waited
         t = self.session(session="bbbbbbbb-0000-4000-8000-000000000005", cwd=self.b).turn(ti.stamp(3), "beta older", "ok")
         self.run_import(t.write())  # now Beta is stored
         self.assertEqual(self.round()["exchanges"], 1)  # the file that was left alone is looked at again

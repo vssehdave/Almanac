@@ -40,16 +40,26 @@ def family(model: str) -> str:
     return next((f for f in FAMILIES if f in low), "") or next((v for k, v in ALIASES.items() if k in low), "")
 
 
-def text_for(model: str, sub: bool = False) -> str:
-    """What is appended for this model, or "" for a model with no cheatsheet. `sub`: a sub-agent's short text."""
+def skills(sub: bool = False, playbooks: bool = True) -> str:
+    """The skills sheet without the lines that do not apply: a sub-agent does one job and hands nothing on, and with
+    playbooks off there is no playbook to follow or record."""
+    drop = (["- Hand a self-contained"] if sub else []) + ([] if playbooks else ["- When a note says an Almanac playbook"])
+    head, *items = read("skills").split("\n- ")
+    kept = [i for i in items if not any(("- " + i).startswith(d) for d in drop)]
+    return "\n- ".join([head] + kept)
+
+
+def text_for(model: str, sub: bool = False, playbooks: bool = True) -> str:
+    """What is appended for this model, or "" for a model with no cheatsheet. `sub`: a sub-agent's short text.
+    `playbooks`: false when playbooks are off, so the sheet does not point at them."""
     name = family(model)
     if not name:
         return ""
     if sub:  # one job, no handovers or merging: the short rules, and the skills unless the model is Haiku
-        return read("agent") if name == "haiku" else "\n\n".join([read("agent"), read("skills")])
+        return read("agent") if name == "haiku" else "\n\n".join([read("agent"), skills(True, playbooks)])
     if name == "haiku":  # short on purpose: its own file is the whole text
         return read(name)
-    parts = [read(name), read("skills")] if name == "fable" else [read(name), read("common"), read("skills")]
+    parts = [read(name), skills(False, playbooks)] if name == "fable" else [read(name), read("common"), skills(False, playbooks)]
     return "\n\n".join(parts)
 
 
@@ -97,7 +107,7 @@ class CheatsheetLayer:
         if not ctx.thread:
             return
         sub = ctx.thread == "sub"  # a fork is not "sub": it keeps its parent's text
-        sheet = text_for(body["model"], sub) if ctx.cfg["cheatsheet"]["mode"] == "on" else ""
+        sheet = text_for(body["model"], sub, (ctx.cfg.get("playbooks") or {}).get("enabled", True)) if ctx.cfg["cheatsheet"]["mode"] == "on" else ""
         lean = lean_text(ctx.cfg)
         books = ctx.cfg.get("playbooks") or {}
         # the main thread and its forks only (a fork shares its parent's cached prefix); Haiku's sheet is short on purpose.

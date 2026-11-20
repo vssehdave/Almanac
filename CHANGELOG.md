@@ -10,6 +10,26 @@
 - **Summary calls run on their own worker.** A slow summary no longer holds back
   other conversations' exchange indexing and usage records. A summary still starts
   only after its own exchange is indexed.
+- **Compaction adds to its outline instead of rebuilding it.** The prefix is now the
+  session context, then the outline in generations, then the recent exchanges. A
+  later compaction keeps every earlier byte and adds one generation for the
+  exchanges since (a cache breakpoint on the newest one lets the cache read up to
+  it), so only the tail is written. With `memory.summary_model` set, each
+  generation gets one small-model note that joins its decisions and open items and
+  marks reversals; failure or off means the rule-written outline, and a sent
+  generation is never edited. When the generations pass the new
+  `compaction.outline_share` (0.35 of `target_tokens`) the oldest are merged into one
+  "earlier work" generation, the only step that rewrites earlier bytes. The request
+  log records each compaction's `kind` (append or rollup) and `kept_chars`, and
+  `almanac report` summarizes them. The related-exchanges list moved to the head of
+  the recent block. A prefix stored before this change is rebuilt once.
+- **Opt-in prompt-cache keepalive.** With `keepalive.enabled` (off by default), a paused main or
+  sub-agent thread gets a tiny request at 0.9 times its shortest cache ttl (270 seconds, or 54
+  minutes for a 1-hour mark) that reads the cached prefix and restarts its life, for about a tenth
+  of the prefix's price instead of a rewrite on return. The body and login stay in memory. It
+  stops on a 429 or other 4xx, 3 failures, a reply that read nothing from the cache,
+  `keepalive.max_idle_minutes` (240) or shutdown, at most `keepalive.max_lanes` (4) threads at a time.
+  Pings are logged as kind `keepalive` and `almanac status` shows them and their cache reads apart.
 
 - **A cold return is compacted.** A request that comes back after its cache has
   expired rewrites the whole prefix whatever Almanac sends, so with
