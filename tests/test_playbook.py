@@ -684,7 +684,7 @@ class WiringTest(Home):
     def test_a_failing_miner_check_never_stops_the_launch(self):
         from getalmanac import launcher
         cfg = config.load()
-        with mock.patch("getplaybook.build.launch_check", side_effect=RuntimeError("boom")), mock.patch("getalmanac.skills.launch_check"),                 mock.patch("subprocess.call", return_value=0), mock.patch("getalmanac.launcher.start", side_effect=SystemExit(0)):
+        with mock.patch("getplaybook.build.launch_check", side_effect=RuntimeError("boom")), mock.patch("getalmanac.skills.launch_check"),                 mock.patch("subprocess.call", return_value=0), mock.patch("getalmanac.launcher.start", side_effect=SystemExit(0)),                 mock.patch("getalmanac.launcher.find_claude", return_value="claude"):  # CI runners have no Claude Code
             with self.assertRaises(SystemExit):  # reached the point after the hook, where the proxy would start
                 launcher.run([], cfg)
 
