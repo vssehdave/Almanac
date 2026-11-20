@@ -166,8 +166,8 @@ class RunTest(Home):
         self.assertIn("almanac playbook approve weekly-report", playbook.run("weekly-report", []))
         playbook.approve("weekly-report")
         out = playbook.run("weekly-report", ["a", "b c"], cwd=self.home)
-        self.assertTrue(out.startswith("exit code 0\n--- stdout ---\n"), out)
-        self.assertEqual(json.loads(out.split("--- stdout ---\n")[1].split("\n--- stderr")[0]), {"args": ["a", "b c"]})
+        self.assertTrue(out.startswith("RESULT: pass\n--- stdout ---\n"), out)
+        self.assertEqual(json.loads(out.split("--- stdout ---\n")[1]), {"args": ["a", "b c"]})
 
     def test_args_must_be_strings_and_unknown_names_refuse(self):
         playbook.save(make(), script=SCRIPT)
@@ -186,20 +186,22 @@ class RunTest(Home):
         playbook.save(make(), script="import sys\nprint('out'); print('bad', file=sys.stderr); sys.exit(3)\n")
         playbook.approve("weekly-report")
         out = playbook.run("weekly-report", [])
-        self.assertIn("exit code 3", out)
-        self.assertIn("out", out.split("--- stderr ---")[0])
-        self.assertIn("bad", out.split("--- stderr ---")[1])
+        self.assertEqual(out, "RESULT: fail (exit 3)\n--- stdout ---\nout\n--- stderr ---\nbad")  # the end of both streams, labelled
         playbook.save(make(), script="import time\nprint('start', flush=True)\ntime.sleep(30)\n")
         playbook.approve("weekly-report")
         out = playbook.run("weekly-report", [], timeout=1)
-        self.assertIn("timed out after 1 seconds", out)
+        self.assertTrue(out.startswith("RESULT: fail (timed out after 1 seconds"), out)
 
     def test_output_is_capped(self):
         playbook.save(make(), script="print('x' * 50000)\n")
         playbook.approve("weekly-report")
         out = playbook.run("weekly-report", [])
-        self.assertLess(len(out), 21000)
+        self.assertLess(len(out), playbook.PASS_OUTPUT + 200)
         self.assertIn("[cut: ", out)
+        playbook.save(make(), script="import sys\nprint('x' * 50000, file=sys.stderr)\nsys.exit(1)\n")
+        playbook.approve("weekly-report")
+        out = playbook.run("weekly-report", [])
+        self.assertLess(len(out), playbook.FAIL_OUTPUT + 200)
 
 
 class CliTest(Home):
@@ -834,7 +836,7 @@ class ToolTest(Home):
         self.tool("playbook_save", playbook=make(), script=SCRIPT)
         text, failed = self.tool("playbook_run", name="weekly-report", args=["x"])
         self.assertFalse(failed)
-        self.assertTrue(text.startswith("Not run"), text)
+        self.assertTrue(text.startswith("RESULT: fail (not run)\nNot run"), text)
         self.assertIn("run.py", text)
         playbook.approve("weekly-report")
         text, _ = self.tool("playbook_run", name="weekly-report", args=["x", "y"])
@@ -845,14 +847,14 @@ class ToolTest(Home):
         playbook.approve("weekly-report")
         self.tool("playbook_save", playbook=make(), script=SCRIPT + "print('new')\n")
         text, _ = self.tool("playbook_run", name="weekly-report")
-        self.assertTrue(text.startswith("Not run"), text)
+        self.assertTrue(text.startswith("RESULT: fail (not run)\nNot run"), text)
 
     def test_run_rejects_bad_args_and_reports_failure(self):
         self.tool("playbook_save", playbook=make(), script="import sys\nsys.exit(5)\n")
         playbook.approve("weekly-report")
         self.assertTrue(self.tool("playbook_run", name="weekly-report", args="not a list")[1])
         self.assertTrue(self.tool("playbook_run", name="weekly-report", args=[1])[1])
-        self.assertIn("exit code 5", self.tool("playbook_run", name="weekly-report")[0])
+        self.assertIn("RESULT: fail (exit 5)", self.tool("playbook_run", name="weekly-report")[0])
         self.assertTrue(self.tool("playbook_run", name="nothing-here")[1])
 
     def test_the_script_runs_in_the_session_folder(self):
