@@ -765,6 +765,18 @@ class AgentFloorTest(Case):
         self.assertEqual(self.sub("Difficulty: simple\nlist the files", LARGE, agent="b"), LARGE)
         self.assertEqual(self.sub("Difficulty: simple\nlist the files", LARGE, agent="c", kind="Explore"), LARGE)
 
+    def test_an_inheriting_agent_with_no_difficulty_line_starts_on_medium(self):
+        self.start(**{"routing.route_inherited": False})  # the default; the floor must not lift the default back to Opus
+        self.send(convo([{"text": "hello"}]), model=LARGE)
+        self.assertEqual(self.sub("Look around the repo and tell me what it does.", LARGE), MEDIUM)
+        self.assertEqual(self.sub("Difficulty: simple\nlist the files", LARGE, agent="b"), LARGE)  # a marked task keeps the floor
+        self.assertEqual(self.sub("Difficulty: hard\nfind the race", LARGE, agent="c"), LARGE)
+
+    def test_an_agent_with_its_own_model_keeps_it_without_a_difficulty_line(self):
+        self.start(**{"routing.route_inherited": False})
+        self.send(convo([{"text": "hello"}]), model=MEDIUM)  # the parent runs on Sonnet; this agent asked for Opus
+        self.assertEqual(self.sub("Look around the repo and tell me what it does.", LARGE), LARGE)
+
     def test_a_pin_overrides_the_floor(self):
         self.send(convo([{"text": "hello"}]), model=MEDIUM)
         self.store.put(routing.pin_key("proj1"), "small")

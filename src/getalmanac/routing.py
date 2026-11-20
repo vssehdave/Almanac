@@ -9,7 +9,8 @@ model writes its whole prefix into that model's cache again, at the cache-write
 price, and the old model's cache goes cold. So on the main thread a move down is a
 priced decision (see `price`), and a move up is made whenever the turn needs it.
 Sub-agent threads start small and fresh, so they are routed freely, though never below the model
-their own definition asked for. A thread that keeps failing climbs one rung of its starting
+their own definition asked for. One that names no model and carries no difficulty line, so would only
+inherit the main thread's large model, starts on medium instead. A thread that keeps failing climbs one rung of its starting
 tier's ladder (`routing.ladders`: a model, then an effort level) and never past the end of it.
 
 Every decision is made once per human turn and stored, so the whole tool loop of
@@ -309,12 +310,15 @@ class RoutingLayer:
         if kind == "main" and turn:
             prev = store.get(f"route:{ctx.lane}:{turn - 1}:{_digest(person_text(messages[turns[turn - 1]]))}")
         cur = prev["tier"] if prev and not prev.get("skip") else tier_now
+        parent = (store.get(f"main:{ctx.session}") or {}).get("sent") if kind == "sub" else None
+        default = kind == "sub" and tier == "inherit" and pin not in TIERS and tier_now == "large" and parent == body["model"]
+        if default:  # no model of its own and no difficulty sign: the parent's Opus is not the right start
+            tier, why = "medium", "a sub-agent with no difficulty line and no model of its own starts on medium"
         if tier == "inherit":
             tier = cur
         failed_text = why == FAILED_WHY
         if kind == "sub" and pin not in TIERS:  # the model the agent starts on is a floor; `route_inherited` lifts it for one that only inherited the parent's
-            parent = (store.get(f"main:{ctx.session}") or {}).get("sent")
-            if (not cfg["route_inherited"] or parent and parent != body["model"]) and TIERS.index(tier) < TIERS.index(tier_now):
+            if not default and (not cfg["route_inherited"] or parent and parent != body["model"]) and TIERS.index(tier) < TIERS.index(tier_now):
                 tier, why = tier_now, why + f"; kept at the {tier_now} model the agent starts on"
         if pin not in TIERS and TIERS.index(tier) > top:
             tier, why = TIERS[top], why + f" (held at the {cfg['ceiling']} ceiling)"
