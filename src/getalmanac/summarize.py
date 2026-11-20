@@ -14,7 +14,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import accounts
+from . import accounts, profile
 from .memory import MemoryLayer, clean
 from .status import STATUSES
 
@@ -311,8 +311,8 @@ class _Ask:
 
 
 def refine(memory, cfg, project=None, limit=None, dry_run=False, say=print, facts=False) -> dict:
-    """Give imported exchanges (lane `import:%`) with no model summary one, newest first, using the login in ~/.claude
-    (the personal one: never CLAUDE_CONFIG_DIR). `limit` defaults to what is left of today's summary_daily_calls and
+    """Give imported exchanges (lane `import:%`) with no model summary one, newest first, using the login Almanac runs with
+    (CLAUDE_CONFIG_DIR when set, else ~/.claude). `limit` defaults to what is left of today's summary_daily_calls and
     may exceed it when given. Stops, keeping the exchange's try, when the API answers 401/403/429/529 or a pause is set.
     With `facts`, the exchanges that have a summary but were never asked for facts are the ones done: only their facts
     are stored. `say` receives the progress lines."""
@@ -338,7 +338,7 @@ def refine(memory, cfg, project=None, limit=None, dry_run=False, say=print, fact
         return report
     if paused_until(store):
         report["stopped"] = "paused until " + time.strftime("%H:%M", time.localtime(paused_until(store)))
-    folder = Path.home() / ".claude"
+    folder = profile.user_dir()
     tok = accounts.token(folder)
     if not report["stopped"] and not tok:
         report["stopped"] = f"no valid login in {folder} (run `claude` and log in there)"

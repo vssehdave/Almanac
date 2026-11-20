@@ -77,19 +77,19 @@ class Refine(ti.ImportBase):
             report = summarize.refine(self.memory, self.cfg, **kw)
         return report, out.getvalue()
 
-    def test_the_token_comes_from_the_personal_login_only(self):
+    def test_the_token_comes_from_the_login_almanac_runs_with(self):
         self.stored(n=1)
         self.refine()
         self.assertEqual(len(FakeConn.sent), 1)
         sent = FakeConn.sent[0]
-        self.assertEqual(sent["headers"]["authorization"], "Bearer personal-token")
+        self.assertEqual(sent["headers"]["authorization"], "Bearer work-token")
         self.assertIn("oauth-2025-04-20", sent["headers"]["anthropic-beta"])
         self.assertEqual(sent["body"]["model"], MODEL)
         self.assertEqual(sent["body"]["system"][0]["text"], summarize.IDENTITY)
         self.assertEqual(sent["path"], "/v1/messages?beta=true")
 
-    def test_it_stops_without_a_personal_login(self):
-        os.remove(os.path.join(self.home, ".claude", ".credentials.json"))
+    def test_it_stops_without_a_login_in_the_config_dir(self):
+        os.remove(os.path.join(self.other, ".credentials.json"))
         self.stored(n=1)
         report, out = self.refine()
         self.assertEqual(FakeConn.sent, [])

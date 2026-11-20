@@ -96,11 +96,12 @@ whether or not the conversation will use them.
   placed next to that message, and so it is for a later message that matches.
   Every skill stays listed and can be invoked by name at any time.
 - **Agents.** The list of agent types gets the same treatment: each description
-  is cut to `startup.agent_chars` characters (60 by default, `0` turns this off),
+  is cut to `startup.agent_chars` characters (160 by default, enough for most to be shown whole; `0` turns this off),
   and the `(Tools: ...)` part of a cut line is dropped. An agent type that two
   of the project's last ten conversations called keeps its full line, as a
   skill does, and one whose description matches your message gets its full
-  line next to that message. Every agent stays listed and can be used by name.
+  line next to that message. Every agent stays listed and can be used by name, and the
+  listing's note tells Claude to prefer a fitting specialist over `general-purpose`.
 - **System prefix** (off by default, `startup.system_prefix`). Claude Code sends
   its session notes (MCP server instructions, advisor notes, the deferred tool
   names, the agent types and the skill list) in a message that comes after what
@@ -585,7 +586,8 @@ one that inherited it, so with the setting on it counts both as inherited.
 `almanac route pin` beats this floor. Forks always stay on their
 parent's model. Without that line, a task that
 asks for no coding and no hard job keeps the model Claude Code chose for it,
-whatever the agent's type.
+whatever the agent's type, except that a sub-agent which only inherited an Opus
+parent starts on Sonnet instead.
 
 **Switching models costs money.** Anthropic's prompt cache belongs to one
 model. If a conversation moves to another model, the whole history is written
