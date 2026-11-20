@@ -6,8 +6,10 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from types import SimpleNamespace
 from unittest import mock
 
 import test_summarize as ts
@@ -315,6 +317,75 @@ class LoadTest(unittest.TestCase):
         with mock.patch.object(semantic, "missing", lambda: []), mock.patch.object(semantic, "present", lambda: False), \
                 mock.patch.dict(semantic._loaded, clear=True):
             self.assertIsNone(semantic.load())
+
+
+class RecallLockTest(Case):
+    """A first recall encodes its query without the store's lock, once, and every concurrent first caller gets the same bytes."""
+
+    def seeded(self):
+        self.add("l1", BREAD, "Mix flour, water and starter.")
+        self.memory.set_summary(self.leaf("How do I")["id"], "Bread", "Baked.", "done", ["bake sourdough with rye flour"])
+        self.memory.embed_pending()
+
+    def watch(self, encode_extra=None):
+        calls = []
+
+        def encode(texts):
+            calls.append(list(texts))
+            if encode_extra:
+                encode_extra()
+            return [fake_vector(t) for t in texts]
+
+        self.model = semantic.Embedder("fake-1", encode)
+        return calls
+
+    def ctx(self, lane):
+        cfg = config.load()
+        return SimpleNamespace(cfg=cfg, thread="main", session="s", lane=lane, store=self.store, project=self.key, stats={}, agent_type="")
+
+    def body(self, text):
+        return {"model": "m", "tools": [{"name": "Bash", "description": "x", "input_schema": {"type": "object"}}],
+                "messages": [{"role": "user", "content": [{"type": "text", "text": text}]}]}
+
+    def test_the_query_is_encoded_once_for_exchanges_and_facts(self):
+        self.seeded()
+        calls = self.watch()
+        self.assertEqual(self.search("baguette recipe"), ["Bread"])
+        self.assertEqual(calls, [["baguette recipe"]])
+
+    def test_another_thread_can_use_the_store_while_the_query_is_encoded(self):
+        self.seeded()
+        free = []
+
+        def probe():
+            def grab():
+                got = self.store.lock.acquire(timeout=2)
+                free.append(got)
+                if got:
+                    self.store.lock.release()
+            t = threading.Thread(target=grab)
+            t.start()
+            t.join()
+
+        self.watch(probe)
+        layer, body = MemoryLayer(self.memory), self.body("baguette recipe please")
+        layer.transform(body, self.ctx("l2"))
+        self.assertEqual(free, [True])
+        self.assertIn("Almanac memory", json.dumps(body))
+
+    def test_two_first_callers_get_the_same_text_and_one_is_stored(self):
+        self.seeded()
+        gate = threading.Barrier(2, timeout=5)
+        self.watch(lambda: gate.wait())  # both threads are inside the encoder before either may finish
+        layer, bodies = MemoryLayer(self.memory), [self.body("baguette recipe please") for _ in range(2)]
+        threads = [threading.Thread(target=layer.transform, args=(b, self.ctx("l2"))) for b in bodies]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(json.dumps(bodies[0]), json.dumps(bodies[1]))
+        self.assertIn("Almanac memory", json.dumps(bodies[0]))
+        self.assertEqual(len(self.store.run("select 1 from state where key = 'recall:l2'")), 1)
 
 
 @unittest.skipIf(semantic.missing() or not semantic.present(), "needs the semantic packages and the downloaded model")
