@@ -732,7 +732,7 @@ replaces the packaged one from the next run.
 ## Adopting skills and plugins
 
 Almanac ships no third-party skills. It carries one plugin of its own (`almanac`:
-the `playbook` and `adopt` skills) and loads it, plus every plugin folder in
+the `adopt` skill) and loads it, plus every plugin folder in
 `<almanac home>/bundle/` (your own bundle), into each session it starts, with
 Claude Code's `--plugin-dir`. Nothing is copied into the Claude config folder,
 so they are present under any account and only in sessions started through
@@ -768,6 +768,15 @@ keeping any already there. `almanac config set bundle.enabled false` turns the
 whole bundle off, the package plugin too.
 
 ## Playbooks
+
+Playbooks are the [Playbook](https://github.com/vssehdave/Playbook) package (`getplaybook`), which Almanac depends on, so
+`pip install` brings it. Almanac keeps its own part: it puts the offers at the end of the newest message, frozen per
+conversation so the cached prefix never changes, and it feeds the prompt library's repeated routes to the miner as extra
+candidates. Everything else (the folder format, approval, matching, the runner, mining, `almanac playbook ...`) is Playbook's,
+on Almanac's folder (`~/.almanac/playbooks`) and Almanac's `playbooks.*` settings. The `playbook_find`, `playbook_run` and
+`playbook_save` tools come from Playbook's own MCP server, which Almanac adds next to its memory server. For the `playbook`
+skill (how Claude writes one) install the Playbook plugin too; its hooks stay silent under Almanac, which sets
+`ALMANAC_PROXY` for the Claude Code it starts.
 
 A playbook is a recorded way of doing a task you repeat: when it applies, the
 ordered list of decisions, which skills and agents were used, and, where the
@@ -925,7 +934,7 @@ the cheatsheet. So when you type a new request and your previous one took at
 least `playbooks.nudge_after` tool calls (default `25`, `0` is off), saved no
 playbook with `playbook_save` and matched none, Almanac adds one sentence to
 the note in the new request: "The previous task took N tool calls and has no
-playbook. If it will come up again, record it with the `almanac:playbook` skill
+playbook. If it will come up again, record it with the `playbook` skill
 once this request is answered." Earlier messages are not touched. The sentence
 is decided once per request and kept, so later requests of the same turn carry
 the same bytes. It is never added to a sub-agent's thread, and not when

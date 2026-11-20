@@ -701,7 +701,7 @@ def build(cfg=None) -> Proxy:
     from .cheatsheet import CheatsheetLayer
     from .compact import CompactLayer
     from .memory import Memory, MemoryLayer, ProjectLayer
-    from .playbook import PlaybookLayer
+    from .playbook_layer import PlaybookLayer
     from .routing import RoutingLayer
     from .startup import AgentsLayer, SkillsLayer, ToolsLayer
     from .strip import StripLayer

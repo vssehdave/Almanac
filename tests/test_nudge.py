@@ -2,12 +2,11 @@ import json
 import os
 import unittest
 
-from helpers import Rig
+from helpers import Rig, playbook
 from test_playbook import ASK, Home, SetProject, body, call, human, make, result, said
-from getalmanac import playbook
 from getalmanac import request as rq
 from getalmanac.memory import Memory
-from getalmanac.playbook import PlaybookLayer
+from getalmanac.playbook_layer import PlaybookLayer
 from getalmanac.store import Store
 
 OLD = "refactor the parser module so it streams"
@@ -48,7 +47,7 @@ class NudgeTest(Home):
         sent = self.next_turn(self.rig(), OLD, 30)
         (text,) = nudges(sent)
         self.assertEqual(text, "<system-reminder>\nThe previous task took 30 tool calls and has no playbook. If it will come up again, "
-                               "record it with the `almanac:playbook` skill once this request is answered.\n</system-reminder>")
+                               "record it with the `playbook` skill once this request is answered.\n</system-reminder>")
         last = sent["messages"][-1]
         self.assertEqual(rq.blocks(last)[-1]["text"], NEW)  # typed text untouched and last
         self.assertEqual(nudges({"messages": sent["messages"][:-1]}), [])  # earlier messages carry nothing
@@ -67,7 +66,7 @@ class NudgeTest(Home):
         playbook.save(make(source="claude", triggers=["refactor parser"]))  # a draft: nobody approved it yet
         self.assertEqual(nudges(self.next_turn(self.rig(), OLD, 30)), [])
         self.assertEqual(len(nudges(self.next_turn(self.rig(), "write the release notes for friday", 30))), 1)  # the control
-        from getalmanac import mine
+        from helpers import mine
         mine._save(mine.candidates_path(), {"candidates": [{"id": "c1", "tools": [], "examples": ["write the release notes for friday"]}]})
         self.assertEqual(nudges(self.next_turn(self.rig(), "write the release notes for friday again", 30)), [])
 

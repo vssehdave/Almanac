@@ -20,7 +20,8 @@ USAGE = """almanac sandbox [--plugin PATH ...] [--list] [-- claude arguments]
 The sandbox keeps its own settings, login, history and plugins in ~/.claude-sandbox
 (ALMANAC_SANDBOX sets another folder). Run /login in it once."""
 
-CLEARED = ("ANTHROPIC_BASE_URL", "ALMANAC_PROXY", "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL", "ALMANAC_HOME")
+CLEARED = ("ANTHROPIC_BASE_URL", "ALMANAC_PROXY", "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL", "ALMANAC_HOME",
+           "PLAYBOOK_HOME", "PLAYBOOK_CONFIG")
 
 
 def folder() -> Path:

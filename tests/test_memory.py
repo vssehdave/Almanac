@@ -676,21 +676,20 @@ class McpTest(Case):
     def test_handshake_and_tool_list(self):
         self.assertEqual(self.ask("initialize", {"protocolVersion": "2025-06-18"})["result"]["protocolVersion"], "2025-06-18")
         self.assertEqual([t["name"] for t in self.ask("tools/list")["result"]["tools"]],
-                         ["memory_search", "memory_read", "memory_projects", "playbook_find", "playbook_save", "playbook_run",
+                         ["memory_search", "memory_read", "memory_projects",
                           "memory_list", "memory_handover", "memory_user_messages", "library_find", "memory_review"])
         self.assertIsNone(mcp.handle(self.memory, {"jsonrpc": "2.0", "method": "notifications/initialized"}, self.alpha))
         self.assertEqual(self.ask("nope")["error"]["code"], -32601)
 
-    def test_the_tool_list_follows_the_memory_and_playbook_switches(self):
+    def test_the_tool_list_follows_the_memory_switch_and_leaves_the_playbook_tools_to_their_own_server(self):
         def names(**sections):
             cfg = config.load()
             for section, over in sections.items():
                 cfg[section].update(over)
             with mock.patch.object(config, "load", return_value=cfg):
                 return [t["name"] for t in self.ask("tools/list")["result"]["tools"]]
-        self.assertEqual([n for n in names(memory={"tools": False}) if not n.startswith("playbook_")], [])
-        self.assertEqual(len(names(memory={"tools": False})), 3)
-        self.assertEqual([n for n in names(playbooks={"enabled": False}) if n.startswith("playbook_")], [])
+        self.assertEqual(names(memory={"tools": False}), [])
+        self.assertFalse([n for n in names() if n.startswith("playbook_")])
         self.assertIn("library_find", names(playbooks={"enabled": False}))
         self.assertNotIn("library_find", names(memory={"tools": False}))
 

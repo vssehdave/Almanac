@@ -2,11 +2,11 @@ import json
 import unittest
 
 import test_library as tl
-from helpers import Rig
+from helpers import Rig, playbook
 from test_playbook import Home, SetProject, body, human, make, said
-from getalmanac import library, playbook
+from getalmanac import library
 from getalmanac import request as rq
-from getalmanac.playbook import PlaybookLayer
+from getalmanac.playbook_layer import PlaybookLayer
 
 PROMPT = "Make the x test pass in the proxy"
 TYPED = "Make the x test pass in the proxy please"

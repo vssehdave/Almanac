@@ -7,7 +7,7 @@ import os
 import sys
 import time
 
-from . import __version__, config, library, playbook
+from . import __version__, config, library
 from .memory import _BREAK, QUOTED, READ_CHARS, READ_LINES, Memory, _quote, ended, unreviewed
 from .store import Store
 
@@ -35,26 +35,6 @@ TOOLS = [
     {"name": "memory_projects",
      "description": "List the projects Almanac has memory for, and each one's most recent conversations.",
      "inputSchema": {"type": "object", "properties": {}}},
-    {"name": "playbook_find",
-     "description": "Find recorded playbooks (a way of doing a repeated task) that match some words. Returns the top 5 "
-                    "with name, title, when it applies and its status. Given a playbook's exact name, returns its steps.",
-     "inputSchema": {"type": "object", "required": ["query"], "properties": {
-         "query": {"type": "string", "description": "The request, or words from it"}}}},
-    {"name": "playbook_save",
-     "description": "Record, or update, a playbook for a task that will come up again. A script is a draft until the "
-                    "owner approves it with `almanac playbook approve NAME`.",
-     "inputSchema": {"type": "object", "required": ["playbook"], "properties": {
-         "playbook": {"type": "object", "description": "name (lowercase, digits, hyphens), title, when, triggers (2 to 5 short phrases), "
-                                                       "steps (ordered \"If X: do Y with Z\" lines, at most 30), skills, agents, "
-                                                       "args [{name, help}], project (optional)"},
-         "script": {"type": "string", "description": "The text of run.py, if the job can be done with no model"}}}},
-    {"name": "playbook_run",
-     "description": "Run an approved playbook (the playbooks it includes first, then its own script) with no model in the loop. "
-                    "Returns `RESULT: pass`, or `RESULT: fail (exit N)` with only what failed, and for a playbook of several steps "
-                    "`RESUME: playbook_run {...}`: fix the cause, then call that to go on from the failed step. A draft script is not run.",
-     "inputSchema": {"type": "object", "required": ["name"], "properties": {
-         "name": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}},
-         "from": {"type": "string", "description": "A step to start at (its name, or its number from 1), to go on after a failure"}}}},
     {"name": "memory_list",
      "description": "List stored conversations, newest first: number, day, title, a summary and how each one ended. "
                     "Filter by time and project. Use the number as `conversation` in memory_handover and memory_user_messages.",
@@ -288,39 +268,16 @@ def call(memory, name, args, cwd) -> str:
         return render_messages(memory.user_messages(
             project=project, convo_id=convo_id, since=_when(args.get("since")), until=_when(args.get("until"), end=True),
             query=str(args.get("query") or ""), limit=max(1, min(100, int(args.get("limit") or 30)))))
-    if name == "playbook_find":
-        query = str(args.get("query") or "").strip()
-        named = playbook.load(query) if playbook.valid_name(query) else None
-        if named:  # asked for by name: the whole playbook, nothing cut
-            return playbook.full(named)
-        found = playbook.find(query, memory.projects.see(cwd, touch=False) or "")
-        return ("\n".join(f"{pb['name']}: {pb['title']} ({pb['status']}, used {pb['uses']}x)\n    {pb['when']}" for pb in found)
-                or "No playbook matches.")
-    if name == "playbook_save":
-        given = args.get("playbook")
-        if not isinstance(given, dict):
-            raise ValueError("playbook must be an object")
-        pb = playbook.save(dict(given, source="claude"), args.get("script"))
-        text = f"Saved playbook {pb['name']} at {playbook.folder(pb['name'])} (status: {pb['status']})."
-        if pb["status"] == "draft" and pb["script"]:
-            text += (f" Its script is a draft and will not run through playbook_run. Tell the owner to read "
-                     f"{playbook.script_path(pb['name'])} and approve it with `almanac playbook approve {pb['name']}`.")
-        elif pb["status"] == "draft":
-            text += f" It is a draft and is not offered until the owner approves it with `almanac playbook approve {pb['name']}`."
-        return text
     if name == "library_find":
         return library.render_found(library.search(memory.store, str(args.get("query") or ""), memory.projects.see(cwd, touch=False) or "", limit=3, min_tools=library.min_tools()))
     if name == "memory_review":  # the proxy files the review: it sees the model, this process does not
         return "Review noted. It counts only if an Opus model made this call."
-    if name == "playbook_run":
-        return playbook.run(str(args.get("name") or ""), args.get("args") or [], cwd, start=args.get("from"))
     raise KeyError(name)
 
 
 def listed(cfg) -> list:
-    """The tools to offer: memory_* and library_find only while memory.tools is on, playbook_* only while playbooks are."""
-    memory, books = cfg["memory"].get("tools", True), cfg["playbooks"].get("enabled", True)
-    return [t for t in TOOLS if (books if t["name"].startswith("playbook_") else memory)]
+    """The tools to offer: memory_* and library_find, while memory.tools is on. The playbook tools are the getplaybook server's."""
+    return TOOLS if cfg["memory"].get("tools", True) else []
 
 
 def handle(memory, message, cwd):
@@ -372,9 +329,17 @@ def serve(stdin=None, stdout=None) -> int:
 
 
 def client_config(cfg=None) -> dict:
-    """The `--mcp-config` entry that makes Claude Code start this server."""
-    env = {"ALMANAC_HOME": str(config.home()), "PYTHONIOENCODING": "utf-8"}
-    entry = {"command": sys.executable, "args": ["-m", "getalmanac", "mcp"], "env": env}
-    if (cfg or {}).get("memory", {}).get("always_load") is True:
-        entry["alwaysLoad"] = True  # off by default: it puts the tool schemas into every session start
-    return {"mcpServers": {"almanac": entry}}
+    """The `--mcp-config` entries that make Claude Code start this server and, with playbooks on, getplaybook's."""
+    cfg = cfg or {}
+    servers = {}
+    if (cfg.get("memory") or {}).get("enabled", True) and (cfg.get("memory") or {}).get("tools", True):
+        env = {"ALMANAC_HOME": str(config.home()), "PYTHONIOENCODING": "utf-8"}
+        entry = {"command": sys.executable, "args": ["-m", "getalmanac", "mcp"], "env": env}
+        if (cfg.get("memory") or {}).get("always_load") is True:
+            entry["alwaysLoad"] = True  # off by default: it puts the tool schemas into every session start
+        servers["almanac"] = entry
+    if (cfg.get("playbooks") or {}).get("enabled", True):
+        # through `almanac playbook mcp`, so the server has Almanac's home, merged settings and wording (`almanac playbook approve ...`)
+        servers["playbook"] = {"command": sys.executable, "args": ["-m", "getalmanac", "playbook", "mcp"],
+                               "env": {"ALMANAC_HOME": str(config.home()), "PYTHONIOENCODING": "utf-8"}}
+    return {"mcpServers": servers}

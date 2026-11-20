@@ -344,6 +344,17 @@ class Safety(ImportBase):
         self.assertIn("pending", out.getvalue())
 
 
+class ReaderFolders(unittest.TestCase):
+    def test_autoimport_reads_only_the_home_folder_and_import_follows_the_config_dir(self):
+        from pathlib import Path
+        home = Path.home() / ".claude"
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": "/some/work"}):
+            self.assertEqual(importer.transcript_dirs(None, "autoimport"), [home])
+            self.assertEqual(importer.transcript_dirs(None, "import"), [Path("/some/work")])
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": ""}):
+            self.assertEqual(importer.transcript_dirs(None, "import"), [home])
+
+
 class LocalCommands(ImportBase):
     def commands(self, stdout):
         t = self.session()

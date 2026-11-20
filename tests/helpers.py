@@ -16,10 +16,28 @@ if "ALMANAC_HOME" not in os.environ:  # tests search by words; the ones for sear
 for _name in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy", "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS"):
     os.environ.pop(_name, None)  # the machine's own proxy must not change what the tests connect to
 
-from getalmanac import config, proxy as proxy_mod  # noqa: E402
+from getalmanac import _pbind, config, proxy as proxy_mod  # noqa: E402,F401
+from getplaybook import build as _build, mine as _mine, offer as _offer, run as _run, store as _store  # noqa: E402
 from getalmanac.report import Log  # noqa: E402
 
 SESSION = "11111111-2222-3333-4444-555555555555"
+
+
+class Namespace:
+    """One name over several of getplaybook's modules, so a test says `playbook.save` and `mine.mine`."""
+
+    def __init__(self, *modules):
+        self._modules = modules
+
+    def __getattr__(self, name):
+        for module in self._modules:
+            if hasattr(module, name):
+                return getattr(module, name)
+        raise AttributeError(name)
+
+
+playbook = Namespace(_store, _run, _offer)
+mine = Namespace(_mine, _build)
 
 
 def sse(text="ok", usage=None, tool=None, model=None) -> bytes:

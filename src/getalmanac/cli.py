@@ -44,7 +44,7 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac skill accept ITEM    stop the launch warning for this item at its current contents (`unaccept` undoes it)
   almanac pack list            the pack: third-party skills and plugins, each pinned to a commit
   almanac pack install [NAME]  install the pack's skills through the scan; plugins and programs are only shown
-  almanac playbook list|show|approve [--auto]|remove|path   recorded ways of doing repeated tasks, and their scripts
+  almanac playbook list|show|approve [--auto]|remove|path|run   recorded ways of doing repeated tasks, and their scripts
   almanac playbook mine        find tasks you repeat in past sessions, no model (--days 30, --min 3)
   almanac playbook compile     have one Claude Code session write the best repeat up as a playbook (--top N, --dry-run)
   almanac playbook dedupe      merge playbooks that do the same route into one (--include-approved to touch approved ones)
@@ -600,79 +600,12 @@ def _pack(rest):
 
 
 def _playbook(rest):
-    from . import playbook
+    """`almanac playbook ...` is the getplaybook command, on Almanac's playbooks (a library of repeated prompts feeds its miner)."""
+    from getplaybook import cli as playbook_cli
 
-    parser = argparse.ArgumentParser(prog="almanac playbook")
-    sub = parser.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("list")
-    sub.add_parser("path")
-    mining = sub.add_parser("mine")
-    mining.add_argument("--days", type=int, default=30)
-    mining.add_argument("--min", type=int, default=3, dest="minimum")
-    writing = sub.add_parser("compile")
-    writing.add_argument("--top", type=int, default=1)
-    writing.add_argument("--dry-run", action="store_true")
-    sub.add_parser("work")  # the background run started at launch
-    sub.add_parser("dedupe").add_argument("--include-approved", action="store_true", help="also merge approved playbooks")
-    for name in ("show", "approve", "remove"):
-        one = sub.add_parser(name)
-        one.add_argument("name")
-        if name == "approve":
-            one.add_argument("--auto", action="store_true", help="also let the proxy run the script before the model sees a matching request")
-    args = parser.parse_args(rest)
-    if args.cmd in ("mine", "compile", "work"):
-        from . import mine
+    from . import _pbind  # noqa: F401
 
-        if args.cmd == "mine":
-            mine.mine(args.days, args.minimum, out=_print)
-            return 0
-        if args.cmd == "work":
-            return mine.work()
-        return mine.compile_top(args.top, args.dry_run, out=_print)
-    if args.cmd == "path":
-        print(playbook.root())
-        return 0
-    if args.cmd == "dedupe":
-        merged = playbook.dedupe(args.include_approved, out=_print)
-        print(f"{merged} merged" if merged else "nothing to merge")
-        return 0
-    if args.cmd == "list":
-        for pb in playbook.listing():
-            print(f"{pb['name']:<28} {playbook.shown_status(pb):<22} {pb['uses']:>4}  {pb['title']}")
-        return 0
-    pb = playbook.load(args.name) if playbook.valid_name(args.name) else None
-    if pb is None:
-        print(f"almanac: no usable playbook called {args.name!r}; see `almanac playbook list`", file=sys.stderr)
-        return 2
-    if args.cmd == "show":
-        print(f"{pb['name']}  ({playbook.shown_status(pb).replace(', auto', ', automatic')}, used {pb['uses']} times, from {pb['source']}, {pb['created']})\n{pb['title']}\n"
-              f"When: {pb['when']}\nTriggers: {', '.join(pb['triggers'])}\nProject: {pb['project'] or 'any'}")
-        print("Steps:\n" + "\n".join(f"  {i}. {s}" for i, s in enumerate(pb["steps"], 1)))
-        print(f"Skills: {', '.join(pb['skills'])}\nAgents: {', '.join(pb['agents'])}")
-        print(f"Route: {' > '.join(playbook.route_of(pb))}\nFor: {pb['agent_type'] or 'the main thread'}\nIncludes: {', '.join(pb['includes'])}")
-        if pb["script"]:
-            print(f"Script: {playbook.script_path(pb['name'])}  (hash {pb['hash'] or 'not approved'})")
-        return 0
-    if args.cmd == "remove":
-        playbook.remove(args.name)
-        print(f"removed {args.name}")
-        return 0
-    try:
-        digest, text = playbook.approve(args.name, args.auto)
-    except ValueError as why:
-        print(f"almanac: {why}", file=sys.stderr)
-        return 2
-    if not pb["script"]:
-        print(f"Approved {args.name}. It has no script; Claude is shown its steps when a request matches.")
-        return 0
-    lines = text.splitlines()
-    _print("\n".join(lines[:40]) + (f"\n... ({len(lines) - 40} more lines)" if len(lines) > 40 else ""))
-    print(f"\nApproved {args.name}. sha256 {digest}\nIf the script changes, it goes back to draft until you approve it again.")
-    if args.auto:
-        print("Automatic: Almanac runs this script before Claude sees a matching request, in the conversation's folder, "
-              f"for up to {playbook.AUTO_TIMEOUT} seconds, with no model and no prompt. A script that runs the project's own tests or build runs "
-              "that repository's code. Approve again without --auto to stop that.")
-    return 0
+    return playbook_cli.main(rest)
 
 
 def _library(rest):

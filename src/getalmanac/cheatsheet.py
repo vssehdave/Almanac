@@ -74,10 +74,12 @@ def index() -> str:
     conversation), so a conversation's system prompt keeps its bytes for the run.
     """
     try:
-        from . import playbook
+        from getplaybook import store
 
-        books = sorted((pb for pb in playbook.listing() if not pb["project"] and pb["status"] == "approved"), key=lambda pb: pb["name"])[:INDEX]
-        lines = [f"- {pb['name']}: {' '.join(pb['title'].split())[:80]}" + (" (script)" if playbook.runnable(pb) else "")
+        from . import _pbind  # noqa: F401
+
+        books = sorted((pb for pb in store.listing() if not pb["project"] and pb["status"] == "approved"), key=lambda pb: pb["name"])[:INDEX]
+        lines = [f"- {pb['name']}: {' '.join(pb['title'].split())[:80]}" + (" (script)" if store.runnable(pb) else "")
                  for pb in books]
     except Exception:  # a bad playbook folder must never block a request
         return ""

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Playbooks are their own package.** The playbook code (folder format, approval and
+  signing, matching, route offers, includes and `RESULT`/`RESUME`, dedupe, the miner and
+  the compile step) moved to Playbook (`getplaybook`, a dependency now), which also works
+  without Almanac as a command and a Claude Code plugin. Almanac keeps the proxy side:
+  the offer layer (`playbook_layer.py`), the prompt library's candidates for the miner,
+  and `almanac playbook ...`, which now runs Playbook's command on `~/.almanac/playbooks`
+  with the same `playbooks.*` settings, so existing playbooks, approvals and automatic
+  entries keep working. The `playbook_*` tools are served by Playbook's MCP server (added
+  to the MCP config next to the memory server) and the bundled `playbook` skill is
+  Playbook's plugin. Claude Code now also gets `PLAYBOOK_HOME` and `PLAYBOOK_CONFIG`, and
+  `ALMANAC_PROXY` makes the plugin's hooks stay silent. New setting `playbooks.skip_folders`.
+
 - **Playbooks are offered from what a thread is doing, can include each other, and
   report one clear result.** Typed words rarely say what the work is ("continue"),
   so on each request of the main thread and of sub-agents Almanac now compares the

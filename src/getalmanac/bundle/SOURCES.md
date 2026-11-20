@@ -8,4 +8,4 @@ with a row in that folder's own `SOURCES.md`.
 
 | Folder | From | Commit | Licence | Changed |
 |---|---|---|---|---|
-| `almanac` | written here | n/a | MIT | the `playbook` and `adopt` skills and the manifest |
+| `almanac` | written here | n/a | MIT | the `adopt` skill and the manifest |

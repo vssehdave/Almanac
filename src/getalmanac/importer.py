@@ -39,28 +39,15 @@ _GIT_C = re.compile(r"\bgit\s+(?:-[\w-]+\s+)*?-C\s+" + _ARG)
 
 
 def transcript_dirs(cfg, purpose) -> list:
-    """The Claude Code config folders (each with a projects/ folder of session files) one reader may use. The one
-    place that states which reader sees which:
+    """The Claude Code config folders (each with a projects/ folder of session files) one reader may use:
       "autoimport": ~/.claude only. It runs unasked every hour, so another config folder (a work account, a sandbox)
                     is never imported, whatever CLAUDE_CONFIG_DIR says;
-      "import":     what `almanac memory import` looks in for a folder name it was given: $CLAUDE_CONFIG_DIR, else ~/.claude;
-      "mine":       ~/.claude, $CLAUDE_CONFIG_DIR and playbooks.transcript_dirs, those that exist. The miner only reads."""
+      "import":     what `almanac memory import` looks in for a folder name it was given: $CLAUDE_CONFIG_DIR, else ~/.claude.
+    (The playbook miner's folders are getplaybook's: config.transcript_dirs.)"""
     home, env = Path.home() / ".claude", os.environ.get("CLAUDE_CONFIG_DIR") or ""
     if purpose == "autoimport":
         return [home]
-    if purpose == "import":
-        return [Path(env).expanduser() if env else home]
-    extra = ((cfg if cfg is not None else config.load()).get("playbooks") or {}).get("transcript_dirs") or []
-    found, seen = [], set()
-    for raw in [home, env, *extra]:
-        if not isinstance(raw, (str, Path)) or not str(raw):
-            continue
-        path = Path(raw).expanduser()
-        real = os.path.normcase(os.path.realpath(path))
-        if real not in seen and (path / "projects").is_dir():
-            seen.add(real)
-            found.append(path)
-    return found
+    return [Path(env).expanduser() if env else home]
 
 
 def transcripts(words) -> list:
