@@ -172,6 +172,8 @@ class Idle:
 class SummaryLayer:
     """Runs only in the background; it never touches a request."""
 
+    slow = True  # its jobs make network calls: the proxy runs them on a worker of their own
+
     def __init__(self, memory):
         self.memory = memory
         self.pending = {}  # lane -> (timer, Idle): conversations waiting to go idle

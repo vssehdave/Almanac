@@ -7,6 +7,9 @@
   it and wrote it back, so calls that finished out of order (or on the importer's own
   connection) overwrote each other. Reserving a call and adding its tokens are now
   single atomic updates in the database.
+- **Summary calls run on their own worker.** A slow summary no longer holds back
+  other conversations' exchange indexing and usage records. A summary still starts
+  only after its own exchange is indexed.
 
 - **A cold return is compacted.** A request that comes back after its cache has
   expired rewrites the whole prefix whatever Almanac sends, so with

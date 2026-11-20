@@ -2,6 +2,7 @@ import json
 import os
 import sqlite3
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -72,6 +73,46 @@ class Case(unittest.TestCase):
 
     def leaves(self):
         return [dict(r) for r in self.store.run("select * from node where kind = 'leaf' order by id")]
+
+
+class LanesTest(Case):
+    def start(self, **overrides):
+        layers = [ProjectLayer(self.memory), compact.CompactLayer(self.memory), MemoryLayer(self.memory), SummaryLayer(self.memory)]
+        self.rig = Rig(respond=self.respond, layers=layers, store=self.store, overrides=overrides)
+        self.addCleanup(self.rig.close)
+
+    def usage_of_b(self):
+        return self.store.run("select 1 from state where key = 'usage:' || (select c.lane from convo c join node n on n.convo = c.id "
+                              "where n.kind = 'leaf' and n.text like '%Rename the parser%')")
+
+    def test_a_slow_summary_does_not_hold_back_another_conversations_indexing_or_usage(self):
+        held, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        fast = self.respond
+
+        def respond(req):
+            if json.loads(req["body"]).get("model") == MODEL:
+                held.set()
+                release.wait(20)
+            return fast(req)
+
+        self.rig.upstream.respond = respond
+        body = {"model": "m", "system": [{"type": "text", "text": IDENTITY},
+                                         {"type": "text", "text": f"# Environment\n - Primary working directory: {self.alpha}\n"}],
+                "messages": [tc.human("Add a retry helper to the fetch module")], "tools": tc.TOOLS}
+        self.rig.messages(body, session="aaaaaaaa-2222-3333-4444-555555555555")
+        self.assertTrue(held.wait(10))  # lane A's summary call is now waiting on the network
+        body["messages"] = [tc.human("Rename the parser module")]
+        self.rig.messages(body, session="bbbbbbbb-2222-3333-4444-555555555555")
+        end = time.time() + 5
+        while time.time() < end and not self.usage_of_b():
+            time.sleep(0.02)
+        self.assertTrue(self.store.run("select 1 from node where kind = 'leaf' and text like '%Rename the parser%'"))
+        self.assertTrue(self.usage_of_b())
+        self.assertFalse(release.is_set())
+        release.set()
+        self.rig.proxy.drain(20)
+        self.assertEqual(sorted(r["summary"] != "" for r in self.leaves()), [True, True])  # a summary still follows its exchange
 
 
 class SummaryTest(Case):
