@@ -141,6 +141,8 @@ DEFAULTS = {
         "heartbeat_minutes": 10,
         "stall_after": 5,  # push at once, marked "stalled", after this many failed upstream attempts in a row; 0 is off
         "repos": [],  # project keys of the repositories that take part; `almanac cloud on` / `off` in one changes it
+        "allow_public": False,  # true pushes the (sealed) hand-off branch even when `gh` says the repository is public
+        "routine": "",  # id of the scheduled cloud task (routine) that takes over; enabled only while a hand-off is live and its login has usage left (UNVERIFIED API, see cloud.ROUTINE_*)
     },
 }
 
