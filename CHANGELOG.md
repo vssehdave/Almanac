@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Auto-import and its summary pass use the login Almanac runs with.** They read
+  `$CLAUDE_CONFIG_DIR` when it is set (for example a work account), else `~/.claude`,
+  instead of always `~/.claude`. So `almanac status` no longer reports "no valid login"
+  for someone who runs only the second account. A scratch or eval `ALMANAC_HOME` still
+  never imports.
+
 - **Playbooks are their own package.** The playbook code (folder format, approval and
   signing, matching, route offers, includes and `RESULT`/`RESUME`, dedupe, the miner and
   the compile step) moved to Playbook (`getplaybook`, a dependency now), which also works

@@ -3,14 +3,15 @@
 The proxy only sees conversations that go through it. While it runs, this thread imports the transcripts
 Claude Code saved for the other sessions, a little after the proxy starts and then once an hour:
 
-  1. new or grown session files under ~/.claude/projects, at most `memory.auto_import_days` old and not written to
+  1. new or grown session files under the projects folder of the login Almanac runs with
+     ($CLAUDE_CONFIG_DIR, else ~/.claude), at most `memory.auto_import_days` old and not written to
      for an hour (a session still being written is left for the next round), for projects the store already
      holds conversations of (it never fills an empty store, and a forgotten project stays forgotten);
-  2. the summary pass (summarize.refine, the personal login, within memory.summary_daily_calls) for those exchanges;
+  2. the summary pass (summarize.refine, with that same login, within memory.summary_daily_calls) for those exchanges;
   3. a vector for every exchange and fact that lacks one, with the local model (no model call, no API tokens).
 
-Only ~/.claude is read. Other config folders (a work account, a sandbox) are never imported, whatever
-CLAUDE_CONFIG_DIR says. Everything here is idempotent: a file is read again only when its size or time changed.
+Only that one config folder is read, never another account's. A scratch or eval ALMANAC_HOME never imports
+(see start()). Everything here is idempotent: a file is read again only when its size or time changed.
 """
 import os
 import threading
