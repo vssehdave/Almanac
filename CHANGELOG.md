@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- **Playbooks are offered from what a thread is doing, can include each other, and
+  report one clear result.** Typed words rarely say what the work is ("continue"),
+  so on each request of the main thread and of sub-agents Almanac now compares the
+  route so far (the phases of the tool calls), the assistant's own narration and,
+  for a route that ships, whether the repo has commits to push, and offers an
+  approved playbook as one short note at the end of the newest message when two of
+  the three agree. The decision is stored per message (a retry sends the same
+  bytes) and `requests.jsonl` records `playbook_offer`, `signals` and
+  `playbook_taken`. New playbook fields: `route`, `agent_type` (a playbook of a
+  sub-agent type is offered only to that type, and `""` only to the main thread)
+  and `includes` (playbooks run first, in order, stopping at the first failure;
+  `playbook_run` takes `from` to go on from a step, and a failure ends with a
+  `RESUME:` line). `playbook_run` now leads with `RESULT: pass` or
+  `RESULT: fail (exit N)` and shows only the failing part (failing test names
+  and tracebacks for unittest and pytest). The miner reads sub-agent transcripts,
+  finds test-loop, poll and inspect chains and offers them as small playbooks the
+  bigger ones include. A playbook that would repeat a stored route adds its triggers
+  to it instead, and `almanac playbook dedupe` merges the ones already there.
+  Behaviour change: the reply of `playbook_run` has a new shape (no `exit code`
+  line, no separate stderr section).
+
 - **Skills are adopted, not shipped.** The package no longer carries third-party
   skills or agents, and `pack.json` is no longer shipped (`almanac pack` reads
   `<almanac home>/pack.json`). Sessions load the package's own `almanac` plugin plus

@@ -860,15 +860,65 @@ compacted or rewound so that the place is gone, it is left out.
   `playbook` skill tells Claude when and how.
 - `playbook_run {name, args}`: run an approved script with the Python from
   Almanac's own environment, in isolated mode, without a shell, in the session's
-  folder, for at most 120 seconds. It returns the exit code, stdout and stderr
-  (20,000 characters each at most).
+  folder, for at most 120 seconds. Its reply leads with one line, `RESULT: pass`
+  or `RESULT: fail (exit N)`, so the model does not spend requests checking.
+  After a pass, the last 20 lines of the script's stdout (2,000 characters at
+  most). After a fail, only the failing part: for a unittest or pytest run the
+  names and tracebacks of the failing tests, otherwise the last 20 lines of
+  stdout and of stderr, labelled (4,000 characters at most).
+
+**Route offers.** Your prompts are often "continue" or "yeah build that", so the
+words you typed do not say what the work is; what the thread is doing does.
+On each request of the main thread and of every sub-agent (not forks), Almanac
+looks at three signals with plain code and no model: the route so far (the
+phases of the tool calls since your newest typed message, or in the whole
+sub-agent thread: test, commit, push, pr, ci, merge, poll, inspect ...), the
+assistant's own narration ("Committing and merging", "Running the tests") against
+the playbook's triggers of two words or more, and, only for a route that ships
+(commit, push, pr, ci, merge, release), a repo fact: `git rev-list --count
+@{u}..HEAD` is more than 0 or the branch has no upstream, run in the session's
+folder with a 2-second limit, once per turn. When two of the three agree, one
+short note goes at the end of the newest message, never in the cached prefix:
+`playbook "NAME" covers the rest of this: call playbook_run {...}` with the
+arguments. A playbook is offered at most once per turn; the decision is stored
+per message, so a retry sends the same bytes. Only approved playbooks are
+offered, and the typed-words match above still works. A playbook's `route` (the
+phases it goes through, written by the miner; older ones fall back to `phases`)
+must contain what has been done so far, in order. `agent_type` says whose it is:
+`""` (the default) is the main thread's, a name is offered only to sub-agents of
+that type. When a reply of that thread later calls `playbook_run` with the
+offered name, the next request's line in `requests.jsonl` carries
+`playbook_taken`; the line of the request that carried the offer has
+`playbook_offer` and `signals`, so the offer-to-take rate can be measured.
+`playbooks.route` (default `true`) turns this off.
+
+**Playbooks that include playbooks.** `includes` in `playbook.json` lists other
+playbooks (by name, up to 10, four levels deep, no loops; the field is `includes`
+because `uses` already counts uses). `playbook_run` on the outer one runs the
+included ones in order, then its own script, and stops at the first fail with
+`RESULT: fail (exit N)`, `FAILED STEP: name (2 of 3)`, the failing part and
+`RESUME: playbook_run {"name": ..., "from": "step", "args": [...]}`. Once the
+model has fixed the cause it calls that, and the run goes on from that step
+(`from` is a step's name or its number from 1) without repeating the ones
+before. Every playbook is offered on its own by route, so a sub-agent in a
+test-fix loop is offered the small `verify` playbook even when no bigger
+workflow is recognised; one whose outer playbook was already called in the turn
+is not offered. An included playbook may carry an `agent_type`: the data says
+that step belongs to a sub-agent of that type; Almanac only offers it.
+
+**One playbook per route.** When compiling would write a playbook whose route
+(Jaccard of phases 0.8 or more, same agent type and project) a stored one
+already has, the new triggers are added to the stored one and no folder is made
+(an automatic playbook keeps its triggers). `almanac playbook dedupe` merges
+the ones already there (approved ones stay unless `--include-approved`; one that
+another playbook includes keeps its name) and prints what it merged.
 
 **Commands.** `almanac playbook list`, `show NAME`, `approve NAME [--auto]`,
-`remove NAME`, `path`.
+`remove NAME`, `path`, `dedupe [--include-approved]`.
 
 **Settings.** `playbooks.enabled` (default `true`) turns the whole feature off;
 `playbooks.inject` (default `true`) set to `false` stops the notes but leaves
-the tools.
+the tools; `playbooks.route` (default `true`) set to `false` stops route offers.
 
 **A nudge to record one.** Recording a playbook depends on Claude remembering
 the cheatsheet. So when you type a new request and your previous one took at
@@ -948,6 +998,18 @@ your past sessions and write it up, with no effort from you.
   `playbook_find` with a playbook's name, which returns its full steps, and to
   run one marked `(script)` with `playbook_run`. The list is read once per run,
   so it does not change the system prompt in the middle of a run.
+
+**Sub-agents and building blocks.** The miner also reads sub-agent transcripts
+(`<session>/subagents/agent-<id>.jsonl`, the type from the `.meta.json` beside
+it; one of unknown type is skipped) and tags each turn with the agent type; each
+type is mined on its own. It finds the short chains that repeat inside other work:
+test, read the failures, run again (`test-loop`); wait until something is done
+(`poll`: an until or while loop with sleep, `--watch`); and git status or diff
+before a commit (`inspect`). A chain that recurs across different workflows, or
+in one sub-agent type's work, is a candidate for a small playbook of its own,
+compiled before the workflows, and the bigger playbooks then `include` it
+instead of repeating its steps. Mining stays read-only and keeps only typed or
+brief text.
 
 Settings for this: `playbooks.background` (default `true`),
 `playbooks.compile_per_day` (default `1`) and `playbooks.transcript_dirs`
@@ -1362,7 +1424,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac skill audit` | Scan installed skills and plugins not scanned yet, then a table (`--again` for all) |
 | `almanac pack list` | The pinned third-party skills and plugins in `pack.json` |
 | `almanac pack install [NAME]` | Install the pack's skills through the scan; plugins and programs are only shown |
-| `almanac playbook list` | Playbooks: name, status, uses, title. Also `show NAME`, `approve NAME [--auto]`, `remove NAME`, `path`, `mine [--days N] [--min N]`, `compile [--top N] [--dry-run]` |
+| `almanac playbook list` | Playbooks: name, status, uses, title. Also `show NAME`, `approve NAME [--auto]`, `remove NAME`, `path`, `mine [--days N] [--min N]`, `compile [--top N] [--dry-run]`, `dedupe [--include-approved]` |
 | `almanac library list` | The prompt library's current entries: id, date, uses, the request's first 70 characters. `--project NAME` filters. Also `show ID` (the entry, its fixes and its history of replaced entries) and `forget ID` (deletes the entry and the older ones it replaced) |
 | `almanac projects` | Projects seen. `projects merge FROM INTO`, `projects rename NAME NEW` |
 | `almanac config [set KEY VALUE \| path]` | Show or change settings |
