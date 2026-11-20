@@ -89,6 +89,7 @@ def _serve(rest):
     except KeyboardInterrupt:
         pass
     finally:
+        server.proxy.keepalive.stop_all()
         launcher.unpublish(token)
     return 0
 
