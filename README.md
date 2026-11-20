@@ -648,11 +648,13 @@ request is never dropped.
 **Audit it.** `almanac route status` lists each decision with its reason, the
 estimated cost of staying and of switching, and whether it was applied.
 `almanac status` also shows usage for the last 5 and 24 hours (requests, input,
-cache write, cache read and output tokens, and a weighted total at list-price
-ratios, not the plan's real accounting) and a cache line: the share of input
-read from cache, the cold returns (a request that came back after a pause
-longer than the shortest cache life it asked for) with the cache writes they
-cost, and the cache lives Claude Code asked for. `almanac report --json`
+cache write, cache read and output tokens, as raw counts: there is no price
+weighting, since a plan counts usage its own way), the cold returns of each
+period (a request that came back after a pause longer than the shortest cache
+life it asked for) with the cache tokens they wrote, that as a share of the
+period's cache writes plus input, how many Almanac compacted
+(`compaction.on_cold`) and the estimated tokens that saved, and a cache line:
+the share of input read from cache and the cache lives Claude Code asked for. `almanac report --json`
 carries the same under `meter`. The log records `cache` and `idle` per request.
 
 `almanac report` has one line on the prompt library for the last 24 hours:

@@ -9,6 +9,13 @@
   the main thread at a human turn, by the stubs inside a long turn and in a
   sub-agent. The request log records `cold` (estimated tokens before and after).
 
+- **`almanac status` shows raw usage, not a weighted total.** The weighted figure used
+  API list-price ratios, which are not a plan's accounting, so it is gone from `status`
+  and from `almanac report --json`. Each period (5 hours, 24 hours) shows input, cache
+  write, cache read and output tokens, and for cold returns: how many, the cache tokens
+  they wrote, that as a share of the period's cache writes plus input, how many
+  `compaction.on_cold` compacted, and the estimated tokens that saved.
+
 - **Playbooks are their own package.** The playbook code (folder format, approval and
   signing, matching, route offers, includes and `RESULT`/`RESUME`, dedupe, the miner and
   the compile step) moved to Playbook (`getplaybook`, a dependency now), which also works

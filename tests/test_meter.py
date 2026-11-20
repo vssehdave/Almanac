@@ -51,16 +51,28 @@ class MeterTest(unittest.TestCase):
         self.assertEqual(m["5h"]["requests"], 3)
         self.assertEqual(m["24h"]["requests"], 4)
         self.assertEqual(m["24h"]["cache_read_input_tokens"], 4000)
-        self.assertEqual(m["24h"]["weighted"], 4 * (10 + 125 + 100 + 100))
+        self.assertNotIn("weighted", m["24h"])
         self.assertEqual(m["cache"]["cold_returns"], 2)
         self.assertEqual(m["cache"]["cold_write_tokens"], 200)
+        self.assertEqual(m["24h"]["cold_share"], round(200 / (4 * 110), 3))  # cold writes over the period's writes + input
+        self.assertEqual((m["5h"]["cold_returns"], m["5h"]["cold_write_tokens"]), (1, 100))
         self.assertEqual(m["cache"]["ttl_seen"], {"5m": 3, "1h": 2})
         self.assertEqual(m["cache"]["read_share"], round(4000 / 4440, 3))
 
     def test_empty_log_is_fine(self):
         m = report.meter([], NOW)
         self.assertIsNone(m["cache"]["read_share"])
-        self.assertEqual(len(report.render_meter([], NOW)), 3)
+        self.assertEqual(len(report.render_meter([], NOW)), 5)
+
+    def test_compacted_cold_returns_are_counted_with_their_saving(self):
+        records = [rec(60, ttl=("1h",), idle=4000, cold={"before": 90_000, "after": 30_000}),
+                   rec(120, ttl=("1h",), idle=4000), rec(180, idle=10, cold={"before": 5, "after": "x"})]
+        m = report.meter(records, NOW)
+        self.assertEqual((m["24h"]["cold_returns"], m["24h"]["cold_compacted"], m["24h"]["cold_saved_tokens"]), (2, 1, 60_000))
+        text = " ".join(report.render_meter(records, NOW))
+        self.assertIn("2 returns wrote 200 cache tokens", text)
+        self.assertIn("1 compacted, 60,000 tokens saved", text)
+        self.assertNotIn("weighted", text)
 
     def test_status_prints_the_lines(self):
         import time
@@ -74,7 +86,8 @@ class MeterTest(unittest.TestCase):
         text = out.getvalue()
         self.assertIn("usage 5h", text)
         self.assertIn("usage 24h", text)
-        self.assertIn("cold returns", text)
+        self.assertIn("returns wrote", text)
+        self.assertNotIn("weighted", text)
         self.assertIn('"meter"', text)
 
 
