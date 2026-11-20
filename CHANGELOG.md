@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **Skills are adopted, not shipped.** The package no longer carries third-party
+  skills or agents, and `pack.json` is no longer shipped (`almanac pack` reads
+  `<almanac home>/pack.json`). Sessions load the package's own `almanac` plugin plus
+  every plugin folder in `<almanac home>/bundle/`, one `--plugin-dir` each.
+  `almanac skill add --bundle SOURCE [--ref SHA] [--skill NAME] [--name FOLDER]`
+  fetches through the same quarantine and scan as `skill add` (DO_NOT_INSTALL
+  refused; CAUTION needs `--accept-caution` or a yes at the terminal; nothing
+  fetched is run), then installs skills and agents as plain text into that folder
+  with a manifest, the licence file, the `disable-model-invocation` flag removed,
+  hooks listed but never installed, MCP servers kept only when pinned to an exact
+  version, and a row in `bundle/SOURCES.md`. A new `adopt` skill in the package
+  plugin then rewires the copy to Almanac memory and playbooks. The launch check
+  now also watches the bundle folders. `almanac skill import-bundle PATH` carries
+  an older bundle over once. Behaviour changes: the skills cheatsheet no longer
+  names the old bundled skills (an install that wants that text keeps it in its
+  own `cheatsheet path` copy), and `skill add` asks at a terminal before
+  refusing a CAUTION verdict.
+
 - **One record per finished exchange.** The prompt library row is now written for
   every exchange that made a tool call (sub-agent exchanges too) and also holds the
   distinct tool names and the call count. `library.min_tools` became a read-time
