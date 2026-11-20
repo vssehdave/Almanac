@@ -729,37 +729,43 @@ To change the text, put a file with the same name (`opus.md`, `sonnet.md`,
 `haiku.md`, `common.md` or `agent.md`) in the folder `almanac cheatsheet path` prints. It
 replaces the packaged one from the next run.
 
-## Bundled skills and agents
+## Adopting skills and plugins
 
-Almanac carries its own set of skills and sub-agents and loads them into every
-session it starts, with Claude Code's `--plugin-dir`. Nothing is copied into
-the Claude config folder, so they are present under any account and only in
-sessions started through `almanac`. They are fixed copies kept in this
-repository (`src/getalmanac/bundle/`), so there is nothing to install or update.
+Almanac ships no third-party skills. It carries one plugin of its own (`almanac`:
+the `playbook` and `adopt` skills) and loads it, plus every plugin folder in
+`<almanac home>/bundle/` (your own bundle), into each session it starts, with
+Claude Code's `--plugin-dir`. Nothing is copied into the Claude config folder,
+so they are present under any account and only in sessions started through
+`almanac`.
 
-| Plugin | What it adds |
-|---|---|
-| `egm` | Plan before building: brainstorm, draft a design document, review it with fresh reviewers |
-| `interfaces` | How to build and finish an interface: typography, colour, layout, accessibility, review |
-| `astryx` | Working with the Astryx design system |
-| `untangle` | A phased clean-up of a whole codebase |
-| `security-audit` | A multi-phase security audit with validated findings |
-| `crew` | 71 specialist sub-agents (planning, review per language, build fixes, audits); 62 of them are pointed at the skills above |
-| `api-anything` | Calling a website through its own data requests, for scrapers and sites with no API. Runs locally only: nothing goes to its shared catalog |
-| `cli-anything` | Making a program with no API usable by agents through a generated command-line tool, from a local source tree (edited copy) |
-| `bla` | Hardening release artifacts against automated reverse engineering |
-| `almanac` | Almanac's own skill: how to write a [playbook](#playbooks) |
+To add a skill, plugin or agent pack, in any domain, ask Claude (it uses the
+`adopt` skill), or run it yourself:
 
-The [working rules](#5-working-rules-for-each-model) tell each model when to reach for
-them, so no slash command is needed: every bundled skill may be started by
-the model itself. Fable gets only that part of the rules (`fable.md` and
-`skills.md`), since its own working method is the one the others are taught.
-Where each plugin came from, at which commit, and what was changed is in
-`src/getalmanac/bundle/SOURCES.md`. `almanac config set bundle.enabled false`
-turns the whole bundle off.
+```
+almanac skill add --bundle https://github.com/someone/skills --ref <full commit SHA> [--skill NAME] [--name FOLDER]
+```
 
-`api-anything` and `bla` each start a small server through `npx` at a fixed
-version (Node 22 or newer). That code comes from npm on first use.
+It goes through the same scan as `skill add`: fetched into quarantine, scanned
+with SkillSpector, refused on DO_NOT_INSTALL, and on CAUTION installed only with
+`--accept-caution` or a yes at the terminal. Nothing fetched is ever run. The
+skills and agents are copied as plain text into `<almanac home>/bundle/<name>`
+with a manifest, the licence file, and the `disable-model-invocation` flag
+removed so Claude can start them without a slash command. Hooks are listed and
+never installed. An MCP server is kept only when pinned to an exact version;
+others are left out and named. A row with the source, commit, licence and
+changes is added to `bundle/SOURCES.md`, and the command prints the folder.
+
+The `adopt` skill then rewires the copy to work through Almanac: its own notes
+and state become Almanac memory, repeatable procedures become playbooks,
+shipped agents get a model and a "Skills to use" section, descriptions are
+shortened to fit Almanac's short listing, and references to the original's own
+commands, install steps and outside services are removed. Each edit is logged
+in that row.
+
+`almanac skill import-bundle PATH` copies plugin folders (and a `SOURCES.md` or
+`pack.json` next to them, when you have none) from an older bundle into yours,
+keeping any already there. `almanac config set bundle.enabled false` turns the
+whole bundle off, the package plugin too.
 
 ## Playbooks
 
@@ -1019,7 +1025,7 @@ override. Set
 
 **The pack**
 
-`pack.json` (shipped with Almanac) lists third-party skills and plugins, each pinned to a
+`pack.json` (in your Almanac folder; the package ships none) lists third-party skills and plugins, each pinned to a
 full commit SHA. `almanac pack list` shows them. `almanac pack install [NAME]`
 installs the skill entries through the same scan as `skill add`, at the pinned
 commit. Plugin entries are only scanned and shown with their manual commands,
@@ -1321,7 +1327,8 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac cheatsheet show [opus\|sonnet\|haiku\|fable\|agent]` | The working rules added for that model (`agent`: what a sub-agent gets), and their size |
 | `almanac cheatsheet path` | Where your own copies of the rules go |
 | `almanac skill scan PATH\|URL` | Scan a skill or plugin (exit 0 SAFE, 1 CAUTION, 2 DO_NOT_INSTALL, 3 not scanned) |
-| `almanac skill add URL\|PATH` | Fetch into quarantine, scan, install the skills only if SAFE (`--skill`, `--ref`, `--accept-caution`, `--replace`) |
+| `almanac skill add URL\|PATH` | Fetch into quarantine, scan, install the skills only if SAFE (`--skill`, `--ref`, `--accept-caution`, `--replace`). With `--bundle` (and `--name`): install as a plugin in your Almanac bundle instead |
+| `almanac skill import-bundle PATH` | Copy plugin folders from an older bundle into your Almanac bundle |
 | `almanac skill accept NAME` | Stop the launch warning for an item at its current contents (`skill unaccept NAME` undoes it) |
 | `almanac skill audit` | Scan installed skills and plugins not scanned yet, then a table (`--again` for all) |
 | `almanac pack list` | The pinned third-party skills and plugins in `pack.json` |
@@ -1425,6 +1432,7 @@ Everything is under `~/.almanac/` (or `ALMANAC_HOME`):
 | `logs/requests.jsonl` | One line per request: sizes, token counts, timing. No message text, no credentials |
 | `mcp.json` | The entry that tells Claude Code how to start the memory tools |
 | `playbooks/` | One folder per playbook: `playbook.json` and, optionally, `run.py` |
+| `bundle/` | Your adopted plugins, one folder each, and `SOURCES.md` listing where each came from |
 | `skills.json` | Skills installed by `almanac skill add`: source, commit, content hash, score, verdict, date |
 | `skill-scans.json` | The last scan of each installed skill and plugin, by content hash |
 | `quarantine/` | Fetched sources while they are scanned; removed when the command ends |

@@ -1,9 +1,0 @@
-{
-  "name": "bla",
-  "version": "3.4.1",
-  "description": "Harden release artifacts against automated reverse engineering: the hardening playbook and its MCP tools.",
-  "license": "MIT",
-  "mcpServers": {
-    "bla": { "command": "npx", "args": ["-y", "bla-agents@3.4.1", "mcp"] }
-  }
-}

@@ -122,7 +122,7 @@ DEFAULTS = {
     },
     # "on" appends the working rules for the answering model (Opus, Sonnet or Haiku) to each thread's system prompt
     "bundle": {
-        "enabled": True,  # load the skills and agents kept in this package (bundle/) into every session
+        "enabled": True,  # load the package's own plugin and the plugins in <almanac home>/bundle into every session
     },
     "cheatsheet": {"mode": "on"},
     "playbooks": {

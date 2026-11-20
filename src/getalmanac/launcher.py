@@ -67,11 +67,15 @@ def with_memory_tools(args, cfg):
 
 
 def with_bundle(args, cfg):
-    """Add Almanac's own skills and agents (the plugins under `bundle/`) to Claude Code's arguments."""
-    folder = Path(__file__).parent / "bundle"
-    if not cfg["bundle"]["enabled"] or not folder.is_dir():
+    """Add Almanac's own plugin and every plugin in the user's bundle (`<almanac home>/bundle/`) to Claude Code's arguments."""
+    if not cfg["bundle"]["enabled"]:
         return args
-    return ["--plugin-dir", str(folder), *args]
+    own = Path(__file__).parent / "bundle" / "almanac"
+    mine = config.home() / "bundle"
+    folders = [own] if own.is_dir() else []
+    if mine.is_dir():
+        folders += sorted(p for p in mine.iterdir() if p.name != "almanac" and (p / ".claude-plugin" / "plugin.json").is_file())
+    return [arg for folder in folders for arg in ("--plugin-dir", str(folder))] + list(args)
 
 
 def with_profile(args, cfg):

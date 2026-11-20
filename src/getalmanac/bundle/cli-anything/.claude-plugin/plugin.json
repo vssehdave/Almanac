@@ -1,5 +1,0 @@
-{
-  "name": "cli-anything",
-  "description": "Build a stateful command-line tool for a program with no API, from a local source tree: build, test, validate and refine it.",
-  "license": "Apache-2.0"
-}

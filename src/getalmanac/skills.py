@@ -5,6 +5,7 @@ fetched into a quarantine folder, nothing in it is ever run, and only folders ho
 copied out, without their links, and only after a SAFE scan.
 """
 import hashlib
+import io
 import json
 import os
 import re
@@ -270,6 +271,15 @@ def _json(path):
     return {}
 
 
+def mcp_servers(tree: Path) -> dict:
+    """The MCP servers a plugin declares, in .mcp.json or its manifest."""
+    servers = dict(_json(tree / ".mcp.json").get("mcpServers") or {})
+    manifest = _json(tree / ".claude-plugin" / "plugin.json").get("mcpServers")
+    if isinstance(manifest, dict):
+        servers.update(manifest)
+    return servers
+
+
 def plugin_parts(tree: Path):
     """What a Claude Code plugin at `tree` declares that runs code: {"hooks": [...], "mcp": [...]}, or None."""
     if not (tree / ".claude-plugin").is_dir():
@@ -289,10 +299,7 @@ def plugin_parts(tree: Path):
                 for hook in (entry.get("hooks") or []) if isinstance(entry, dict) else []:
                     if isinstance(hook, dict):
                         hooks.append(f"{event}: {str(hook.get('command', hook.get('type', '?')))[:120]}")
-    servers = dict(_json(tree / ".mcp.json").get("mcpServers") or {})
-    if isinstance(manifest.get("mcpServers"), dict):
-        servers.update(manifest["mcpServers"])
-    for name, spec in servers.items():
+    for name, spec in mcp_servers(tree).items():
         spec = spec if isinstance(spec, dict) else {}
         mcp.append(f"{name}: {' '.join(str(x) for x in [spec.get('command', spec.get('url', '?')), *(spec.get('args') or [])])[:160]}")
     return {"hooks": hooks, "mcp": mcp}
@@ -325,8 +332,34 @@ def save_json(path, data):
     os.replace(tmp, path)
 
 
-def add(source, wanted=None, ref=None, accept_caution=False, replace=False, plugin=False, out=print) -> int:
-    """Fetch, scan and install skill folders. Returns the worst verdict's exit code (3 on any failure)."""
+def _check(targets, accept_caution, ask, out):
+    """Scan each (label, folder) and show it. Returns (results, stop): the exit code to stop with, or None to go on.
+
+    `ask` is an optional yes/no question to the user, for a CAUTION verdict.
+    """
+    results = []
+    for label, folder in targets:
+        res = scan(folder)
+        out(render(res, label))
+        if res["error"] == "missing":
+            return results, ERROR
+        results.append(res)
+    worst = max(code(r) for r in results)
+    if worst >= VERDICTS["DO_NOT_INSTALL"]:
+        out("almanac: refused. Nothing was installed. A DO_NOT_INSTALL verdict or a failed scan cannot be overridden.")
+        return results, worst
+    if worst == VERDICTS["CAUTION"] and not accept_caution and not (ask and ask("Install anyway? [y/N] ")):
+        out("almanac: refused. Nothing was installed. Read the issues above; add --accept-caution to install anyway.")
+        return results, worst
+    return results, None
+
+
+def add(source, wanted=None, ref=None, accept_caution=False, replace=False, plugin=False, out=print, bundle=False,
+        name=None, ask=None) -> int:
+    """Fetch, scan and install skill folders. Returns the worst verdict's exit code (3 on any failure).
+
+    `bundle` installs them as a plugin in the Almanac bundle instead (see `_bundle`).
+    """
     box = quarantine()
     try:
         try:
@@ -334,6 +367,8 @@ def add(source, wanted=None, ref=None, accept_caution=False, replace=False, plug
         except (ValueError, OSError, subprocess.SubprocessError) as exc:
             out(f"almanac: could not fetch {source}: {exc}")
             return ERROR
+        if bundle:
+            return _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, box, out)
         parts = plugin_parts(tree)
         if plugin or (parts and (parts["hooks"] or parts["mcp"]) and not wanted):
             return _plugin(tree, source, parts, out)
@@ -354,20 +389,9 @@ def add(source, wanted=None, ref=None, accept_caution=False, replace=False, plug
             if dest.exists() and not replace:
                 out(f"almanac: a skill called {name} is already installed at {dest}; add --replace to overwrite it")
                 return ERROR
-        results = []
-        for name, folder in skills:
-            res = scan(folder)
-            out(render(res, name))
-            if res["error"] == "missing":
-                return ERROR
-            results.append(res)
-        worst = max(code(r) for r in results)
-        if worst >= VERDICTS["DO_NOT_INSTALL"]:
-            out("almanac: refused. Nothing was installed. A DO_NOT_INSTALL verdict or a failed scan cannot be overridden.")
-            return worst
-        if worst == VERDICTS["CAUTION"] and not accept_caution:
-            out("almanac: refused. Nothing was installed. Read the issues above; add --accept-caution to install anyway.")
-            return worst
+        results, stop = _check(skills, accept_caution, ask, out)
+        if stop is not None:
+            return stop
         dest_root.mkdir(parents=True, exist_ok=True)
         records = load_json(_records_path(), {})
         installed = records.setdefault("skills", {})
@@ -383,9 +407,120 @@ def add(source, wanted=None, ref=None, accept_caution=False, replace=False, plug
             note_scan(dest, "skill", digest, res, name)
             out(f"installed {name} -> {dest}")
         save_json(_records_path(), records)
-        return worst
+        return max(code(r) for r in results)
     finally:
         remove(box)
+
+
+LICENCES = (("Apache-2.0", "apache license"), ("MIT", "permission is hereby granted, free of charge"),
+            ("BSD", "redistribution and use in source and binary forms"), ("ISC", "isc license"),
+            ("MPL-2.0", "mozilla public license"), ("GPL", "gnu general public license"),
+            ("Unlicense", "free and unencumbered software"))
+PINNED = re.compile(r"(@|==)v?\d+\.\d+\.\d+(?:[-+][\w.]+)?\Z")  # pkg@1.2.3 (npx) or pkg==1.2.3 (uvx)
+BUNDLE_HEAD = ("# Adopted skills and plugins\n\nEach folder here is a plugin Almanac loads into every session. Each was scanned "
+               "and its findings read before it was installed.\n\n| Folder | From | Commit | Licence | Changed |\n|---|---|---|---|---|\n")
+
+
+def bundle_dir() -> Path:
+    return config.home() / "bundle"
+
+
+def find_licence(tree: Path):
+    """(name, file) of the licence file at the top of `tree`; the name is "unknown" when the text is not a common one."""
+    for entry in sorted(tree.iterdir()):
+        if entry.is_file() and not linked(entry) and entry.name.upper().startswith(("LICENSE", "LICENCE", "COPYING")):
+            text = entry.read_text(encoding="utf-8", errors="replace").lower()
+            return next((name for name, key in LICENCES if key in text), "unknown"), entry
+    return "unknown", None
+
+
+def drop_flag(path: Path) -> bool:
+    """Remove `disable-model-invocation` from a SKILL.md's frontmatter, so the model may start it. True if it was there."""
+    with open(path, encoding="utf-8", newline="") as handle:
+        lines = handle.read().splitlines(keepends=True)
+    end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), 0) if lines and lines[0].strip() == "---" else 0
+    keep = [line for i, line in enumerate(lines) if not (0 < i < end and line.startswith("disable-model-invocation:"))]
+    if len(keep) == len(lines):
+        return False
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        handle.write("".join(keep))
+    return True
+
+
+def _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, box, out) -> int:
+    """Install the skills and agents in `tree` as a plugin folder in the Almanac bundle, after the scan.
+
+    Copied as plain text: no links, no scripts run, no hooks. MCP servers are kept only when pinned to an exact version.
+    """
+    name = name or re.sub(r"[^A-Za-z0-9._-]", "-", source_name(source)) or "plugin"
+    if not NAME.match(name) or name.lower() in ("almanac", "sources.md"):
+        out(f"almanac: {name!r} is not usable as a bundle folder name; give one with --name")
+        return ERROR
+    dest = bundle_dir() / name
+    if (dest.exists() or linked(dest)) and not replace:
+        out(f"almanac: {dest} already exists; add --replace to overwrite it, or --name to use another folder")
+        return ERROR
+    try:
+        found = find_skills(tree, wanted, name)
+    except ValueError as exc:
+        out(f"almanac: {exc}")
+        return ERROR
+    agents = [] if wanted else sorted(p for p in (tree / "agents").glob("*.md") if p.is_file() and not linked(p))
+    if not (found or agents):
+        out(f"almanac: no skills (SKILL.md) or agents (agents/*.md) in {source}")
+        return ERROR
+    results, stop = _check(found if wanted else [(name, tree)], accept_caution, ask, out)
+    if stop is not None:
+        return stop
+    res = max(results, key=code)
+    staged = box / "install"
+    for skill, folder in found:
+        copy(folder, staged / "skills" / skill)
+    for agent in agents:
+        (staged / "agents").mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(agent, staged / "agents" / agent.name)
+    flagged = [skill for skill, _ in found if drop_flag(staged / "skills" / skill / "SKILL.md")]
+    licence, licence_file = find_licence(tree)
+    if licence_file:
+        shutil.copyfile(licence_file, staged / "LICENSE")
+    parts = plugin_parts(tree) or {"hooks": [], "mcp": []}
+    servers = {} if wanted else mcp_servers(tree)
+    kept = {n: s for n, s in servers.items() if isinstance(s, dict) and isinstance(s.get("command"), str)
+            and any(isinstance(a, str) and PINNED.search(a) for a in s.get("args") or [])}
+    original = _json(tree / ".claude-plugin" / "plugin.json")
+    manifest = {"name": name, "version": str(original.get("version") or "0.0.0"),
+                "description": str(original.get("description") or f"{name}, adopted into Almanac.")[:300]}
+    if licence != "unknown":
+        manifest["license"] = licence
+    if kept:
+        manifest["mcpServers"] = kept
+    (staged / ".claude-plugin").mkdir()
+    save_json(staged / ".claude-plugin" / "plugin.json", manifest)
+    remove(dest)
+    dest.parent.mkdir(exist_ok=True)
+    os.replace(staged, dest)
+    changed = ["manifest written here"]
+    changed += [f"disable-model-invocation removed from {len(flagged)} skill(s)"] if flagged else []
+    changed += [f"hooks not installed ({len(parts['hooks'])})"] if parts["hooks"] else []
+    changed += [f"MCP server(s) kept, pinned: {', '.join(kept)}"] if kept else []
+    changed += [f"MCP server(s) left out, no exact version: {', '.join(n for n in servers if n not in kept)}"] if len(kept) < len(servers) else []
+    row = f"| `{name}` | {source} | {(commit or 'local')[:8]} | {licence} | {'; '.join(changed)} |"
+    sources = bundle_dir() / "SOURCES.md"
+    with open(sources, encoding="utf-8", newline="") if sources.exists() else io.StringIO(BUNDLE_HEAD) as handle:
+        text = handle.read()
+    eol = "\r\n" if "\r\n" in text else "\n"  # an imported file keeps its own line endings
+    lines = [ln for ln in text.splitlines() if not ln.startswith(f"| `{name}` |")] + [row.replace("\n", " ")]
+    with open(sources, "w", encoding="utf-8", newline="") as handle:
+        handle.write(eol.join(lines) + eol)
+    note_scan(dest, "plugin", tree_hash(dest), res, f"bundle/{name}")
+    out(f"installed {name}: {len(found)} skill(s), {len(agents)} agent(s)")
+    for line in parts["hooks"]:
+        out(f"  hook NOT installed (your call): {line}")
+    for n in servers:
+        out(f"  MCP server {n}: " + ("kept, pinned. It runs code fetched from a registry on first use; the scan covered text only"
+                                    if n in kept else "left out, no exact version pinned"))
+    out(f"bundle folder: {dest}")
+    return code(res)
 
 
 def _plugin(tree, source, parts, out):
@@ -437,6 +572,10 @@ def installed_items():
             # what Claude Code loads: <name>/SKILL.md, not hidden folders (a trash, a half-done install)
             if os.path.isfile(os.path.join(real, "SKILL.md")) and not entry.name.startswith("."):
                 items.append((entry.name, "skill", real))
+    mine = bundle_dir()
+    for entry in sorted(mine.iterdir()) if mine.is_dir() else []:
+        if (entry / ".claude-plugin" / "plugin.json").is_file():
+            items.append((f"bundle/{entry.name}", "plugin", os.path.realpath(entry)))
     # the plugin list, not plugins/cache: the cache also holds old versions and half-finished downloads
     plugins = load_json(root / "plugins" / "installed_plugins.json", {}).get("plugins") or {}
     for name, installs in sorted(plugins.items()) if isinstance(plugins, dict) else []:
@@ -574,6 +713,28 @@ def audit(pending=None, again=False, out=print) -> int:
     return worst
 
 
+def import_bundle(path, out=print) -> int:
+    """Copy the plugin folders in `path` (a bundle kept elsewhere) into the user bundle, keeping any that are already there."""
+    src, dest = Path(path), bundle_dir()
+    found = sorted(p for p in src.iterdir() if (p / ".claude-plugin" / "plugin.json").is_file()) if src.is_dir() else []
+    if not found:
+        out(f"almanac: no plugin folders (each with .claude-plugin/plugin.json) in {path}")
+        return ERROR
+    dest.mkdir(exist_ok=True)
+    for folder in found:
+        if folder.name == "almanac":  # the package carries its own, newer one
+            out("skipped almanac: the package already carries it")
+        elif (dest / folder.name).exists() or linked(dest / folder.name):
+            out(f"kept {folder.name}: already in {dest}")
+        else:
+            copy(folder, dest / folder.name)
+            out(f"imported {folder.name}")
+    for name, target in (("SOURCES.md", dest / "SOURCES.md"), ("pack.json", config.home() / "pack.json")):
+        if (src / name).is_file() and not target.exists():  # the notes and the pack come along, never over newer ones
+            shutil.copyfile(src / name, target)
+    return 0
+
+
 def _find(which):
     """(label, kind, path) of the installed item with this name or path, or None."""
     real = os.path.realpath(which) if os.path.exists(which) else None
@@ -618,17 +779,13 @@ def unaccept(which, out=print) -> int:
     return 0
 
 
-# The pack: the owner's list of third-party skills and plugins, each pinned to a commit.
+# The pack: your own list of third-party skills and plugins, each pinned to a commit.
 KINDS = ("skill", "plugin", "binary", "builtin")
 
 
 def pack_file(path=None):
-    """pack.json: the given path, else the one shipped in the package."""
-    if path:
-        return Path(path)
-    from importlib import resources
-
-    return resources.files("getalmanac").joinpath("pack.json")
+    """pack.json: the given path, else the one in the Almanac folder (the package ships none)."""
+    return Path(path) if path else config.home() / "pack.json"
 
 
 def load_pack(path=None):
