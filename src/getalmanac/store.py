@@ -67,8 +67,21 @@ class Store:
             if any(now.get(k) != v for k, v in fields.items()):
                 self.put(key, {**now, **fields})
 
-    def frozen(self, key, compute):
-        """A decision made once per key and returned unchanged afterwards."""
+    def frozen(self, key, compute, outside=False):
+        """A decision made once per key and returned unchanged afterwards.
+
+        `outside` runs `compute` without the lock, for slow work: concurrent first callers may each compute a candidate,
+        but the first to finish stores its own and every caller returns that one, so the bytes are identical."""
+        if outside:
+            value = self.get(key)
+            if value is None:
+                candidate = compute()
+                with self.lock:
+                    value = self.get(key)
+                    if value is None:
+                        value = candidate
+                        self.put(key, value)
+            return value
         with self.lock:
             value = self.get(key)
             if value is None:

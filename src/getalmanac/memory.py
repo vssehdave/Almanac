@@ -661,7 +661,17 @@ class Memory:
 
     # ---- reading -------------------------------------------------------------
 
-    def _near(self, query, project, exclude_lane, lane=None, convo=None, roots=False) -> list:
+    @staticmethod
+    def _qvec(model, query, memo):
+        """The packed vector of `query`, encoded at most once per search (None when the encoder fails)."""
+        if "v" not in memo:
+            try:
+                memo["v"] = model.encode([query])[0]
+            except Exception:
+                memo["v"] = None
+        return memo["v"]
+
+    def _near(self, query, project, exclude_lane, lane=None, convo=None, roots=False, memo=None) -> list:
         """[(id, cosine)] of the exchanges nearest to `query` by meaning, nearest first; [] when that search is off."""
         model = semantic.active()
         if not model:
@@ -683,7 +693,7 @@ class Memory:
         if not rows:
             return []
         try:
-            scores = semantic.cosines(model.encode([query])[0], [r["dvec"] for r in rows])
+            scores = semantic.cosines(self._qvec(model, query, {} if memo is None else memo), [r["dvec"] for r in rows])
         except Exception:
             return []
         near = [(r["id"], round(score, 4)) for r, score in zip(rows, scores) if score >= DENSE_MIN]
@@ -718,7 +728,7 @@ class Memory:
             found.append(hit)
         return found
 
-    def _facts(self, query, words, terms, need, project, exclude_lane, lane=None, convo=None, roots=False) -> tuple:
+    def _facts(self, query, words, terms, need, project, exclude_lane, lane=None, convo=None, roots=False, memo=None) -> tuple:
         """The facts that match `query`: (by words, by meaning). Each is a list of (exchange id, fact text), best first."""
         where, args = "", []
         for clause, value in ((" and n.project = ?", project), (" and c.lane != ?", exclude_lane), (" and c.lane = ?", lane)):
@@ -738,7 +748,7 @@ class Memory:
         rows = self.store.run("select f.node, f.text, f.dvec from fact f " + join + " and f.dname = ? and f.dvec is not null", args + [model.name]) if model else []
         if rows:
             try:
-                scores = semantic.cosines(model.encode([query])[0], [r["dvec"] for r in rows])
+                scores = semantic.cosines(self._qvec(model, query, {} if memo is None else memo), [r["dvec"] for r in rows])
             except Exception:
                 scores = []
             near = sorted(((s, r["node"], r["text"]) for r, s in zip(rows, scores) if s >= DENSE_MIN), key=lambda t: (-t[0], t[1]))[:DENSE_TOP]
@@ -755,7 +765,8 @@ class Memory:
         """
         words = sorted({w for w in re.findall(r"[a-z0-9_]{2,}", query.lower()) if w not in STOP})[:24]
         terms = set(tokens(query))
-        near = self._near(query, project, exclude_lane, lane, convo, roots) if kind == "leaf" else []
+        memo = {}  # the query's vector, shared by the exchange search and the fact search
+        near = self._near(query, project, exclude_lane, lane, convo, roots, memo) if kind == "leaf" else []
         if (not words or not terms) and not near:
             return []
         sql = ("select n.id, n.kind, n.title, n.text, n.ts, n.vec, n.project, n.convo, c.title ctitle, c.parent cparent, c.review creview, c.agent_type cagent, "
@@ -783,7 +794,7 @@ class Memory:
         for hit in hits:
             hit.pop("vec", None)
         deep = self._deep(words, terms, need, project, exclude_lane, {hit["id"] for hit in hits}, lane, convo, roots) if deep and kind == "leaf" and words and terms else []
-        facts = self._facts(query, words, terms, need, project, exclude_lane, lane, convo, roots) if kind == "leaf" else ([], [])
+        facts = self._facts(query, words, terms, need, project, exclude_lane, lane, convo, roots, memo) if kind == "leaf" else ([], [])
         if not near and not deep and not any(facts):
             return hits[:limit]
         fused = {hit["id"]: 1 / (RRF_K + rank) for rank, hit in enumerate(hits, 1)}
@@ -1226,7 +1237,7 @@ class MemoryLayer:
                     recalled = self.memory.recall(parent["project"], rq.human_text(messages[rq.human_turns(messages)[0]]), ctx.lane,
                                                   cfg["recall_chars"], tools_hint=tools, agent_type=ctx.agent_type)
                     return "\n".join(part for part in (pointer, recalled) if part)
-                note = ctx.store.frozen(f"subnote:{ctx.lane}", compose)
+                note = ctx.store.frozen(f"subnote:{ctx.lane}", compose, outside=True)  # encoding the query is slow: not under the store's lock
                 if note:
                     self._add(messages[rq.human_turns(messages)[0]], note)
                     ctx.stats["memory"] = {"subnote_chars": len(note)}
@@ -1235,7 +1246,7 @@ class MemoryLayer:
             return
         first = messages[rq.human_turns(messages)[0]]
         note = ctx.store.frozen(f"recall:{ctx.lane}", lambda: self.memory.recall(
-            ctx.project, rq.human_text(first), ctx.lane, cfg["recall_chars"], tools_hint=cfg.get("tools", True)))
+            ctx.project, rq.human_text(first), ctx.lane, cfg["recall_chars"], tools_hint=cfg.get("tools", True)), outside=True)
         if not note:
             return
         self._add(first, note)
