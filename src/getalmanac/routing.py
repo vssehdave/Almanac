@@ -157,6 +157,20 @@ def strikes(messages, after: int) -> int:
     return count
 
 
+def settled(messages, calm: int) -> list:
+    """The messages after the last run of `calm` requests in a row whose tool results all came back clean:
+    failures before that no longer count, so a raised sub-agent drops back once it is working again."""
+    start, run = 0, 0
+    for i, msg in enumerate(messages):
+        results = [b for b in rq.blocks(msg) if b.get("type") == "tool_result"] if isinstance(msg, dict) else []
+        if not results:
+            continue
+        run = 0 if any(b.get("is_error") for b in results) else run + 1
+        if calm and run >= calm:
+            start, run = i + 1, 0
+    return messages[start:]
+
+
 def failing(messages, after: int) -> bool:
     """True when this stretch of a conversation went wrong."""
     return strikes(messages, after) > 0
@@ -252,7 +266,8 @@ class RoutingLayer:
         turn = len(turns) - 1 if kind == "main" else 0
         text = person_text(messages[turns[turn]])
         key = f"route:{ctx.lane}:{turn}:{_digest(text)}" if kind == "main" else f"route:{ctx.lane}"
-        hits = strikes(messages, cfg["escalate_after"]) if kind == "sub" else 0  # a sub-agent's own failures: each run is a new decision
+        # a sub-agent's own failures since it last worked cleanly: each count is a new decision, and a calm stretch drops it back
+        hits = strikes(settled(messages, cfg.get("calm_after", 2)), cfg["escalate_after"]) if kind == "sub" else 0
         key += f":s{hits}" if hits else ""
         first = False
         dec = ctx.store.get(key)

@@ -103,6 +103,7 @@ DEFAULTS = {
         "margin": 0.2,  # a move down on the main thread must be at least this much cheaper than staying
         "escalate_after": 3,  # tool errors in a row, or one call failing this often, raise the next turn one rung
         "escalate_turns": 3,  # turns the raise lasts
+        "calm_after": 2,  # a raised sub-agent drops back after this many requests in a row with clean tool results (0: never)
         # Relative prices per token, for comparing models only. They are list-price ratios as of 2026-11-03 for the
         # 5.5 models (cache write 1.25x input, cache read 0.05x for Sonnet and Opus); the Haiku cache-read ratio
         # (0.1x) is assumed, as it is not listed. cache_write and cache_read are what a prefix costs to write into,

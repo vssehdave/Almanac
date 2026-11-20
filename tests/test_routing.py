@@ -440,6 +440,22 @@ class SubagentTest(Case):
         self.assertEqual([json.loads(r["body"])["model"] for r in self.rig.upstream.requests], [SMALL, LARGE])
 
 
+    def test_a_raised_subagent_drops_back_after_two_clean_requests(self):
+        def step(i, err):
+            return [{"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": "Bash", "input": {"command": "pytest"}}]},
+                    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "x", **({"is_error": True} if err else {})}]}]
+        loop = [human("Difficulty: standard\nfix the failing test")]
+        for i in range(3):
+            loop += step(i, True)
+        self.rig.messages(body(loop, MEDIUM), extra=sub_headers("c"))
+        self.assertEqual(self.rig.sent()["model"], LARGE)  # three errors in a row: raised
+        loop += step(3, False)
+        self.rig.messages(body(loop, MEDIUM), extra=sub_headers("c"))
+        self.assertEqual(self.rig.sent()["model"], LARGE)  # one clean request is not enough
+        loop += step(4, False)
+        self.rig.messages(body(loop, MEDIUM), extra=sub_headers("c"))
+        self.assertEqual(self.rig.sent()["model"], MEDIUM)  # two clean: back down
+
 class SubagentsModeTest(Case):
     mode = "subagents"
 
