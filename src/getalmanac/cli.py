@@ -505,7 +505,7 @@ def _route(rest):
     print("  last decisions:" if log else "  no decisions yet")
     for d in log:
         cost = f", cost to stay {d['stay']:,} / to switch {d['switch']:,}" if d.get("stay") is not None else ""
-        outcome = f"NOT applied ({d['skip']})" if d.get("skip") else ("kept" if d["move"] in ("none", "declined", "held") else "applied")
+        outcome = f"NOT applied ({d['skip']})" if d.get("skip") else ("kept" if d["move"] in ("none", "declined", "held") and d.get("tier") == d.get("from", d.get("tier")) else "applied")  # a sub-agent's switch keeps move "none"
         print(f"    {time.strftime('%H:%M:%S', time.localtime(d['ts']))} {d['kind']:<4} {d['tier']:<6} {d['move']:<8} {outcome}: "
               f"{d['why']}{cost}")
     return 0
@@ -635,7 +635,8 @@ def _library(rest):
         for e in entries:
             _print(f"{e['id']:>5}  {time.strftime('%Y-%m-%d', time.localtime(e['created']))}  {e['uses']:>4}  {e['prompt'][:70]}")
         if not entries:
-            print("No entry is stored for that.")
+            print(f"No entry with at least {library.min_tools()} tool calls is stored for that "
+                  "(library.min_tools; `almanac library show ID` still opens a smaller one).")
         return 0
     if args.cmd == "show":
         text = library.show(memory, args.id)
