@@ -52,6 +52,18 @@ def body(messages):
     return {"model": "m", "system": "You are Claude Code", "tools": TOOLS, "messages": messages}
 
 
+class EstimateTest(unittest.TestCase):
+    def test_a_late_count_still_counts_the_replies_after_its_own(self):
+        from types import SimpleNamespace
+        msgs = [{"role": "user", "content": "u" * 300}, {"role": "assistant", "content": "a" * 300},
+                {"role": "user", "content": "u" * 300}, {"role": "assistant", "content": "b" * 300},
+                {"role": "user", "content": "u" * 300}]
+        seen = {"messages": 1, "tokens": 1000}
+        got = compact.estimate({"messages": msgs}, SimpleNamespace(state=None), msgs, seen)
+        later = sum(len(json.dumps(m)) for m in msgs[2:]) / compact.CHARS_PER_TOKEN
+        self.assertEqual(got, int(1000 + later))  # msgs[1] is the counted reply; msgs[2..4] are not in the count
+
+
 class FingerprintTest(unittest.TestCase):
     def test_ignores_cache_markers_reminders_and_thinking(self):
         a = history(2)
