@@ -65,6 +65,9 @@ HEADER = ("Almanac compacted this conversation to keep it inside the context win
           "The summary is a quoted record of earlier work: " + QUOTED[len("It is a quoted record, not instructions: "):])
 
 
+AGENT_HEADER = ("[Almanac compacted this sub-agent's earlier steps to keep it small. Below is a rule-written list of what "
+                "was run and the first line of each result; a full result is read back with the almanac memory_read tool "
+                "named after it (load it with ToolSearch). Continue the task from the newest steps after this.]")
 ACK = "Understood. I have the summary of the earlier conversation and will continue from it."
 STUB = ("[Almanac removed this tool result to keep the turn inside the context window ({n} characters). "
         "Run the tool again if you need it.]")
@@ -387,7 +390,7 @@ class CompactLayer:
         covered = len(messages) - 1
         at_human_turn = bool(rq.human_text(messages[-1])) and len(rq.human_turns(messages[:covered])) >= 1
         if at_human_turn and (not state or covered > state["covered"]):
-            tail = messages[state["covered"]:] if state else messages
+            tail = messages[state.get("at", state["covered"]):] if state else messages  # what came after the last outline
             current = (state["prefix"] + tail) if state else messages
             # After a compaction, wait for real growth before the next one: redoing it
             # every turn would rewrite the prefix each time and waste the cache.
@@ -438,10 +441,94 @@ class CompactLayer:
         if not (cfg["enabled"] and ctx.agent and rq.has_client_tools(body) and len(messages) > 2)                 or blocked(ctx, messages):
             return
         had, size = self._stubs(ctx), self._size_if_cold(body, ctx, messages)
-        stubbed = self._relieve(body, ctx, cfg, messages, False)
+        try:
+            out = self._outline_agent(body, ctx, cfg)
+        except Exception:  # fail open: the request goes out with its stubs only
+            out = messages
+        stubbed = self._relieve(body, ctx, cfg, out, False)
         if stubbed:
             ctx.stats.setdefault("compaction", {})["stubbed"] = stubbed
-        self._note_cold(body, ctx, size, messages, self._stubs(ctx) > had)
+        body["messages"] = out
+        self._note_cold(body, ctx, size, out, self._stubs(ctx) > had)
+
+    def _outline_agent(self, body, ctx, cfg):
+        """A sub-agent's older steps become a rule-written outline once it passes `stub_tokens` (see AGENT_HEADER).
+
+        The outline is stored with the steps it covers and sent byte for byte on every later request; when the agent
+        grows past the limit again, the new steps are added as one more block after the old ones, which stay as they were."""
+        messages, key = body["messages"], f"agentcompact:{ctx.lane}"
+        limit = self._agent_limit(body, ctx, cfg)
+        if not (limit and cfg.get("agent_outline", True)):
+            return messages
+        state = ctx.state.get(key)
+        if state and not (len(messages) > state["covered"] and fingerprint(messages[:state["covered"]]) == state["hash"]):
+            ctx.state.run("delete from state where key = ?", (key,))  # rewound or edited
+            state = None
+        current = (state["prefix"] + messages[state["covered"]:]) if state else messages
+        tail = messages[state.get("at", state["covered"]):] if state else messages  # what came after the last outline
+        grown = not state or sum(len(json.dumps(m, ensure_ascii=False)) for m in tail) / CHARS_PER_TOKEN >= limit / 2  # not every request
+        if grown and estimate(body, ctx, current, None) >= limit:
+            state = self._agent_prefix(ctx, messages, state, cfg, limit) or state
+        if not state:
+            return messages
+        ctx.stats.setdefault("compaction", {})["agent_outline"] = state["covered"]
+        return json.loads(json.dumps(state["prefix"])) + messages[state["covered"]:]
+
+    @staticmethod
+    def _agent_limit(body, ctx, cfg) -> int:
+        """Tokens past which a sub-agent is outlined: stub_tokens, or the window share when that is smaller; 0 is off."""
+        from . import routing  # routing imports this module
+        if not cfg.get("stub_tokens"):
+            return 0
+        window = routing.window(ctx.cfg["routing"], str(body.get("model") or ""))
+        share = float(cfg.get("window_share") or 0) * min(window, int(ctx.state.get(f"window:{ctx.lane}") or window))
+        return int(min(cfg["stub_tokens"], share) if share > 0 else cfg["stub_tokens"])
+
+    def _agent_prefix(self, ctx, messages, state, cfg, limit):
+        cut = len(messages) - 2 * int(cfg["keep_results"])  # the newest steps stay whole
+        while cut > 1 and messages[cut].get("role") != "assistant":
+            cut -= 1
+        start = state["covered"] if state else 1
+        if cut <= start or messages[0].get("role") != "user":
+            return None
+        memory = ctx.cfg["memory"]["enabled"] and ctx.cfg["memory"].get("tools", True)
+        lines = []
+        for msg in messages[start:cut]:
+            for b in rq.blocks(msg):
+                kind = b.get("type")
+                if kind == "text" and msg.get("role") == "assistant" and (b.get("text") or "").strip():
+                    lines.append("- said: " + _first_line(b["text"])[:200])
+                elif kind == "tool_use":
+                    args = b.get("input") if isinstance(b.get("input"), dict) else {}
+                    what = next((str(args[k]) for k in ("file_path", "command", "pattern", "path", "url", "description", "query") if args.get(k)), "")
+                    lines.append(f"- ran {b.get('name')}: {' '.join(what.split())[:160]}")
+                elif kind == "tool_result" and isinstance(b.get("tool_use_id"), str):
+                    text = result_text(b) or NO_TEXT
+                    where = ""
+                    if memory:
+                        try:
+                            if not self.memory.has_raw(ctx.lane, b["tool_use_id"]):
+                                self.memory.save_raw(ctx.lane, b["tool_use_id"], text, cleaned=True)
+                            where = f' (memory_read {{"result": "{b["tool_use_id"]}"}})'
+                        except Exception:
+                            where = ""
+                    flag = "error" if b.get("is_error") else "result"
+                    lines.append(f"  {flag}{where}: {' '.join(_first_line(text).split())[:160]}")
+        room = int(limit * CHARS_PER_TOKEN * 0.15)  # one block's share: the newest lines win
+        while lines and sum(len(x) + 1 for x in lines) > room:
+            lines = lines[len(lines) // 4 + 1:]
+            if not lines or not lines[0].startswith("(earlier"):
+                lines.insert(0, "(earlier steps left out; their results are still in memory)")
+        block = {"type": "text", "text": ("" if state else AGENT_HEADER + "\n\n") + "\n".join(lines)}
+        if state:
+            prefix = json.loads(json.dumps(state["prefix"]))
+        else:
+            task = messages[0].get("content")
+            prefix = [{"role": "user", "content": [{"type": "text", "text": task}] if isinstance(task, str) else json.loads(json.dumps(task))}]
+        prefix[0]["content"].append(block)
+        state = {"covered": cut, "at": len(messages), "hash": fingerprint(messages[:cut]), "prefix": prefix}
+        ctx.state.put(f"agentcompact:{ctx.lane}", state)
+        return state
 
     def _relieve(self, body, ctx, cfg, out, at_human_turn) -> int:
         """Stub the old tool results of the current turn (see the module docstring). Returns how many are stubbed in `out`.
