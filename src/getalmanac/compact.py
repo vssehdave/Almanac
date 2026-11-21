@@ -321,8 +321,9 @@ def estimate(body, ctx, messages, seen=False) -> int:
     if seen is False:
         seen = ctx.state.get(f"usage:{ctx.lane}")
     if seen and 0 < seen["messages"] <= len(body["messages"]):
-        added = sum(len(json.dumps(m, ensure_ascii=False)) for m in body["messages"][seen["messages"]:]
-                    if m.get("role") != "assistant")  # the reply itself is already in the count
+        start = seen["messages"]
+        added = sum(len(json.dumps(m, ensure_ascii=False)) for i, m in enumerate(body["messages"][start:], start)
+                    if not (i == start and m.get("role") == "assistant"))  # only that request's own reply is in the count; a late count leaves later replies out
         return int(seen["tokens"] + added / CHARS_PER_TOKEN)
     size = len(json.dumps(body.get("system") or "", ensure_ascii=False))
     size += sum(len(json.dumps(t)) for t in body.get("tools") or [] if isinstance(t, dict) and not t.get("defer_loading"))
