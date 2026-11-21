@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Per-conversation state has its own file.** The small decisions every request
+  reads and writes (compaction prefixes, stubs, recall notes, route choices, usage
+  counts, the summary budget) moved from `almanac.db` to `state.db`, with its own
+  connection and lock, so a request no longer waits for full-text writes, vector
+  reads or an import. On first start the old `state` table is copied across in one
+  transaction, counted, and only then dropped; a stop in between is finished on the
+  next start. `almanac status` and `almanac doctor` show both files. Deleting a
+  conversation clears its state rows first, then its memory.
 - **The daily summary budget no longer loses counts.** The routing classifier, live
   and idle summaries and the imported-summary job each read the day's count, added to
   it and wrote it back, so calls that finished out of order (or on the importer's own

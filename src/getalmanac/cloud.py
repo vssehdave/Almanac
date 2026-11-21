@@ -723,7 +723,7 @@ class HandoffLayer:
                   f"{commit}:refs/heads/{HANDOFF}", env=env, timeout=timeout)
             with self.lock:
                 self.repos[cwd]["pushed"] = state
-            self.memory.store.put(f"handoff:{top}", {"time": time.time(), "state": state, "commit": commit})
+            self.memory.state.put(f"handoff:{top}", {"time": time.time(), "state": state, "commit": commit})
         except Exception as exc:  # no git, no remote, offline, refused: the session goes on regardless
             self._error(f"{type(exc).__name__}: {exc}")
 

@@ -133,9 +133,9 @@ class SysPrefixTest(unittest.TestCase):
 
     def stack(self):
         store = Store(os.path.join(tempfile.mkdtemp(prefix="almanac-db-"), "a.db"))
-        Memory(store)  # the layers read usage from the library rows and conversations
+        memory = Memory(store)  # the layers read usage from the library rows and conversations
         rig = Rig(layers=[startup.SkillsLayer(), startup.AgentsLayer(), startup.ToolsLayer(), SysPrefixLayer()],
-                  store=store, overrides={"startup.system_prefix": True})
+                  store=store, state=memory.state, overrides={"startup.system_prefix": True})
         self.addCleanup(rig.close)
         return rig
 

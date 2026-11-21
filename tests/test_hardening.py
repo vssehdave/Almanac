@@ -20,7 +20,7 @@ from getalmanac import compact, config, launcher, project, report
 from getalmanac import proxy as proxy_mod
 from getalmanac import request as rq
 from getalmanac.memory import QUOTED, Memory, MemoryLayer, ProjectLayer, clean, exchange, redact, transcript
-from getalmanac.store import Store
+from getalmanac.store import State, Store
 
 BODY = tc.body(tc.history(1))
 RAW = json.dumps(BODY).encode()
@@ -33,7 +33,7 @@ class Upper:
         body["messages"][0]["content"][-1]["text"] = "HELLO THERE"
 
 
-def new_store(tmp=None, cls=Store):
+def new_store(tmp=None, cls=State):  # a state store: the tests that need memory build a Memory on a Store
     return cls(os.path.join(tmp or tempfile.mkdtemp(prefix="almanac-hard-"), "a.db"))
 
 
@@ -273,8 +273,8 @@ class ServeTest(unittest.TestCase):
             conn.close()
 
 
-class Broken(Store):
-    """A store whose reads or writes fail, as a locked or full database does."""
+class Broken(State):
+    """A state store whose reads or writes fail, as a locked or full database does."""
 
     fail = ()
 
@@ -294,7 +294,7 @@ class FailOpenTest(unittest.TestCase):
         store = new_store(cls=Broken)
         store.fail = fail
         self.addCleanup(store.close)
-        rig = Rig(respond=respond, layers=list(layers), store=store)
+        rig = Rig(respond=respond, layers=list(layers), state=store)
         self.addCleanup(rig.close)
         return rig
 
@@ -335,7 +335,7 @@ class FailOpenTest(unittest.TestCase):
     def test_a_store_that_fails_to_write_does_not_break_the_compaction_retry(self):
         class Compactish:
             def transform(self, body, ctx):
-                if not ctx.store.get(f"nocompact:{ctx.lane}"):
+                if not ctx.state.get(f"nocompact:{ctx.lane}"):
                     ctx.stats["compaction"] = {}
                     body["messages"][0]["content"][-1]["text"] = "HELLO THERE"
 
@@ -358,7 +358,7 @@ class ForgetTest(tm.Case):
     def convo(self, lane, text="a question about the proxy cache zxqvortex"):
         self.memory.index(lane, "s", self.key, [tm.human(text)], tm.reply("The answer."))
         for prefix in ("compact", "recall", "project", "usage", "nocompact", "fused", "skills", "tools"):
-            self.store.put(f"{prefix}:{lane}", {"text": text})
+            self.state.put(f"{prefix}:{lane}", {"text": text})
         self.store.run("insert into library (convo, seq, project, prompt, tools, calls, created, updated) "
                        "select id, 0, project, 'p', '[\"Cold\"]', 1, 1, 1 from convo where lane = ?", (lane,))  # the usage of this conversation
 
@@ -366,13 +366,13 @@ class ForgetTest(tm.Case):
         self.store.run("update convo set updated = updated - 7200")
 
     def left(self, lane):
-        return ([r["key"] for r in self.store.run("select key from state where key like ?", ("%:" + lane,))],
+        return ([r["key"] for r in self.state.run("select key from state where key like ?", ("%:" + lane,))],
                 self.store.run("select 1 from library where convo in (select id from convo where lane = ?)", (lane,)))
 
     def test_forget_deletes_the_saved_choices_and_usage_of_the_conversation(self):
         self.convo("aa11")
         self.convo("bb22")
-        self.store.put("summary:day", {"calls": 1})
+        self.state.put("summary:day", {"calls": 1})
         self.age()
         self.assertEqual(self.memory.forget(convo_id=self.store.run("select id from convo where lane = 'aa11'")[0]["id"]), 1)
         self.assertEqual(self.left("aa11"), ([], []))
@@ -381,16 +381,16 @@ class ForgetTest(tm.Case):
         self.assertEqual(self.memory.forget(project=self.key), 1)
         self.assertEqual(self.left("bb22"), ([], []))
         self.assertEqual(self.store.run("select count(*) n from library")[0]["n"], 0)
-        self.assertEqual(self.store.get("summary:day"), {"calls": 1})
+        self.assertEqual(self.state.get("summary:day"), {"calls": 1})
 
     def test_forget_all_leaves_only_the_counters(self):
         self.convo("aa11")
-        self.store.put("compact:orphan", {"text": "x"})  # a conversation that was never indexed
-        self.store.put("summary:pause", 5)
+        self.state.put("compact:orphan", {"text": "x"})  # a conversation that was never indexed
+        self.state.put("summary:pause", 5)
         self.store.run("insert into library (convo, seq, project, prompt, tools, created, updated) values (-1, -1, 'p', '', '[\"Cold\"]', 1, 1)")  # carried over usage
         self.age()
         self.memory.forget()
-        self.assertEqual([r["key"] for r in self.store.run("select key from state")], ["summary:pause"])
+        self.assertEqual([r["key"] for r in self.state.run("select key from state")], ["summary:pause"])
         self.assertEqual(self.store.run("select count(*) n from library")[0]["n"], 0)
 
     def test_an_open_conversation_is_kept_unless_forced(self):
@@ -436,37 +436,37 @@ class ForgetTest(tm.Case):
             self.convo(lane, "something else entirely")
             note = self.memory.recall(self.key, "a question about the proxy cache zxqvortex", lane, 2400)
             self.assertIn("zxqvortex", note)
-            self.store.put(f"recall:{lane}", note)
+            self.state.put(f"recall:{lane}", note)
         self.store.run("update convo set updated = updated - 7200 where lane != 'cc33'")  # cc33 is still open
-        self.store.run("update state set ts = ts - 7200")
+        self.state.run("update state set ts = ts - 7200")
         self.assertEqual(self.memory.forget(convo_id=self.store.run("select id from convo where lane = 'aa11'")[0]["id"]), 1)
         self.assertEqual(len(self.left("bb22")[0]), 7)  # its other choices stay
-        self.assertIsNone(self.store.get("recall:bb22"))
-        self.assertEqual(self.store.get("recall:cc33"), note)  # an open conversation keeps its bytes
+        self.assertIsNone(self.state.get("recall:bb22"))
+        self.assertEqual(self.state.get("recall:cc33"), note)  # an open conversation keeps its bytes
 
     def test_forget_leaves_no_state_key_with_the_lane_in_it_and_sweeps_sub_agent_notes(self):
         self.convo("aa11")
         self.convo("bb22", "something else entirely")
         for key in ("playbook:aa11:0:x", "playbooknudge:aa11:0:x", "route:aa11:1:y", "recall:aa11", "compact:aa11",
                     "subnote:bb22", "recall:bb22", "route:bb22:0:z"):
-            self.store.put(key, "quoted text")
+            self.state.put(key, "quoted text")
         self.store.run("update convo set updated = updated - 7200")
-        self.store.run("update state set ts = ts - 7200")
+        self.state.run("update state set ts = ts - 7200")
         self.assertEqual(self.memory.forget(convo_id=self.store.run("select id from convo where lane = 'aa11'")[0]["id"]), 1)
-        keys = [r["key"] for r in self.store.run("select key from state")]
+        keys = [r["key"] for r in self.state.run("select key from state")]
         self.assertFalse([k for k in keys if "aa11" in k])
         self.assertNotIn("subnote:bb22", keys)  # a note that quotes another conversation goes with it
         self.assertIn("route:bb22:0:z", keys)
 
     def test_forget_project_reaches_lanes_with_no_conversation_row(self):
         for lane, project in (("cc33", self.key), ("dd44", self.key), ("ee55", "dir:/other"), ("ff66", self.key)):
-            self.store.put(f"project:{lane}", project)
-            self.store.put(f"skills:{lane}", {"text": "zxqvortex"})
-        self.store.run("update state set ts = ts - 7200")
-        self.store.put("usage:ff66", {"tokens": 1})  # written in the last hour: may be open
+            self.state.put(f"project:{lane}", project)
+            self.state.put(f"skills:{lane}", {"text": "zxqvortex"})
+        self.state.run("update state set ts = ts - 7200")
+        self.state.put("usage:ff66", {"tokens": 1})  # written in the last hour: may be open
         self.memory.index("ab12", "s", "dir:/other", [tm.human("a question filed under another project")], tm.reply("ok"))
-        self.store.put("project:ab12", self.key)  # it started in this project and moved on; nobody asked to forget it
-        self.store.run("update state set ts = ts - 7200 where key = 'project:ab12'")
+        self.state.put("project:ab12", self.key)  # it started in this project and moved on; nobody asked to forget it
+        self.state.run("update state set ts = ts - 7200 where key = 'project:ab12'")
         self.assertEqual(self.memory.forget(project=self.key), 0)
         self.assertEqual((self.left("cc33"), self.left("dd44")), (([], []), ([], [])))
         for lane, rows in (("ee55", 2), ("ff66", 3), ("ab12", 1)):
@@ -494,7 +494,7 @@ class ForgetTest(tm.Case):
 class StateSweepTest(unittest.TestCase):
     def test_a_key_still_in_use_survives_the_45_day_sweep_and_a_dormant_one_does_not(self):
         path = os.path.join(tempfile.mkdtemp(prefix="almanac-sweep-"), "a.db")
-        store, now, day = Store(path), time.time(), 86400
+        store, now, day = State(path), time.time(), 86400
         for key in ("compact:live", "recall:live", "recall:dormant"):
             store.put(key, {"x": 1})
             store.run("update state set ts = ? where key = ?", (now - 40 * day, key))
@@ -503,13 +503,13 @@ class StateSweepTest(unittest.TestCase):
             self.assertEqual(store.frozen("recall:live", lambda: None), {"x": 1})
         store.close()
         with mock.patch("time.time", return_value=now + 60 * day):  # a start-up much later sweeps the rest
-            store = Store(path)
+            store = State(path)
         self.addCleanup(store.close)
         self.assertEqual(sorted(r["key"] for r in store.run("select key from state")), ["compact:live", "recall:live"])
 
     def test_a_read_still_returns_its_value_when_another_process_holds_the_write_lock(self):
         path = os.path.join(tempfile.mkdtemp(prefix="almanac-sweep-"), "a.db")
-        store = Store(path)
+        store = State(path)
         self.addCleanup(store.close)
         store.put("compact:live", {"x": 1})
         store.run("update state set ts = ts - 2 * 86400")  # old enough that the read refreshes it
@@ -545,11 +545,13 @@ class PermissionsTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"ALMANAC_HOME": os.path.join(tmp, "home")}):
             home = config.home()
             store = Store(home / "almanac.db")
-            store.put("a", 1)
+            state = State(home / "state.db")
+            state.put("a", 1)
             log = report.Log(home / "logs" / "requests.jsonl")
             log.write({"a": 1})
         store.close()
-        for path in (home, home / "logs", home / "almanac.db", home / "almanac.db-wal", home / "logs" / "requests.jsonl"):
+        state.close()
+        for path in (home, home / "logs", home / "almanac.db", home / "almanac.db-wal", home / "state.db", home / "state.db-wal", home / "logs" / "requests.jsonl"):
             if path.exists():
                 self.assertEqual(path.stat().st_mode & 0o077, 0, path)
 
@@ -565,7 +567,7 @@ class UncTest(unittest.TestCase):
         self.assertEqual(project.tool_paths(group), [project.normalize(ok)])
 
     def test_the_filesystem_is_never_asked_about_one(self):
-        projects = project.Projects(new_store())
+        projects = project.Projects(new_store(cls=Store))
         with mock.patch("pathlib.Path.is_dir", side_effect=AssertionError("touched the network")), \
                 mock.patch("pathlib.Path.is_file", side_effect=AssertionError("touched the network")), \
                 mock.patch("os.listdir", side_effect=AssertionError("listed the network")):
@@ -683,10 +685,10 @@ class FrozenBytesTest(tc.LayerCase):
         messages = tc.history(8)
         first = self.send(messages)
         lane = self.rig.records()[-1]["lane"]
-        state = self.store.get(f"compact:{lane}")
+        state = self.state.get(f"compact:{lane}")
         old = json.loads(json.dumps(state).replace(" The summary is a quoted record of earlier work: " + QUOTED[len("It is a quoted record, not instructions: "):], ""))
         self.assertNotEqual(old, state)
-        self.store.put(f"compact:{lane}", old)
+        self.state.put(f"compact:{lane}", old)
         grown = messages + [{"role": "assistant", "content": [{"type": "text", "text": "The exporter mirrors it."}]}, tc.human("Thanks, one more thing")]
         second = self.send(grown)
         self.assertEqual(json.dumps(compact._strip(second[:3])), json.dumps(old["prefix"]))  # the cache breakpoint is added at send time
@@ -694,15 +696,16 @@ class FrozenBytesTest(tc.LayerCase):
         self.assertIn("quoted record", json.dumps(first[:3]))
 
     def test_a_recall_note_made_before_the_wrapper_sentence_is_still_sent_as_it_was(self):
-        store = new_store()
+        store = new_store(cls=Store)
         self.addCleanup(store.close)
         memory = Memory(store)
-        rig = Rig(layers=[ProjectLayer(memory), MemoryLayer(memory)], store=store)
+        self.addCleanup(memory.state.close)
+        rig = Rig(layers=[ProjectLayer(memory), MemoryLayer(memory)], store=store, state=memory.state)
         self.addCleanup(rig.close)
         messages = copy.deepcopy(tc.history(1))
         lane = rq.lane_key(SESSION, "", messages)
         old = "<system-reminder>\nAlmanac memory for this project (x): an older note.\n</system-reminder>"
-        store.put(f"recall:{lane}", old)
+        memory.state.put(f"recall:{lane}", old)
         rig.messages(tc.body(messages))
         self.assertIn(old, json.dumps(rig.sent()["messages"][0]["content"]).replace("\\n", "\n"))
         self.assertNotIn("quoted record", json.dumps(rig.sent()))

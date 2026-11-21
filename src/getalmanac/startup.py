@@ -45,16 +45,16 @@ def _sub_type(ctx):
 def _daily(ctx, name, compute):
     """A per-project, per-day snapshot of what drifts with usage, so new conversations of one project agree.
     A sub-agent's own type has its own snapshot."""
-    if ctx.store is None:
+    if ctx.state is None:
         return compute()
     sub = _sub_type(ctx)
-    return ctx.store.frozen(f"{name}{f':{sub}' if sub is not None else ''}-day:{_project(ctx)}:{_today()}", compute)
+    return ctx.state.frozen(f"{name}{f':{sub}' if sub is not None else ''}-day:{_project(ctx)}:{_today()}", compute)
 
 
 def _frozen(ctx, name, compute):
-    if ctx.store is None:
+    if ctx.state is None:
         return compute()
-    return ctx.store.frozen(f"{name}:{ctx.frozen_lane or ctx.lane}", compute)  # a fork shares its parent's cached prefix
+    return ctx.state.frozen(f"{name}:{ctx.frozen_lane or ctx.lane}", compute)  # a fork shares its parent's cached prefix
 
 
 def _untooled(description: str) -> str:
@@ -122,10 +122,10 @@ class _ListingLayer:
 
     def pinned(self, ctx) -> list:
         """Names the project keeps using (two of its last thirty conversations of this kind: main, or one sub-agent type): shown in full, snapshotted once a day."""
-        if not self.KIND or ctx.store is None:
+        if not self.KIND or ctx.state is None:
             return []
         from . import library  # library imports the layer that imports this module
-        used = library.recently_used(ctx.store, self.KIND, _project(ctx), agent_type=_sub_type(ctx))
+        used = library.recently_used(ctx.memory_store, self.KIND, _project(ctx), agent_type=_sub_type(ctx))
         return sorted(name for name, count in used.items() if count >= 2)
 
     def shorten(self, description: str, chars: int) -> str:
@@ -255,7 +255,7 @@ class ToolsLayer:
 
         def promoted():
             from . import library  # library imports the layer that imports this module
-            used = library.recently_used(ctx.store, "tool", _project(ctx), agent_type=_sub_type(ctx)) if ctx.store is not None else {}
+            used = library.recently_used(ctx.memory_store, "tool", _project(ctx), agent_type=_sub_type(ctx)) if ctx.state is not None else {}
             return sorted(name for name, count in used.items() if count >= cfg["promote_after"])
 
         def decide():

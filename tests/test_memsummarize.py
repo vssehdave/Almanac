@@ -121,7 +121,7 @@ class Refine(ti.ImportBase):
         self.assertEqual((row["title"], row["summary"], row["mstatus"]), ("Fixed the parser", "Fixed a bug in parser.py.", "open"))
         self.assertEqual(report["summarized"], 1)
         self.assertIn("1 summarized", out)
-        self.assertEqual(summarize.today(self.store)["calls"], 1)
+        self.assertEqual(summarize.today(self.state)["calls"], 1)
 
     def test_the_call_asks_for_facts_and_stores_them(self):
         self.stored(n=1)
@@ -185,7 +185,7 @@ class Refine(ti.ImportBase):
         self.assertEqual(report["summarized"], 0)
         self.assertTrue(report["stopped"])
         self.assertIn("429", out)
-        self.assertTrue(summarize.paused_until(self.store))
+        self.assertTrue(summarize.paused_until(self.state))
         self.assertEqual(self.store.run("select count(*) n from node where tries > 0")[0]["n"], 0)  # not the exchange's fault
         again, out = self.refine()  # paused: no call at all
         self.assertEqual(len(FakeConn.sent), 1)

@@ -27,7 +27,7 @@ class NoteCase(tl.LibraryCase, Home):
         self.sessions = 0
 
     def rig(self, **overrides):
-        rig = Rig(layers=[SetProject(self.key), PlaybookLayer()], store=self.store, overrides=overrides or None)
+        rig = Rig(layers=[SetProject(self.key), PlaybookLayer()], store=self.store, state=self.state, overrides=overrides or None)
         self.addCleanup(rig.close)
         return rig
 
@@ -137,10 +137,10 @@ class NoteTest(NoteCase):
         self.solved()
         node = self.store.run("select n.id from node n join library l on n.convo = l.convo and n.kind = 'leaf' and n.seq = l.seq")[0]["id"]
         lane = rq.lane_key("s1", "", [human(TYPED)])
-        self.store.put(f"recall:{lane}", f"Almanac memory for this project: [{node + 1000}] something else")
+        self.state.put(f"recall:{lane}", f"Almanac memory for this project: [{node + 1000}] something else")
         self.assertEqual(len(notes(self.send(self.rig(), human(TYPED), session="s1"))), 1)  # another number: no overlap
         self.assertEqual(self.rows()[0]["uses"], 1)
-        self.store.put(f"recall:{rq.lane_key('s2', '', [human(TYPED)])}", f"Almanac memory for this project: [{node}] this very exchange")
+        self.state.put(f"recall:{rq.lane_key('s2', '', [human(TYPED)])}", f"Almanac memory for this project: [{node}] this very exchange")
         self.assertEqual(notes(self.send(self.rig(), human(TYPED), session="s2")), [])
         self.assertEqual(self.rows()[0]["uses"], 1)  # not counted as used either
 

@@ -73,7 +73,7 @@ class PrefixLayer:
     @staticmethod
     def _look(body, ctx):
         messages = body.get("messages")
-        if ctx.kind != "messages" or ctx.store is None or not isinstance(messages, list):
+        if ctx.kind != "messages" or ctx.state is None or not isinstance(messages, list):
             return
         if ctx.thread != "main" or any(isinstance(m, dict) and m.get("role") == "assistant" for m in messages):
             return
@@ -82,12 +82,12 @@ class PrefixLayer:
             return
         now, key = time.time(), f"firstreq:{project}"
         now_blocks = blocks(body)
-        with ctx.store.lock:
-            prev = ctx.store.get(key)
+        with ctx.state.lock:
+            prev = ctx.state.get(key)
             if prev and prev.get("lane") == ctx.lane:
                 return  # the same conversation's first request sent again
             acct = account(ctx.headers)
-            ctx.store.put(key, {"ts": now, "acct": acct, "lane": ctx.lane, "blocks": now_blocks})
+            ctx.state.put(key, {"ts": now, "acct": acct, "lane": ctx.lane, "blocks": now_blocks})
         if not prev:
             return
         at, index, before, after = compare([tuple(b) for b in prev["blocks"]], now_blocks)

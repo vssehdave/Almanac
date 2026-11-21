@@ -25,6 +25,7 @@ from .cheatsheet import family
 from . import request as rq
 from .match import STOP, tokens
 from .project import Projects, tool_paths
+from .store import STATE_FILE, State
 from .status import OPEN_KEEP, STATUSES, aged, combine, rule
 
 SCHEMA = """
@@ -296,8 +297,12 @@ def snippet(text: str, terms: set, limit=230) -> str:
 
 
 class Memory:
-    def __init__(self, store):
+    """The stored conversations. `store` is the memory file (almanac.db); `state` is the per-conversation decisions file
+    (state.db) beside it, opened here when not given. The two never share a transaction or a lock."""
+
+    def __init__(self, store, state=None):
         self.store = store
+        self.state = state or State(store.path.with_name(STATE_FILE), legacy=store.path)
         with store.lock:
             store.db.executescript(SCHEMA)
             have = {r["name"] for r in store.run("pragma table_info(node)")}
@@ -556,7 +561,7 @@ class Memory:
         seq = len(turns) - 1
         group = messages[turns[-1]:] + ([{"role": "assistant", "content": reply["content"]}] if reply else [])
         size = len(json.dumps(group, ensure_ascii=False))
-        seen = self.store.get(f"partial:{lane}") or {}
+        seen = self.state.get(f"partial:{lane}") or {}
         if size - (seen.get("size", 0) if seen.get("seq") == seq else 0) < PARTIAL_CHARS:
             return False
         # the slow text work is done before the lock, which request threads also take
@@ -574,7 +579,7 @@ class Memory:
             self.store.run("update node set status = 'open', tries = 99 where id = ?", (leaf,))
             for node in {topic} | {r["parent"] for r in old}:
                 self._refresh_topic(node)
-            self.store.put(f"partial:{lane}", {"seq": seq, "size": size})
+            self.state.put(f"partial:{lane}", {"seq": seq, "size": size})
             return True
 
     def index(self, lane, session, project, messages, reply=None, finished=False, assign=None, stamps=None, parent=0, agent_type="") -> int:
@@ -847,16 +852,16 @@ class Memory:
     def gate(self, session, holds=2) -> str:
         """The reason to keep an Opus main thread from ending its turn while its sub-agents' work is unreviewed, or "".
         Each conversation is held at most `holds` times, so a model that cannot review is never stuck."""
-        main = self.store.get(f"main:{session}") or {}
+        main = self.state.get(f"main:{session}") or {}
         lane = main.get("lane") or ""
         own = self.convo_of(lane)
         if not own or family(main.get("answered") or "") != "opus":
             return ""
         pending = self.store.run("select id, title from convo where parent = ? and review = 'pending' order by id", (own["id"],))
-        held = self.store.get(f"gateheld:{lane}") or 0
+        held = self.state.get(f"gateheld:{lane}") or 0
         if not pending or held >= holds:
             return ""
-        self.store.put(f"gateheld:{lane}", held + 1)
+        self.state.put(f"gateheld:{lane}", held + 1)
         names = "; ".join(f"{r['id']}: {r['title'][:60]}" for r in pending)
         return (f"Sub-agent work in this conversation is not reviewed yet ({names}). Check it against the code or output, "
                 "then call memory_review with a one-line verdict (no number covers all of them) before you finish.")
@@ -1039,20 +1044,26 @@ class Memory:
             lines.append(hint)
         return "<system-reminder>\n" + "\n".join(lines) + "\n</system-reminder>"
 
+    def close(self):
+        self.store.close()
+        self.state.close()
+
     # ---- upkeep ----------------------------------------------------------------
 
     def _remove(self, row):
-        """One conversation, and every copy of its text: nodes, library rows, and the per-conversation rows in `state`."""
+        """One conversation, and every copy of its text: nodes, library rows, and the per-conversation rows in state.db.
+        The two files are not one transaction, so the state rows go first: a stop in between leaves a conversation that is
+        still listed, and running forget again finishes the job. The reverse would leave state rows nothing points to."""
         from . import library
+        self._drop_lane(row["lane"])
         for child in self.store.run("select id, lane from convo where parent = ?", (row["id"],)):  # a sub-agent's work goes with its parent
             self._remove(child)
         self._drop_nodes([r["id"] for r in self.store.run("select id from node where convo = ?", (row["id"],))])
         library.drop(self.store, [row["id"]])
         self.store.run("delete from convo where id = ?", (row["id"],))
-        self._drop_lane(row["lane"])
 
     def _drop_lane(self, lane):
-        self.store.run("delete from state where key like ? or key like ?", ("%:" + lane, "%:" + lane + ":%"))  # compact:, recall:, project:, route:<lane>:<turn> ...
+        self.state.run("delete from state where key like ? or key like ?", ("%:" + lane, "%:" + lane + ":%"))  # compact:, recall:, project:, route:<lane>:<turn> ...
         self.store.run("delete from raw where lane = ?", (lane,))
 
     def _cap_raw(self):
@@ -1076,6 +1087,7 @@ class Memory:
             self.store.run("insert into detail_fts(detail_fts) values ('optimize')")
             self.store.run("insert into fact_fts(fact_fts) values ('optimize')")
             self.store.run("pragma wal_checkpoint(TRUNCATE)")
+            self.state.run("pragma wal_checkpoint(TRUNCATE)")  # state.db holds copies of the same text (stubs, recall notes)
         except Exception:  # a locked or busy file is cleaned by the next merge; the rows themselves are gone
             pass
 
@@ -1101,9 +1113,9 @@ class Memory:
             if project and convo_id is None:
                 # Lanes with no conversation row (subagents, a first exchange that never ended) are found by their project.
                 known = {r["lane"] for r in self.store.run("select lane from convo")}
-                for r in self.store.run("select key from state where key like 'project:%' and value = ?", (json.dumps(project),)):
+                for r in self.state.run("select key from state where key like 'project:%' and value = ?", (json.dumps(project),)):
                     lane = r["key"][8:]
-                    last = self.store.run("select max(ts) ts from state where key like ?", ("%:" + lane,))[0]["ts"]
+                    last = self.state.run("select max(ts) ts from state where key like ?", ("%:" + lane,))[0]["ts"]
                     if lane not in known and (force or last < old):  # a row written in the last hour: may be open
                         self._drop_lane(lane)
                         extra += 1
@@ -1111,15 +1123,15 @@ class Memory:
                 # A recall note (a sub-agent's too) quotes other conversations and cannot be traced back to them, so every
                 # closed conversation loses its note; one that is resumed gets a new note.
                 busy = {r["lane"] for r in self.store.run("select lane from convo where updated > ?", (old,))}
-                for r in self.store.run("select key from state where (key like 'recall:%' or key like 'subnote:%') and ts < ?", (old,)):
+                for r in self.state.run("select key from state where (key like 'recall:%' or key like 'subnote:%') and ts < ?", (old,)):
                     if r["key"].partition(":")[2] not in busy:
-                        self.store.run("delete from state where key = ?", (r["key"],))
+                        self.state.run("delete from state where key = ?", (r["key"],))
                         extra += 1
             if convo_id is None and not project:  # everything: no saved choice of a closed conversation stays, whoever's it was
                 lanes = {r["lane"] for r in live}
-                for r in self.store.run("select key from state where key not like 'summary:%'"):
+                for r in self.state.run("select key from state where key not like 'summary:%'"):
                     if r["key"].rpartition(":")[2] not in lanes:
-                        self.store.run("delete from state where key = ?", (r["key"],))
+                        self.state.run("delete from state where key = ?", (r["key"],))
                 self.store.run("delete from library where convo < 0")  # the usage carried over from before the conversations were kept
                 for r in self.store.run("select distinct lane from raw"):  # results kept for stubs of lanes with no conversation row
                     if r["lane"] not in lanes:
@@ -1161,7 +1173,7 @@ class ProjectLayer:
         messages = body.get("messages") or []
         turns = rq.human_turns(messages)
         first = rq.human_text(messages[turns[0]]) if turns else ""
-        ctx.project = ctx.store.frozen(f"project:{ctx.lane}", lambda: self.memory.projects.for_start(ctx.cwd, first))
+        ctx.project = ctx.state.frozen(f"project:{ctx.lane}", lambda: self.memory.projects.for_start(ctx.cwd, first))
 
 
 class MemoryLayer:
@@ -1194,19 +1206,18 @@ class MemoryLayer:
         """The conversation a sub-agent belongs to, {"id", "project"}, or {} while it is not stored yet (nothing is kept then).
         Its session's main thread leaves its lane in `main:` when it sends a request; the sub-agent keeps the lane it
         found on its first request, so a later /clear cannot move it, and the id once the conversation is stored."""
-        store, key = ctx.store, f"subparent:{ctx.lane}"
-        with store.lock:
-            kept = store.get(key)
-            if kept:
-                return kept
-            lane = store.get(f"subparentlane:{ctx.lane}") or (store.get(f"main:{ctx.session}") or {}).get("lane") or ""
-            if not lane:
-                return {}
-            store.put(f"subparentlane:{ctx.lane}", lane)
-            found = self.memory.convo_of(lane)
-            if found:
-                store.put(key, found)
-            return found or {}
+        store, key = ctx.state, f"subparent:{ctx.lane}"
+        kept = store.get(key)  # no state lock held across convo_of: it takes the memory lock, which is taken before the state's elsewhere
+        if kept:
+            return kept
+        lane = store.get(f"subparentlane:{ctx.lane}") or (store.get(f"main:{ctx.session}") or {}).get("lane") or ""
+        if not lane:
+            return {}
+        store.put(f"subparentlane:{ctx.lane}", lane)  # the same answer whoever gets here first
+        found = self.memory.convo_of(lane)
+        if found:
+            store.put(key, found)
+        return found or {}
 
     @staticmethod
     def _add(first, text):
@@ -1223,7 +1234,7 @@ class MemoryLayer:
         messages = body.get("messages") or []
         main = self._main_thread(body, ctx)
         if main:  # before the reply is stored (that is queued), so a sub-agent that starts at once can find this conversation
-            ctx.store.merge(f"main:{ctx.session}", lane=ctx.lane)
+            ctx.state.merge(f"main:{ctx.session}", lane=ctx.lane)
         if not cfg["recall"]:
             return
         if self._sub_thread(body, ctx):
@@ -1237,7 +1248,7 @@ class MemoryLayer:
                     recalled = self.memory.recall(parent["project"], rq.human_text(messages[rq.human_turns(messages)[0]]), ctx.lane,
                                                   cfg["recall_chars"], tools_hint=tools, agent_type=ctx.agent_type)
                     return "\n".join(part for part in (pointer, recalled) if part)
-                note = ctx.store.frozen(f"subnote:{ctx.lane}", compose, outside=True)  # encoding the query is slow: not under the store's lock
+                note = ctx.state.frozen(f"subnote:{ctx.lane}", compose, outside=True)  # encoding the query is slow: not under the store's lock
                 if note:
                     self._add(messages[rq.human_turns(messages)[0]], note)
                     ctx.stats["memory"] = {"subnote_chars": len(note)}
@@ -1245,7 +1256,7 @@ class MemoryLayer:
         if not main:
             return
         first = messages[rq.human_turns(messages)[0]]
-        note = ctx.store.frozen(f"recall:{ctx.lane}", lambda: self.memory.recall(
+        note = ctx.state.frozen(f"recall:{ctx.lane}", lambda: self.memory.recall(
             ctx.project, rq.human_text(first), ctx.lane, cfg["recall_chars"], tools_hint=cfg.get("tools", True)), outside=True)
         if not note:
             return
@@ -1290,7 +1301,7 @@ class MemoryLayer:
             return
         if not self._main_thread(orig, ctx):
             return
-        self.memory.store.merge(f"main:{ctx.session}", answered=self._model(ctx, orig))  # what the review gate checks
+        self.memory.state.merge(f"main:{ctx.session}", answered=self._model(ctx, orig))  # what the review gate checks
         self.memory.index(ctx.lane, ctx.session, ctx.project, orig["messages"], reply)
         if reply.get("stop_reason") == "tool_use":  # a long turn: keep what it has done so far searchable
             self.memory.index_partial(ctx.lane, ctx.project, orig["messages"], reply)

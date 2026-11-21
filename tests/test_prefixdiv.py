@@ -9,7 +9,7 @@ from helpers import SESSION, Rig
 
 from getalmanac import prefixdiv, report
 from getalmanac.prefixdiv import PrefixLayer
-from getalmanac.store import Store
+from getalmanac.store import State, Store
 
 TOKEN = "Bearer secret-login-value"
 OTHER = "22222222-2222-3333-4444-555555555555"
@@ -36,11 +36,11 @@ class Upper:
 
 class PrefixTest(unittest.TestCase):
     def rig(self, *layers):
-        store = Store(os.path.join(tempfile.mkdtemp(prefix="almanac-prefix-"), "a.db"))
+        store = State(os.path.join(tempfile.mkdtemp(prefix="almanac-prefix-"), "a.db"))
         self.addCleanup(store.close)
-        rig = Rig(layers=[Project(), *layers, PrefixLayer()], store=store)
+        rig = Rig(layers=[Project(), *layers, PrefixLayer()], state=store)
         self.addCleanup(rig.close)
-        self.store = store
+        self.state = store
         return rig
 
     def prefixes(self, rig):
@@ -58,7 +58,7 @@ class PrefixTest(unittest.TestCase):
         self.assertGreater(second["tokens_after"], 0)
         self.assertTrue(second["same_account"])
         self.assertLess(second["since_project"], 60)
-        self.assertNotIn("Skip", json.dumps(self.store.get("firstreq:proj")))  # deferred tools are not in the prefix
+        self.assertNotIn("Skip", json.dumps(self.state.get("firstreq:proj")))  # deferred tools are not in the prefix
 
     def test_identical_prefix_is_none(self):
         rig = self.rig()
@@ -90,23 +90,23 @@ class PrefixTest(unittest.TestCase):
         rig.messages(body("sub"), session=OTHER, extra={"x-claude-code-agent-id": "agent1"})
         rig.messages(body("one"), session=SESSION)  # the same first request sent again
         self.assertEqual(self.prefixes(rig), [None] * 4)
-        self.assertEqual(len(self.store.run("select 1 from state where key like 'firstreq:%'")), 1)
-        self.assertEqual(self.store.get("firstreq:proj")["blocks"][-1][0], "m0.1 conversation")
+        self.assertEqual(len(self.state.run("select 1 from state where key like 'firstreq:%'")), 1)
+        self.assertEqual(self.state.get("firstreq:proj")["blocks"][-1][0], "m0.1 conversation")
 
     def test_no_login_value_stored_or_logged(self):
         rig = self.rig()
         rig.messages(body("one"), session=SESSION, extra={"authorization": TOKEN})
         rig.messages(body("two"), session=OTHER, extra={"authorization": TOKEN})
         rig.records()
-        stored = json.dumps(self.store.get("firstreq:proj"))
+        stored = json.dumps(self.state.get("firstreq:proj"))
         self.assertNotIn("secret-login-value", stored)
         self.assertNotIn("secret-login-value", Path(rig.log_path).read_text(encoding="utf-8"))
-        self.assertEqual(len(self.store.get("firstreq:proj")["acct"]), 12)
+        self.assertEqual(len(self.state.get("firstreq:proj")["acct"]), 12)
 
     def test_request_bytes_do_not_change(self):
         sent = []
         for layers in ((Upper(),), (Upper(), PrefixLayer()), ()):
-            rig = Rig(layers=[Project(), *layers], store=Store(os.path.join(tempfile.mkdtemp(), "a.db")))
+            rig = Rig(layers=[Project(), *layers], state=State(os.path.join(tempfile.mkdtemp(), "a.db")))
             self.addCleanup(rig.close)
             for session, typed in ((SESSION, "one"), (OTHER, "two")):
                 rig.messages(json.dumps(body(typed)).encode(), session=session)
@@ -116,7 +116,7 @@ class PrefixTest(unittest.TestCase):
 
     def test_broken_store_does_not_fail_the_request(self):
         rig = self.rig()
-        rig.proxy.store = None
+        rig.proxy.state = None
         status, _, _ = rig.messages(body())
         self.assertEqual(status, 200)
 

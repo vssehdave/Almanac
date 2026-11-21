@@ -11,7 +11,7 @@ from test_playbook import SetProject, Home, body, human, make, result
 
 from getalmanac import request as rq
 from getalmanac.playbook_layer import PlaybookLayer
-from getalmanac.store import Store
+from getalmanac.store import State, Store
 
 SHIP = ["test", "commit", "push", "pr", "ci", "merge"]
 
@@ -36,13 +36,14 @@ class RouteTest(Home):
     def setUp(self):
         super().setUp()
         self.store = Store(os.path.join(self.home, "a.db"))
+        self.state = State(self.store.path.with_name("state.db"))
         self.addCleanup(self.store.close)
         self.ahead = mock.patch("getplaybook.offer._ahead", return_value=True)
         self.ahead.start()
         self.addCleanup(self.ahead.stop)
 
     def rig(self):
-        rig = Rig(layers=[SetProject(""), PlaybookLayer()], store=self.store)
+        rig = Rig(layers=[SetProject(""), PlaybookLayer()], store=self.store, state=self.state)
         self.addCleanup(rig.close)
         return rig
 

@@ -11,7 +11,7 @@ import test_compact as tc
 from getalmanac import compact, mcp
 from getalmanac import memory as memory_mod
 from getalmanac.memory import Memory
-from getalmanac.store import Store
+from getalmanac.store import State, Store
 
 
 def reading(memory, **args):
@@ -31,8 +31,9 @@ FINAL = {"content": [{"type": "text", "text": "The importer fails on a bad row."
 class StoreCase(unittest.TestCase):
     def setUp(self):
         self.store = Store(os.path.join(tempfile.mkdtemp(prefix="almanac-raw-"), "a.db"))
+        self.state = State(self.store.path.with_name("state.db"))
         self.addCleanup(self.store.close)
-        self.memory = Memory(self.store)
+        self.memory = Memory(self.store, self.state)
 
 
 class RawStubTest(tc.LayerCase):
@@ -69,9 +70,9 @@ class RawStubTest(tc.LayerCase):
     def test_a_set_stored_before_the_upgrade_keeps_its_old_text(self):
         self.go(tc.long_turn(30))
         key = f"stubs:{self.lane()}"
-        old = self.store.get(key)
+        old = self.state.get(key)
         old.pop("tpl", None)  # what an earlier version wrote
-        self.store.put(key, old)
+        self.state.put(key, old)
         sent = self.go(tc.long_turn(31))
         self.assertEqual(tc.results(sent)[0]["content"], compact.STUB.format(n=3003))
         self.assertNotIn("memory_read", json.dumps(tc.results(sent)[:18]))
@@ -231,7 +232,7 @@ class SearchTranscriptTest(StoreCase):
     def test_an_older_store_is_filled_in_when_opened(self):
         self.memory.index("lane-1", "s1", "", with_result("ERR_0xBEEF " * 3), FINAL)
         self.store.run("delete from detail_fts")
-        Memory(self.store)
+        Memory(self.store, self.state)
         self.assertEqual(len(self.memory.search("ERR_0xBEEF")), 1)
 
 

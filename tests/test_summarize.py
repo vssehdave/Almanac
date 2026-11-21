@@ -14,7 +14,7 @@ from test_memory import make_repo
 from getalmanac import compact, memory as memory_mod, summarize
 from getalmanac.memory import Memory, MemoryLayer, ProjectLayer
 from getalmanac.status import combine
-from getalmanac.store import Store
+from getalmanac.store import State, Store
 from getalmanac.summarize import SummaryLayer
 
 MODEL = "claude-haiku-5-5"
@@ -38,8 +38,9 @@ class Case(unittest.TestCase):
         self.tmp = tempfile.mkdtemp(prefix="almanac-sum-")
         self.db_path = os.path.join(self.tmp, "a.db")
         self.store = Store(self.db_path)
+        self.state = State(self.store.path.with_name("state.db"))
         self.addCleanup(self.store.close)
-        self.memory = Memory(self.store)
+        self.memory = Memory(self.store, self.state)
         self.alpha = make_repo(self.tmp, "alpha", "https://github.com/Someone/Alpha.git")
         self.key = self.memory.projects.see(self.alpha)
         self.verdict, self.calls = GOOD, []
@@ -47,7 +48,7 @@ class Case(unittest.TestCase):
 
     def start(self, **overrides):
         layers = [ProjectLayer(self.memory), MemoryLayer(self.memory), SummaryLayer(self.memory)]
-        self.rig = Rig(respond=self.respond, layers=layers, store=self.store, overrides=overrides)
+        self.rig = Rig(respond=self.respond, layers=layers, store=self.store, state=self.state, overrides=overrides)
         self.addCleanup(self.rig.close)
 
     def respond(self, req):
@@ -78,12 +79,13 @@ class Case(unittest.TestCase):
 class LanesTest(Case):
     def start(self, **overrides):
         layers = [ProjectLayer(self.memory), compact.CompactLayer(self.memory), MemoryLayer(self.memory), SummaryLayer(self.memory)]
-        self.rig = Rig(respond=self.respond, layers=layers, store=self.store, overrides=overrides)
+        self.rig = Rig(respond=self.respond, layers=layers, store=self.store, state=self.state, overrides=overrides)
         self.addCleanup(self.rig.close)
 
     def usage_of_b(self):
-        return self.store.run("select 1 from state where key = 'usage:' || (select c.lane from convo c join node n on n.convo = c.id "
-                              "where n.kind = 'leaf' and n.text like '%Rename the parser%')")
+        lanes = self.store.run("select c.lane from convo c join node n on n.convo = c.id "  # two files: two queries
+                               "where n.kind = 'leaf' and n.text like '%Rename the parser%'")
+        return lanes and self.state.run("select 1 from state where key = ?", ("usage:" + lanes[0]["lane"],))
 
     def test_a_slow_summary_does_not_hold_back_another_conversations_indexing_or_usage(self):
         held, release = threading.Event(), threading.Event()
@@ -142,7 +144,7 @@ class SummaryTest(Case):
         self.assertEqual(sent["system"], [{"type": "text", "text": IDENTITY}, {"type": "text", "text": summarize.INSTRUCTION}])
         self.assertEqual((sent["model"], sent["max_tokens"], "stream" in sent, "tools" in sent), (MODEL, 1500, False, False))
         self.assertIn("retry helper", sent["messages"][0]["content"])
-        used = summarize.today(self.store)
+        used = summarize.today(self.state)
         self.assertEqual((used["calls"], used["in"], used["out"]), (1, 50, 20))
         self.assertIn("1 exchange(s) summarized by " + MODEL, summarize.line(self.memory, self.rig.cfg))
 
@@ -162,7 +164,7 @@ class SummaryTest(Case):
         self.verdict = message("sorry, no json here")
         self.ask(q, earlier=1)
         self.assertEqual([(r["summary"], r["title"].startswith("A question")) for r in self.leaves()], [("", True)] * 2)
-        self.assertFalse(summarize.paused_until(self.store))
+        self.assertFalse(summarize.paused_until(self.state))
         self.ask(q, earlier=2)
         self.assertEqual(max(r["tries"] for r in self.leaves()), 3)
         self.assertTrue(all(r["summary"] == "" for r in self.leaves()))
@@ -209,20 +211,20 @@ class SummaryTest(Case):
         self.verdict = (429, JSON_HEADERS, b'{"type":"error","error":{"type":"rate_limit_error"}}')
         self.ask("Add a retry helper to the fetch module")
         self.assertEqual(len(self.calls), 1)
-        until = summarize.paused_until(self.store)
+        until = summarize.paused_until(self.state)
         self.assertAlmostEqual(until, time.time() + 3600, delta=60)
         self.assertIn("paused until", summarize.line(self.memory, self.rig.cfg))
         self.verdict = GOOD
         self.ask("A second retry helper question")
         self.assertEqual(len(self.calls), 1)
-        self.store.put("summary:pause", time.time() - 1)  # the hour is over
+        self.state.put("summary:pause", time.time() - 1)  # the hour is over
         self.ask("A third retry helper question")
         self.assertGreater(len(self.calls), 1)
 
     def test_a_refused_login_pauses_too(self):
         self.verdict = (401, JSON_HEADERS, b"{}")
         self.ask("Add a retry helper to the fetch module")
-        self.assertTrue(summarize.paused_until(self.store))
+        self.assertTrue(summarize.paused_until(self.state))
 
     def test_the_daily_cap_holds(self):
         self.start(**{"memory.summary_daily_calls": 2})
@@ -230,7 +232,7 @@ class SummaryTest(Case):
             self.ask(f"Question {n} about the retry helper")
         self.assertEqual(len(self.calls), 2)
         self.assertEqual(len([r for r in self.leaves() if r["summary"]]), 2)
-        self.store.put("summary:day", {"day": "2000-01-01", "calls": 99, "in": 0, "out": 0})  # a new day
+        self.state.put("summary:day", {"day": "2000-01-01", "calls": 99, "in": 0, "out": 0})  # a new day
         self.ask("Question 5 about the retry helper")
         self.assertEqual(len(self.calls), 3)  # each of these questions is its own conversation
 
@@ -336,11 +338,11 @@ class Budget(unittest.TestCase):
                 pass
 
         proxy = type("P", (), {"base": "", "connect": lambda self: Conn()})()
-        return type("C", (), {"store": store, "proxy": proxy, "headers": {}})()
+        return type("C", (), {"state": store, "proxy": proxy, "headers": {}})()
 
     def test_calls_finishing_out_of_order_lose_no_count_or_tokens(self):
         path = os.path.join(tempfile.mkdtemp(prefix="almanac-bud-"), "a.db")
-        a, b = Store(path), Store(path)  # the background import has a connection of its own
+        a, b = State(path), State(path)  # the background import has a connection of its own
         self.addCleanup(a.close)
         self.addCleanup(b.close)
         self.assertTrue(summarize.reserve(a, 5))
@@ -351,7 +353,7 @@ class Budget(unittest.TestCase):
         self.assertEqual((used["calls"], used["in"], used["out"]), (2, 20, 4))
 
     def test_the_cap_holds_and_an_explicit_limit_may_pass_it(self):
-        store = Store(os.path.join(tempfile.mkdtemp(prefix="almanac-bud-"), "a.db"))
+        store = State(os.path.join(tempfile.mkdtemp(prefix="almanac-bud-"), "a.db"))
         self.addCleanup(store.close)
         self.assertEqual([summarize.reserve(store, 2) for _ in range(3)], [True, True, False])
         self.assertEqual(summarize.today(store)["calls"], 2)

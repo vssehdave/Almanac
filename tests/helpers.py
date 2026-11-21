@@ -112,7 +112,7 @@ class Upstream:
 class Rig:
     """An upstream plus a proxy in front of it."""
 
-    def __init__(self, respond=None, layers=(), store=None, overrides=None):
+    def __init__(self, respond=None, layers=(), store=None, overrides=None, state=None):  # store: almanac.db, state: state.db
         self.upstream = Upstream(respond)
         cfg = config.load()
         cfg["upstream"] = self.upstream.url
@@ -125,7 +125,7 @@ class Rig:
             node[parts[-1]] = value
         self.cfg = cfg
         self.log_path = os.path.join(tempfile.mkdtemp(prefix="almanac-log-"), "requests.jsonl")
-        self.proxy = proxy_mod.Proxy(cfg, store=store, layers=layers, log=Log(self.log_path))
+        self.proxy = proxy_mod.Proxy(cfg, state=state, memory_store=store, layers=layers, log=Log(self.log_path))
         self.server = self.proxy.serve()
         threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
         self.port = self.server.server_address[1]

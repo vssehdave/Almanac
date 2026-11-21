@@ -346,7 +346,7 @@ class HandoffTest(CloudCase):
     def has(self, ref):
         return subprocess.run(["git", "--git-dir", self.bare, "rev-parse", "--verify", "-q", ref], capture_output=True).returncode == 0
 
-    def state(self):
+    def handoff_meta(self):
         return json.loads(self.pushed("almanac-handoff.json"))
 
     def test_the_snapshot_holds_the_work_and_leaves_the_checkout_alone(self):
@@ -383,7 +383,7 @@ class HandoffTest(CloudCase):
         self.assertFalse(os.path.exists(os.path.join(clone, "new.txt")))  # untracked stays home
         self.assertFalse(os.path.exists(os.path.join(clone, "secret.log")))
         self.assertEqual(git(self.bare, "rev-parse", "cloud/handoff^"), head)
-        meta = self.state()
+        meta = self.handoff_meta()
         self.assertEqual((meta["state"], meta["base_branch"], meta["base_commit"], meta["session"]), ("working", "work", head, "s1"))
         text = self.pushed("ALMANAC_HANDOFF.md")
         self.assertIn("The last message the person typed:\n\nMake it print two", text)
@@ -464,7 +464,7 @@ class HandoffTest(CloudCase):
             if self.has("cloud/handoff"):
                 break
             time.sleep(0.1)
-        self.assertEqual(self.state()["state"], "idle")
+        self.assertEqual(self.handoff_meta()["state"], "idle")
 
     def test_only_a_repository_turned_on_takes_part(self):
         beta = self.beta  # cloud.auto on, but never turned on here
@@ -486,7 +486,7 @@ class HandoffTest(CloudCase):
         self.assertEqual(git(other, "for-each-ref"), "")
         self.turn([human("A long task")], "tool_use")
         self.layer.beat(time.time() + 601)
-        self.assertEqual(self.state()["state"], "working")  # alpha is on: pushed
+        self.assertEqual(self.handoff_meta()["state"], "working")  # alpha is on: pushed
         first = self.pushed()
         out = io.StringIO()
         with redirect_stdout(out), mock.patch.object(cli, "_memory_handle", return_value=self.memory), \
@@ -509,7 +509,7 @@ class HandoffTest(CloudCase):
         self.assertEqual(self.pushed(), "")  # the first heartbeat comes one interval in
         self.layer.beat(now + 601)
         first = self.pushed()
-        self.assertEqual(self.state()["state"], "working")
+        self.assertEqual(self.handoff_meta()["state"], "working")
         self.layer.beat(now + 700)
         self.assertEqual(self.pushed(), first)  # not due yet
         time.sleep(1.1)  # commit times have one-second resolution: the same second would give the same commit
@@ -517,11 +517,11 @@ class HandoffTest(CloudCase):
         self.assertNotEqual(self.pushed(), first)  # a tool is still running: a new heartbeat
         self.turn([human("A long task"), said("ok", tool=("Bash", {})), result()], "end_turn")
         self.layer.beat()
-        self.assertEqual(self.state()["state"], "idle")
+        self.assertEqual(self.handoff_meta()["state"], "idle")
         idle = self.pushed()
         self.layer.beat(time.time() + 5000)
         self.assertEqual(self.pushed(), idle)  # stopped until the next request
-        self.assertEqual(self.memory.store.get(f"handoff:{git(self.alpha, 'rev-parse', '--show-toplevel')}")["state"], "idle")
+        self.assertEqual(self.memory.state.get(f"handoff:{git(self.alpha, 'rev-parse', '--show-toplevel')}")["state"], "idle")
 
     def test_a_subagent_or_a_side_call_changes_nothing(self):
         self.layer.transform({"messages": [human("x")], "tools": [{"name": "Bash", "input_schema": {}}]},
@@ -556,13 +556,13 @@ class HandoffTest(CloudCase):
         self.failures(5, 529)
         self.assertEqual(self.pushed(), "")  # outcome only counts: git runs on the heartbeat thread
         self.layer.beat(time.time() + 5)  # well inside the heartbeat interval
-        self.assertEqual(self.state()["state"], "stalled")
+        self.assertEqual(self.handoff_meta()["state"], "stalled")
         self.assertIn("task", self.pushed("ALMANAC_HANDOFF.md"))
         first = self.pushed()
         self.failures(3, 502)
         self.layer.beat(time.time() + 5000)
         self.assertEqual(self.pushed(), first)  # one push per stall, however long it goes on
-        self.assertIn(", stalled, commit ", cloud.status(self.alpha, {"cloud": {"auto": True, "heartbeat_minutes": 10}}, self.memory.store))
+        self.assertIn(", stalled, commit ", cloud.status(self.alpha, {"cloud": {"auto": True, "heartbeat_minutes": 10}}, self.memory.state))
 
     def test_four_failures_or_4xx_replies_do_not_stall(self):
         self.failures(4)
@@ -572,7 +572,7 @@ class HandoffTest(CloudCase):
         self.assertEqual(self.pushed(), "")
         self.failures(1)
         self.layer.beat(time.time() + 5)
-        self.assertEqual(self.state()["state"], "stalled")
+        self.assertEqual(self.handoff_meta()["state"], "stalled")
 
     def test_a_success_resets_the_count_and_the_next_push_says_working(self):
         self.failures(4)
@@ -582,14 +582,14 @@ class HandoffTest(CloudCase):
         self.assertEqual(self.pushed(), "")  # 4, a success, 4: never 5 in a row
         self.failures(1)
         self.layer.beat(time.time() + 5)
-        self.assertEqual(self.state()["state"], "stalled")
+        self.assertEqual(self.handoff_meta()["state"], "stalled")
         self.failures(1, 200)
         self.layer.beat(time.time() + 5)  # not an interval later
-        self.assertEqual(self.state()["state"], "working")
+        self.assertEqual(self.handoff_meta()["state"], "working")
         stalled_again = self.pushed()
         self.failures(5)
         self.layer.beat(time.time() + 5)
-        self.assertEqual(self.state()["state"], "stalled")  # a new stall pushes again
+        self.assertEqual(self.handoff_meta()["state"], "stalled")  # a new stall pushes again
         self.assertNotEqual(self.pushed(), stalled_again)
 
     def test_a_stall_is_not_hidden_by_a_later_idle_or_working_beat(self):
@@ -597,7 +597,7 @@ class HandoffTest(CloudCase):
         self.layer.beat(time.time() + 5)
         self.layer.beat(time.time() + 5000)  # the client has given up: no "idle" over the "stalled"
         self.layer.close()
-        self.assertEqual(self.state()["state"], "stalled")
+        self.assertEqual(self.handoff_meta()["state"], "stalled")
 
     def test_a_repository_not_turned_on_or_stall_after_0_gets_nothing(self):
         other = cloud.HandoffLayer(self.memory, dict(config.load(), cloud=dict(config.load()["cloud"], stall_after=0)), background=False)
@@ -620,7 +620,7 @@ class HandoffTest(CloudCase):
         self.assertEqual(len(Log(self.log_path).tail()), 1)  # the retry waits an interval
         git(self.alpha, "remote", "set-url", "origin", self.bare)
         self.layer.beat(time.time() + 700)
-        self.assertEqual(self.state()["state"], "stalled")
+        self.assertEqual(self.handoff_meta()["state"], "stalled")
 
     def test_through_the_proxy_failures_stall_and_a_reply_clears_it(self):
         replies = [(529, {}, b"overloaded")] * 5 + [(429, {}, b"limit"), (200, {"content-type": "text/event-stream"}, sse("back"))]
@@ -633,14 +633,14 @@ class HandoffTest(CloudCase):
             rig.records()
         must.assert_not_called()  # the count is kept on the request path, git is not run there
         self.layer.beat()
-        self.assertEqual(self.state()["state"], "stalled")
+        self.assertEqual(self.handoff_meta()["state"], "stalled")
         self.assertEqual(rig.messages(body)[0], 429)
         self.layer.beat(time.time() + 5)
-        self.assertEqual(self.state()["state"], "stalled")  # a 429 is no recovery
+        self.assertEqual(self.handoff_meta()["state"], "stalled")  # a 429 is no recovery
         self.assertEqual(rig.messages(body)[0], 200)
         rig.records()
         self.layer.beat()
-        self.assertEqual(self.state()["state"], "idle")  # the reply ended the turn
+        self.assertEqual(self.handoff_meta()["state"], "idle")  # the reply ended the turn
 
     def test_through_the_proxy_a_request_is_not_held_up_and_the_turn_end_pushes(self):
         rig = Rig(respond=lambda req: (200, {"content-type": "text/event-stream"}, sse("done")), layers=[self.layer])
@@ -653,42 +653,45 @@ class HandoffTest(CloudCase):
         must.assert_not_called()  # git runs on the layer's thread only
         self.assertTrue(self.layer.repos[self.alpha]["ended"])
         self.layer.beat()
-        self.assertEqual(self.state()["state"], "idle")
+        self.assertEqual(self.handoff_meta()["state"], "idle")
 
     def test_auto_off_adds_nothing_and_runs_no_git(self):
         cfg = config.load()
         self.assertFalse(cfg["cloud"]["auto"])
         with mock.patch.object(cloud, "_must", side_effect=AssertionError("git with auto off")):
             built = proxy_mod.build(cfg)
-            self.addCleanup(built.store.close)
+            self.addCleanup(built.state.close)
+            self.addCleanup(built.memory_store.close)
             self.assertFalse(any(isinstance(layer, cloud.HandoffLayer) for layer in built.layers))
             cfg["cloud"]["auto"] = "false"  # typed by hand into config.json
             typed = proxy_mod.build(cfg)
-            self.addCleanup(typed.store.close)
+            self.addCleanup(typed.state.close)
+            self.addCleanup(typed.memory_store.close)
             self.assertFalse(any(isinstance(layer, cloud.HandoffLayer) for layer in typed.layers))
             cfg["cloud"]["auto"] = True
             on = proxy_mod.build(cfg)
-            self.addCleanup(on.store.close)
+            self.addCleanup(on.state.close)
+            self.addCleanup(on.memory_store.close)
             self.assertTrue(any(isinstance(layer, cloud.HandoffLayer) for layer in on.layers))
 
     def test_close_marks_a_running_task_idle(self):
         self.turn([human("A long task")], "tool_use")
         self.layer.beat(time.time() + 601)
         self.layer.close()
-        self.assertEqual(self.state()["state"], "idle")
+        self.assertEqual(self.handoff_meta()["state"], "idle")
 
     def test_status_shows_the_last_beat_and_a_takeover_branch(self):
         cfg = {"cloud": {"auto": True, "heartbeat_minutes": 10}}
-        self.assertIn("none pushed from this machine", cloud.status(self.alpha, cfg, self.memory.store))
+        self.assertIn("none pushed from this machine", cloud.status(self.alpha, cfg, self.memory.state))
         self.turn([human("A long task")], "tool_use")
         self.layer.beat(time.time() + 601)
         sha = git(self.alpha, "rev-parse", "--short=12", self.pushed())
-        text = cloud.status(self.alpha, cfg, self.memory.store)
+        text = cloud.status(self.alpha, cfg, self.memory.state)
         self.assertIn(", working, commit " + sha, text)
         self.assertIn("takeover    none on origin", text)
         git(self.bare, "branch", f"cloud/almanac-takeover-{sha}", "cloud/handoff")
         git(self.bare, "branch", "cloud/other", "cloud/handoff")
-        text = cloud.status(self.alpha, cfg, self.memory.store)
+        text = cloud.status(self.alpha, cfg, self.memory.state)
         self.assertIn(f"cloud/almanac-takeover-{sha} on origin: pull the work back", text)
         self.assertNotIn("cloud/other", text)
         self.assertIn("  auto        on", text)
@@ -701,7 +704,7 @@ class HandoffTest(CloudCase):
             assert "ls-remote" not in args, "asked origin"
             return real(cwd, *args, **kw)
         with mock.patch.object(cloud, "_must", side_effect=no_remote):
-            text = cloud.status(self.alpha, cfg, self.memory.store, listed=False)
+            text = cloud.status(self.alpha, cfg, self.memory.state, listed=False)
         self.assertIn("takeover    not checked: the hand-off is off here", text)
 
     def test_the_watchdog_prompt_holds_every_stop_condition(self):
@@ -774,7 +777,7 @@ class HandoffTest(CloudCase):
             self.assertNotIn(plain, blob)
         ok, clone, (meta_path, md_path, diff_path) = self.opens(key)
         self.assertTrue(ok)
-        meta = self.state()
+        meta = self.handoff_meta()
         with open(meta_path) as handle:
             self.assertEqual(json.load(handle), meta)
         with open(md_path) as handle:
@@ -807,7 +810,7 @@ class HandoffTest(CloudCase):
         with self.assertRaises(ValueError):
             cloud.unseal(git(self.bare, "show", "cloud/handoff:almanac-handoff.sealed"), "")
         with self.assertRaises(ValueError):
-            cloud.sign(self.state(), "text", "")
+            cloud.sign(self.handoff_meta(), "text", "")
 
     def test_the_time_and_the_parent_are_checked(self):
         self.turn([human("Make it print two")], "tool_use")
@@ -840,7 +843,7 @@ class HandoffTest(CloudCase):
     def test_the_takeover_is_keyed_on_the_signature_not_the_commit(self):
         self.turn([human("Make it print two")], "tool_use")
         self.layer.beat(time.time() + 601)
-        sig = self.state()["sig"]
+        sig = self.handoff_meta()["sig"]
         path = os.path.join(self.tmp, "h.json")
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(self.pushed("almanac-handoff.json"))
@@ -898,7 +901,7 @@ class HandoffTest(CloudCase):
             self.assertEqual(asked.call_count, 1)
             self.layer.allow_public = True
             self.layer.beat(time.time() + 2000)
-            self.assertEqual(self.state()["state"], "working")  # sealed, so a deliberate opt-in pushes
+            self.assertEqual(self.handoff_meta()["state"], "working")  # sealed, so a deliberate opt-in pushes
         for unsure in ("", "PRIVATE", "INTERNAL"):
             self.layer.seen.clear()
             self.layer.allow_public = False
@@ -995,7 +998,7 @@ class HandoffTest(CloudCase):
         with mock.patch.object(cloud, "routine_call", side_effect=RuntimeError("routine POST: HTTP 500")) as call:
             self.run_turn(layer, "tool_use")
             layer.beat(time.time() + 601)
-            self.assertEqual(self.state()["state"], "working")  # the hand-off itself is unaffected
+            self.assertEqual(self.handoff_meta()["state"], "working")  # the hand-off itself is unaffected
             layer.beat(time.time() + 650)  # a retry waits an interval
             self.assertEqual(call.call_count, 1)
         lines = Log(self.log_path).tail()

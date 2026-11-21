@@ -101,7 +101,7 @@ class Round(Base):
         self.assertTrue(refine.call_args.kwargs["say"])
         self.assertEqual((report["summarized"], report["stopped"]), (2, "paused"))
         self.assertIn(report["vectors"], (None, 0))
-        self.assertIn("2 summarized", autoimport.line(self.store))
+        self.assertIn("2 summarized", autoimport.line(self.state))
 
     def start(self, config_json=None, home=None):
         """autoimport.start over a home that is not ~/.almanac (or `home`), with `config_json` written there. Returns (thread, ran)."""
@@ -113,7 +113,7 @@ class Round(Base):
             with open(os.path.join(folder, "config.json"), "w") as handle:
                 handle.write(config_json)
         with mock.patch.dict(os.environ, {"ALMANAC_HOME": folder}),                 mock.patch.object(autoimport, "run_once", lambda memory, cfg: ran.set()):
-            thread = autoimport.start(mock.Mock(cfg=self.cfg, store=self.store), first=0, every=3600)
+            thread = autoimport.start(mock.Mock(cfg=self.cfg, state=self.state, memory_store=self.store), first=0, every=3600)
             return thread, ran.wait(3 if thread else 0.2)
 
     def test_start_runs_a_round_in_the_background(self):
@@ -136,11 +136,11 @@ class Round(Base):
 
     def test_a_test_proxy_never_imports_the_real_transcripts(self):
         with mock.patch.dict(os.environ, {"ALMANAC_HOME": self.tmp}):  # a home with no config: the defaults say auto_import is on
-            rig = Rig(store=self.store)
+            rig = Rig(store=self.store, state=self.state)
         self.assertIsNone(rig.proxy.importing)
 
     def test_it_is_off_when_the_setting_is_off(self):
-        proxy = mock.Mock(cfg={"memory": {"enabled": True, "auto_import": False}}, store=self.store)
+        proxy = mock.Mock(cfg={"memory": {"enabled": True, "auto_import": False}}, state=self.state, memory_store=self.store)
         self.assertIsNone(autoimport.start(proxy))
 
 if __name__ == "__main__":

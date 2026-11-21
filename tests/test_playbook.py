@@ -20,7 +20,7 @@ from getalmanac import cli, config, mcp
 from getalmanac import request as rq
 from getalmanac.memory import Memory
 from getalmanac.playbook_layer import PlaybookLayer
-from getalmanac.store import Store
+from getalmanac.store import State, Store
 
 
 def make(name="weekly-report", **over):
@@ -171,10 +171,11 @@ class LayerTest(Home):
     def setUp(self):
         super().setUp()
         self.store = Store(os.path.join(self.home, "a.db"))
+        self.state = State(self.store.path.with_name("state.db"))
         self.addCleanup(self.store.close)
 
     def rig(self, project="", overrides=None):
-        rig = Rig(layers=[SetProject(project), PlaybookLayer()], store=self.store, overrides=overrides)
+        rig = Rig(layers=[SetProject(project), PlaybookLayer()], store=self.store, state=self.state, overrides=overrides)
         self.addCleanup(rig.close)
         return rig
 
@@ -283,9 +284,9 @@ class LayerTest(Home):
             self.send(rig, body(*history[:upto]))
         seen, orig = [], rig.upstream.requests
         queries = []
-        self.store.db.set_trace_callback(lambda sql: queries.append(sql) if sql.lstrip().lower().startswith("select") else None)
+        self.state.db.set_trace_callback(lambda sql: queries.append(sql) if sql.lstrip().lower().startswith("select") else None)
         self.send(rig, body(*history))
-        self.store.db.set_trace_callback(None)
+        self.state.db.set_trace_callback(None)
         return len(queries), [json.loads(r["body"]) for r in orig]
 
     def test_replaying_earlier_turns_costs_a_fixed_number_of_queries(self):
@@ -353,12 +354,13 @@ class Rigged(Home):
     def setUp(self):
         super().setUp()
         self.store = Store(os.path.join(self.home, "a.db"))
+        self.state = State(self.store.path.with_name("state.db"))
         self.addCleanup(self.store.close)
         self.cwd = tempfile.mkdtemp(prefix="almanac-auto-")
         self.addCleanup(shutil.rmtree, self.cwd, True)
 
     def rig(self, overrides=None):
-        rig = Rig(layers=[SetProject(""), PlaybookLayer()], store=self.store, overrides=overrides)
+        rig = Rig(layers=[SetProject(""), PlaybookLayer()], store=self.store, state=self.state, overrides=overrides)
         self.addCleanup(rig.close)
         return rig
 
@@ -533,8 +535,8 @@ class AutoTest(Rigged):
             time.sleep(0.05)
         self.assertTrue(Path(self.cwd, "started.txt").exists())
         begun = time.time()
-        self.store.put("other", 1)
-        self.assertEqual(self.store.get("other"), 1)
+        self.state.put("other", 1)
+        self.assertEqual(self.state.get("other"), 1)
         self.assertLess(time.time() - begun, 1)
         self.assertTrue(thread.is_alive())  # the script was still running
         thread.join()

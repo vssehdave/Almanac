@@ -83,7 +83,7 @@ class Ctx:
     """
 
     def __init__(self, proxy, headers, kind, sent=None):
-        self.cfg, self.store, self.kind, self.proxy, self.headers = proxy.cfg, proxy.store, kind, proxy, dict(sent or {})
+        self.cfg, self.state, self.memory_store, self.kind, self.proxy, self.headers = proxy.cfg, proxy.state, proxy.memory_store, kind, proxy, dict(sent or {})
         self.session = headers.get("x-claude-code-session-id") or ""
         self.agent = headers.get("x-claude-code-agent-id") or headers.get("x-claude-code-parent-agent-id") or ""
         self.klass = headers.get("x-claude-code-request-class") or ""
@@ -107,11 +107,11 @@ class Hold:
 
 
 class Proxy:
-    def __init__(self, cfg, store=None, layers=(), log=None):
+    def __init__(self, cfg, state=None, layers=(), log=None, memory_store=None):
         up = urlsplit(cfg["upstream"])
         if up.scheme not in ("http", "https") or not up.netloc:
             raise ValueError(f"upstream must be an http(s) URL, got {cfg['upstream']!r}")
-        self.cfg, self.store, self.layers = cfg, store, list(layers)
+        self.cfg, self.state, self.memory_store, self.layers = cfg, state, memory_store, list(layers)  # state.db and almanac.db: two connections
         self.log = log or Log(config.home() / "logs" / "requests.jsonl")
         self.secure, self.netloc, self.base = up.scheme == "https", up.netloc, up.path.rstrip("/")
         self.host, self.port = up.hostname, up.port or (443 if self.secure else 80)
@@ -146,8 +146,8 @@ class Proxy:
         return conn
 
     def is_fused(self, lane: str) -> bool:
-        if lane not in self.fused and self.store is not None:
-            kept = self.store.get(f"fused:{lane}")
+        if lane not in self.fused and self.state is not None:
+            kept = self.state.get(f"fused:{lane}")
             if kept:
                 self.fused[lane] = kept
         return lane in self.fused
@@ -155,9 +155,9 @@ class Proxy:
     def fuse(self, lane: str, why: str):
         """Stop rewriting one conversation, for good: the upstream refused its rewritten form."""
         self.fused[lane] = why
-        if self.store is not None:
+        if self.state is not None:
             try:
-                self.store.put(f"fused:{lane}", why)
+                self.state.put(f"fused:{lane}", why)
             except Exception:  # the mark only outlasts this run; a store error must not drop this reply
                 pass
 
@@ -613,18 +613,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 routed = ctx.stats.get("route")  # kept: the loop below removes it from the stats
                 ctx.stats["fallback"] = detail
                 limit = SIZE_LIMIT.search(detail)
-                if limit and proxy.store is not None:
+                if limit and proxy.state is not None:
                     # The window table can be wrong for this conversation (the same model id has a 200k and a 1M form).
                     # Keep the upstream's own number, and let the retry below relieve the turn against it.
                     try:
-                        proxy.store.put(f"window:{ctx.lane}", int(limit.group(1)))
+                        proxy.state.put(f"window:{ctx.lane}", int(limit.group(1)))
                         ctx.stats.setdefault("compaction", {})
                     except Exception:  # without it the request falls back to the original, as before
                         pass
                 retry, resent = raw, False
                 # The changes most likely to be refused go first, one at a time, so the other savings stay.
                 for mark in ("route", "compaction"):
-                    if mark not in ctx.stats or proxy.store is None:
+                    if mark not in ctx.stats or proxy.state is None:
                         continue
                     if mark == "compaction":
                         ctx.stats.pop("cold", None)  # the compacted body is the one refused: nothing was saved
@@ -633,9 +633,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     else:
                         try:
                             if SIZE_ERROR.search(detail):  # too long says nothing against the rewrite: estimate by size next time
-                                proxy.store.run("delete from state where key = ?", (f"usage:{ctx.lane}",))
+                                proxy.state.run("delete from state where key = ?", (f"usage:{ctx.lane}",))
                             else:
-                                proxy.store.put(f"nocompact:{ctx.lane}", {"detail": detail, "at": len((ctx.orig or {}).get("messages") or [])})
+                                proxy.state.put(f"nocompact:{ctx.lane}", {"detail": detail, "at": len((ctx.orig or {}).get("messages") or [])})
                         except Exception:  # without the mark the retry may compact again, be refused again, and go out raw
                             pass
                     del ctx.stats[mark]
@@ -738,7 +738,7 @@ def build(cfg=None) -> Proxy:
 
     cfg = cfg or config.load()
     store = Store(config.home() / "almanac.db")
-    memory = Memory(store)
+    memory = Memory(store)  # opens state.db beside it
     memory.prune(cfg["memory"]["keep_days"])
     threading.Thread(target=semantic.active, daemon=True).start()  # the first recall should not wait a second for the model
     # The strip first: it only removes what an off plugin left, so every other layer sees the clean request.
@@ -752,4 +752,4 @@ def build(cfg=None) -> Proxy:
         from .cloud import HandoffLayer
         layers.append(HandoffLayer(memory, cfg))
     layers.append(PrefixLayer())  # last: it reads the body as every other layer left it
-    return Proxy(cfg, store=store, layers=layers)
+    return Proxy(cfg, state=memory.state, memory_store=store, layers=layers)

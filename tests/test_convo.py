@@ -68,7 +68,7 @@ class ConvoSummaryTest(ts.Case):
             self.idle()
             self.assertEqual(len(self.calls), before)
             self.start()
-            self.store.put("summary:pause", time.time() + 3600)
+            self.state.put("summary:pause", time.time() + 3600)
             self.ask("Another helper question here", earlier=2)
             before = len(self.calls)
             self.idle()
@@ -179,7 +179,7 @@ class FakeProxy:
     base = ""
 
     def __init__(self, port, cfg, store):
-        self.port, self.cfg, self.store = port, cfg, store
+        self.port, self.cfg, self.state, self.memory_store = port, cfg, store, None
         self.log = type("L", (), {"write": staticmethod(lambda r: None)})
 
     def connect(self):
@@ -199,7 +199,7 @@ class IdleJobTest(MemoryCase):
         conversation(self.memory, lane, self.key, [f"First ask in {lane}", f"Second ask in {lane}"])
         from getalmanac import config
         cfg = config.load()
-        ctx = proxy_mod.Ctx(FakeProxy(self.mute.port, cfg, self.store), {}, "messages", {"authorization": auth, "user-agent": "claude-cli"})
+        ctx = proxy_mod.Ctx(FakeProxy(self.mute.port, cfg, self.state), {}, "messages", {"authorization": auth, "user-agent": "claude-cli"})
         ctx.lane, ctx.orig = lane, {"system": ts.IDENTITY, "messages": [{"role": "user", "content": "BODYTEXT"}]}
         return ctx
 
