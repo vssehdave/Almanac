@@ -136,6 +136,7 @@ DEFAULTS = {
         "enabled": True,
         "inject": True,  # tell Claude which playbook matches a request (see playbook_layer.py and the getplaybook package)
         "route": True,  # offer a playbook from what a thread is doing (its tool calls and narration), main thread and sub-agents
+        "default_mode": "enforce",  # the mode `almanac playbook approve` gives a playbook without --mode: suggest or enforce
         "auto_run": True,  # run a playbook's approved script in the proxy when `approve --auto` allowed it; false never runs one
         # Claude Code config folders to mine for repeated tasks, besides ~/.claude and $CLAUDE_CONFIG_DIR (see the getplaybook package),
         # for example ["~/.claude-work"]

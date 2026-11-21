@@ -94,8 +94,8 @@ class RedactionGapsTest(unittest.TestCase):
         for unit in ("curl ", "curl -H 'a", "curl '" + "x" * 10, 'curl "a|b" ', "Pwd=$", "Pwd=a(", "X_KEY=a(", "X_KEY=ab1", "token=a(", "LICENSE_KEY=A-"):
             with self.subTest(unit):
                 n = 100_000 // len(unit)
-                small = min(took(unit * n) for _ in range(2))
-                big = min(took(unit * 2 * n) for _ in range(2))
+                small = min(took(unit * n) for _ in range(5))
+                big = min(took(unit * 2 * n) for _ in range(5))
                 self.assertLess(big, 3 * max(small, 0.05))
                 self.assertLess(big, 5.0)
 
