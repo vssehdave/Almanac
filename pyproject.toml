@@ -24,7 +24,7 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Topic :: Software Development",
 ]
-dependencies = ["getplaybook @ git+https://github.com/vssehdave/Playbook@ab9d4645ec96db9a99eaa1405b908f24d4e8d691"]
+dependencies = ["getplaybook @ git+https://github.com/vssehdave/Playbook@63332f0ed562299aea9e83dee9c209ff66128d52"]
 
 [project.optional-dependencies]
 semantic = ["onnxruntime", "tokenizers", "numpy", "huggingface_hub"]

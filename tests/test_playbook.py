@@ -714,7 +714,7 @@ class WiringTest(Home):
         done = subprocess.run([entry["command"], *entry["args"]], input="".join(json.dumps(a) + "\n" for a in asks).encode(), capture_output=True, env=env, timeout=60)
         replies = [json.loads(x) for x in done.stdout.decode().splitlines()]  # nothing but JSON-RPC on stdout
         self.assertEqual([r["id"] for r in replies], [1, 2, 3])
-        self.assertEqual(sorted(t["name"] for t in replies[1]["result"]["tools"]), ["playbook_find", "playbook_run", "playbook_save"])
+        self.assertEqual(sorted(t["name"] for t in replies[1]["result"]["tools"]), ["playbook_dedupe", "playbook_find", "playbook_run", "playbook_save"])
         self.assertIn("almanac playbook approve another-one", replies[2]["result"]["content"][0]["text"])
         self.assertTrue((Path(self.home) / "playbooks" / "another-one" / "playbook.json").is_file())
 
