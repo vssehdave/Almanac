@@ -84,6 +84,7 @@ DEFAULTS = {
         "outline_share": 0.35,  # share of target_tokens the outline generations may take together; past it the oldest are merged into one
         "on_cold": True,  # a request that returns after the cache has expired is compacted from twice target_tokens, since the prefix is rewritten anyway
         "window_share": 0.85,  # inside one long turn, old tool results are removed from this share of the model's window; 0 turns it off
+        "stub_tokens": 120000,  # inside one long turn or a sub-agent, old tool results are removed past this many tokens too; 0: only window_share
         "keep_results": 12,  # tool results of the current turn that are never removed (the newest ones)
         "own_the_context": True,  # also switch off Claude Code's own auto-compaction (DISABLE_AUTO_COMPACT=1)
     },

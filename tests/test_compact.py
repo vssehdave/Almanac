@@ -829,6 +829,17 @@ class LongTurnTest(LayerCase):
         self.assertEqual(json.dumps(second[:len(first)]), json.dumps(first))  # the same bytes on the next request
 
 
+    def test_a_sub_agent_in_a_huge_window_is_stubbed_at_stub_tokens(self):
+        self.rig.cfg["routing"]["windows"]["m"] = 1000000  # 85% of this would never be reached
+        self.rig.cfg["compaction"]["stub_tokens"] = 25000
+        extra = {"x-claude-code-agent-id": "a1"}
+        self.rig.messages(body(copy.deepcopy(long_turn(30))), extra=extra)
+        self.assertTrue(stubbed(json.loads(self.rig.upstream.requests[-1]["body"])["messages"]))
+        self.rig.cfg["compaction"]["stub_tokens"] = 0
+        self.rig.messages(body(copy.deepcopy(long_turn(30))), extra={"x-claude-code-agent-id": "a2"})
+        self.assertEqual(stubbed(json.loads(self.rig.upstream.requests[-1]["body"])["messages"]), [])
+
+
 class ColdTest(LayerCase):
     """A request back after its cache expired is compacted from twice target_tokens (1500 here), not from the trigger."""
     trigger = 10 ** 6
