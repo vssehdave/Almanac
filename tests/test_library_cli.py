@@ -59,7 +59,7 @@ class ListShowForgetTest(CliCase):
         self.assertNotIn(f" {old['id']} ", " " + lines[0] + " ")
         self.assertTrue(lines[1].endswith("Write the readme introduction completely " + "z" * 29))  # the first 70 characters
         self.assertEqual(len(self.run_cli("list", "--project", "alpha")[1].strip().splitlines()), 2)
-        self.assertEqual(self.run_cli("list", "--project", "beta")[1].strip(), "No entry is stored for that.")
+        self.assertTrue(self.run_cli("list", "--project", "beta")[1].startswith("No entry with at least"))
         self.assertEqual(self.run_cli("list", "--project", "nope")[0], 2)
 
     def test_show_gives_the_entry_its_fixes_and_its_history(self):

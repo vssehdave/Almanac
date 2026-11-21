@@ -583,7 +583,7 @@ def installed_items():
             path = install.get("installPath") if isinstance(install, dict) else None
             if isinstance(path, str) and os.path.isdir(path):
                 items.append((name, "plugin", os.path.realpath(path)))
-    return items
+    return list(dict.fromkeys(items))  # one plugin installed in two scopes points at the same folder
 
 
 def triage(items, budget=None):
@@ -678,7 +678,7 @@ def launch_check(cfg, out=None, start=spawn):
     now = min(LAUNCH_SCANS, len(todo))
     if now:
         start(now)
-    rest = waiting[now:]
+    rest = list(dict.fromkeys(waiting[now:]))  # two versions of one plugin are named once
     out(f"almanac: scanning {now} new or changed skill(s)/plugin(s) in the background; results show at the next start."
         + (f"\n  pending ({len(rest)}): {', '.join(rest[:10])}{' ...' if len(rest) > 10 else ''}; "
            "`almanac skill audit` scans them all now" if rest else ""))

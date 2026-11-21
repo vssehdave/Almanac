@@ -19,7 +19,7 @@ def body(listing=LISTING, desc='Launch an agent. subagent_type: "fork" forks you
 def ctx(**startup):
     cfg = copy.deepcopy(config.DEFAULTS)
     cfg["startup"].update(startup)
-    return SimpleNamespace(cfg=cfg, kind="messages", stats={})
+    return SimpleNamespace(cfg=cfg, kind="messages", stats={}, state=None)
 
 
 class ForceAgents(unittest.TestCase):
@@ -52,25 +52,40 @@ class ForceAgents(unittest.TestCase):
             self.run_layer(b, c)
             self.assertEqual(b, before)
 
+    def test_a_thread_whose_first_request_has_no_listing_is_never_changed(self):
+        state = {}
+        c = ctx(); c.state = SimpleNamespace(frozen=lambda k, f: state.setdefault(k, f())); c.lane, c.frozen_lane = "s1", ""
+        first = body("no listing yet")
+        ForceAgentsLayer().transform(first, c)
+        later = body()
+        before = copy.deepcopy(later)
+        ForceAgentsLayer().transform(later, c)
+        self.assertEqual(later, before)  # the tools stay as the first request sent them, so the cache holds
+
     def test_no_fork_without_mention(self):
         tool, _ = self.run_layer(body(desc="Launch an agent."))
         self.assertEqual(tool["input_schema"]["properties"]["subagent_type"]["enum"], ["editor", "Explore"])
 
 
 class AgentEffort(unittest.TestCase):
-    def test_reads_front_matter_and_rejects_bad_names(self):
+    def test_reads_front_matter_and_finds_custom_agents_by_body(self):
         import tempfile, os
         from pathlib import Path
         from unittest import mock
         from getalmanac import routing
         with tempfile.TemporaryDirectory() as d:
             agents = Path(d, "agents"); agents.mkdir()
-            (agents / "a.md").write_text("---\nname: a\neffort: high\n---\nbody\neffort: low\n", encoding="utf-8")
+            (agents / "a.md").write_text("---\nname: a\neffort: high\n---\nYou are agent A. Review every change for bugs and report them.\neffort: low\n", encoding="utf-8")
             (agents / "b.md").write_text("---\nname: b\neffort: huge\n---\n", encoding="utf-8")
             routing._agent_efforts.clear()
-            with mock.patch("getalmanac.profile.user_dir", return_value=Path(d)), mock.patch.dict(os.environ, {"ALMANAC_HOME": d}):
-                self.assertEqual([routing.agent_effort(n) for n in ("a", "b", "c", "../a", None)], ["high", "", "", "", ""])
-            routing._agent_efforts.clear()
+            try:
+                with mock.patch("getalmanac.profile.user_dir", return_value=Path(d)), mock.patch.dict(os.environ, {"ALMANAC_HOME": d}):
+                    self.assertEqual([routing.agent_effort(n) for n in ("a", "b", "c", "../a", None)], ["high", "", "", "", ""])
+                    # Claude Code sends `custom` for a user agent: it is found by its body in the system prompt
+                    self.assertEqual(routing.agent_effort("custom", "intro\nYou are agent A. Review every change\n for bugs and report them.\neffort: low"), "high")
+                    self.assertEqual(routing.agent_effort("custom", "something else entirely"), "")
+            finally:
+                routing._agent_efforts.clear()
 
 
 if __name__ == "__main__":

@@ -89,11 +89,12 @@ class Keepalive:
                 return self.drop(ctx.lane)
             if not 200 <= status < 300:
                 return
-            ttls = cache_marks(json.loads(sent))["ttl"]
+            parsed = json.loads(sent)
+            ttls = cache_marks(parsed)["ttl"]
             if not ttls:
                 return self.drop(ctx.lane)
             entry = Entry(ctx.lane, sent, dict(headers), path, ttls, self.clock())
-            entry.session, entry.model = ctx.session, ctx.model
+            entry.session, entry.model = ctx.session, parsed.get("model") or ctx.model  # the model routing sent, which the ping reads
             with self.lock:
                 self.drop(ctx.lane)
                 while len(self.lanes) >= limit:

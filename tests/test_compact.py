@@ -817,7 +817,8 @@ class LongTurnTest(LayerCase):
         self.assertLessEqual(seen[-1], real)
 
     def test_a_long_sub_agent_gets_the_same_relief(self):
-        # Claude Code's own compaction is off for sub-agents as well, and they have no stored prefix to fall back on.
+        # Claude Code's own compaction is off for sub-agents as well; this checks the stubs alone (no outline).
+        self.rig.cfg["compaction"]["agent_outline"] = False
         messages = long_turn(30)
         extra = {"x-claude-code-agent-id": "a1"}
         self.rig.messages(body(copy.deepcopy(messages)), extra=extra)
@@ -831,13 +832,39 @@ class LongTurnTest(LayerCase):
 
     def test_a_sub_agent_in_a_huge_window_is_stubbed_at_stub_tokens(self):
         self.rig.cfg["routing"]["windows"]["m"] = 1000000  # 85% of this would never be reached
-        self.rig.cfg["compaction"]["stub_tokens"] = 25000
+        self.rig.cfg["compaction"].update(stub_tokens=25000, agent_outline=False)
         extra = {"x-claude-code-agent-id": "a1"}
         self.rig.messages(body(copy.deepcopy(long_turn(30))), extra=extra)
         self.assertTrue(stubbed(json.loads(self.rig.upstream.requests[-1]["body"])["messages"]))
         self.rig.cfg["compaction"]["stub_tokens"] = 0
         self.rig.messages(body(copy.deepcopy(long_turn(30))), extra={"x-claude-code-agent-id": "a2"})
         self.assertEqual(stubbed(json.loads(self.rig.upstream.requests[-1]["body"])["messages"]), [])
+
+
+    def test_a_long_sub_agent_gets_an_outline_and_keeps_it(self):
+        self.rig.cfg["routing"]["windows"]["m"] = 1000000
+        self.rig.cfg["compaction"]["stub_tokens"] = 6000
+        extra = {"x-claude-code-agent-id": "a1"}
+        self.rig.messages(body(copy.deepcopy(long_turn(40))), extra=extra)
+        first = json.loads(self.rig.upstream.requests[-1]["body"])["messages"]
+        full = long_turn(40)
+        self.assertLess(len(first), len(full))
+        self.assertEqual(first[0]["role"], "user")
+        self.assertEqual(first[1]["role"], "assistant")
+        outline = first[0]["content"][-1]["text"]
+        self.assertTrue(outline.startswith(compact.AGENT_HEADER))
+        self.assertIn("- ran ", outline)
+        self.assertEqual([m["role"] for m in first[1:]], [m["role"] for m in full[len(full) - len(first) + 1:]])  # the newest steps, in order
+        self.rig.messages(body(copy.deepcopy(long_turn(41))), extra=extra)
+        second = json.loads(self.rig.upstream.requests[-1]["body"])["messages"]
+        self.assertEqual(json.dumps(second[0]), json.dumps(first[0]))  # the outline is sent byte for byte
+
+    def test_the_outline_is_off_with_agent_outline_false(self):
+        self.rig.cfg["routing"]["windows"]["m"] = 1000000
+        self.rig.cfg["compaction"].update(stub_tokens=25000, agent_outline=False)
+        self.rig.messages(body(copy.deepcopy(long_turn(40))), extra={"x-claude-code-agent-id": "a1"})
+        sent = json.loads(self.rig.upstream.requests[-1]["body"])["messages"]
+        self.assertEqual(len(sent), len(long_turn(40)))
 
 
 class ColdTest(LayerCase):
