@@ -239,6 +239,30 @@ def pin_key(project: str) -> str:
     return f"route:pin:{project}"
 
 
+_EFFORT = re.compile(r"(?m)^effort:\s*(\w+)\s*$")
+_agent_efforts = {}
+
+
+def agent_effort(name) -> str:
+    """The `effort:` line in the front matter of agent `name` (the user's agents, then Almanac's bundle); "" when none.
+
+    shortcut: read once per name per proxy run, so an edited agent file needs a restart."""
+    if not name or "/" in name or "\\" in name:
+        return ""
+    if name not in _agent_efforts:
+        from . import config, profile
+        found = ""
+        for folder in [profile.user_dir() / "agents", *sorted(config.home().glob("bundle/*/agents"))]:
+            path = folder / f"{name}.md"
+            if path.is_file():
+                head = path.read_text(encoding="utf-8", errors="replace").split("---", 2)
+                hit = _EFFORT.search(head[1]) if len(head) == 3 else None
+                found = hit.group(1).lower() if hit and hit.group(1).lower() in EFFORTS else ""
+                break
+        _agent_efforts[name] = found
+    return _agent_efforts[name]
+
+
 class RoutingLayer:
     """Choose the model and effort for each request. Does nothing unless `routing.mode` is set."""
 
@@ -338,6 +362,9 @@ class RoutingLayer:
         if pin not in TIERS and TIERS.index(tier) > top:
             tier, why = TIERS[top], why + f" (held at the {cfg['ceiling']} ceiling)"
         effort = cfg["effort"].get(tier, "")
+        own = agent_effort(getattr(ctx, "agent_type", None)) if kind == "sub" else ""
+        if own:  # the agent's own `effort:` line is its starting rung; a failure still climbs from there
+            effort, why = own, why + f"; effort {own} from the agent's file"
         if pin not in TIERS:  # a failure moves one rung up the ladder of the model the thread was on
             raised = boosted(messages, turns, turn, cfg) if kind == "main" else ""
             steps = hits + (1 if failed_text or raised else 0)

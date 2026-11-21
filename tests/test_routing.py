@@ -730,6 +730,15 @@ class LadderTest(Case):
         self.climb("Difficulty: hard\nFind why the cache returns stale rows.", LARGE,
                    [(LARGE, "low"), (LARGE, "high"), (LARGE, "high"), (LARGE, "high")])
 
+    def test_an_agent_files_effort_is_its_start_and_a_failure_still_climbs(self):
+        from getalmanac import routing
+        routing._agent_efforts["deep-reviewer"] = "high"
+        try:
+            self.climb("Difficulty: standard\nReview net.py.", MEDIUM,
+                       [(MEDIUM, "high"), (LARGE, "low"), (LARGE, "high"), (LARGE, "high")], kind="deep-reviewer")
+        finally:
+            routing._agent_efforts.pop("deep-reviewer", None)
+
     def test_a_task_that_says_it_failed_takes_the_next_rung_not_the_large_tier(self):
         self.climb("that didn't work, try again\nread README.md and report its first line.", SMALL,
                    [(MEDIUM, "low"), (MEDIUM, "medium"), (MEDIUM, "medium"), (MEDIUM, "medium")])
