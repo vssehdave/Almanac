@@ -39,7 +39,7 @@ class PlaybookLayer:
         cfg, lib = ctx.cfg.get("playbooks") or {}, ctx.cfg.get("library") or {}
         books = bool(cfg.get("enabled") and cfg.get("inject"))
         entries = lib.get("enabled", True) and lib.get("inject", True)
-        if not (books or entries) or ctx.store is None or ctx.kind != "messages":
+        if not (books or entries) or ctx.state is None or ctx.kind != "messages":
             return
         main, sub = MemoryLayer._main_thread(body, ctx), MemoryLayer._sub_thread(body, ctx)
         if not (main or sub):
@@ -61,9 +61,9 @@ class PlaybookLayer:
         newest = person_text(orig[seen[last]])
         key = self._key(ctx, last, newest)
         akey = f"{key}:m{seen[last]}"  # an automatic run is kept per message position too, so a rewind and retype runs it again
-        text = ctx.store.get(akey)
+        text = ctx.state.get(akey)
         if text is None:
-            text = ctx.store.get(key)
+            text = ctx.state.get(key)
         if text is None:
             low = handwritten(newest)
             if len(low) < po.MIN_REQUEST or CONTINUE.match(low):
@@ -71,12 +71,12 @@ class PlaybookLayer:
             else:
                 text = self._auto(ctx, low, akey) if books else None
                 if text is None:
-                    text = ctx.store.frozen(key, lambda: self._first(ctx, low, key, books, entries))
-        nudge = ctx.store.frozen("playbooknudge" + key[len("playbook"):], lambda: self._nudge(ctx, orig, seen, last)) if books else ""
+                    text = ctx.state.frozen(key, lambda: self._first(ctx, low, key, books, entries))
+        nudge = ctx.state.frozen("playbooknudge" + key[len("playbook"):], lambda: self._nudge(ctx, orig, seen, last)) if books else ""
         # Earlier turns got their note when they were new: put it back, byte for byte, so the cached prefix holds.
         # When compaction changed the history the turns no longer line up, and there is nothing to put back.
         lane = ctx.lane
-        kept = ctx.store.scan(f"playbook:{lane}:", f"playbooknudge:{lane}:", f"playbookskip:{lane}:") if last else {}  # one query for every earlier turn
+        kept = ctx.state.scan(f"playbook:{lane}:", f"playbooknudge:{lane}:", f"playbookskip:{lane}:") if last else {}  # one query for every earlier turn
         if len(mine) == len(seen):
             for turn in range(last):
                 earlier = self._key(ctx, turn, person_text(orig[seen[turn]]))
@@ -126,23 +126,23 @@ class PlaybookLayer:
             end = seen[t + 1] if main and t + 1 < len(seen) else len(orig)
             key = f"playbookroute:{ctx.lane}:{t}:{_digest(person_text(orig[first]))}"
             for i in range(first + 1, end):
-                kept = ctx.store.get(f"{key}:{i}") if self._carrier(orig[i]) else None
+                kept = ctx.state.get(f"{key}:{i}") if self._carrier(orig[i]) else None
                 if kept:
                     messages[i]["content"].append({"type": "text", "text": kept["text"]})
                     if t == turn:
                         offered[kept["name"]] = kept
         base = f"playbookroute:{ctx.lane}:{turn}:{_digest(person_text(orig[start]))}"
         called = self._called(orig[start:])
-        asked = ctx.store.get("playbookoffer" + self._key(ctx, turn, person_text(orig[start]))[len("playbook"):]) if main else None
+        asked = ctx.state.get("playbookoffer" + self._key(ctx, turn, person_text(orig[start]))[len("playbook"):]) if main else None
         for name in sorted((set(offered) | {asked}) & called):  # an offer that was taken: say so once
             mark = f"playbooktaken:{ctx.lane}:{turn}:{name}"
-            if ctx.store.get(mark) is None:
-                ctx.store.put(mark, 1)
+            if ctx.state.get(mark) is None:
+                ctx.state.put(mark, 1)
                 ctx.stats["playbook_taken"] = name
                 break
-        if self._carrier(orig[last]) and ctx.store.get(f"{base}:{last}") is None:
+        if self._carrier(orig[last]) and ctx.state.get(f"{base}:{last}") is None:
             kept = self._decide(ctx, orig, start, turn, main, set(offered) | {asked}, called)
-            ctx.store.put(f"{base}:{last}", kept or "")
+            ctx.state.put(f"{base}:{last}", kept or "")
             if kept:
                 messages[last]["content"].append({"type": "text", "text": kept["text"]})
                 ctx.stats["playbook_offer"], ctx.stats["signals"] = kept["name"], kept["signals"]
@@ -156,10 +156,10 @@ class PlaybookLayer:
 
         def ahead():  # decided at most once per turn, the first time a route that ships needs it
             key = f"playbookfacts:{ctx.lane}:{turn}"
-            known = ctx.store.get(key)
+            known = ctx.state.get(key)
             if known is None:
                 known = int(po._ahead(ctx.cwd))
-                ctx.store.put(key, known)
+                ctx.state.put(key, known)
             return bool(known)
 
         return po.decide(asked, ctx.project or "", kind, offered, called, ctx.cwd, ahead)
@@ -174,7 +174,7 @@ class PlaybookLayer:
         calls = [b.get("name") or "" for m in orig[prev + 1:seen[last]] if isinstance(m, dict) and m.get("role") == "assistant"
                  for b in rq.blocks(m) if b.get("type") == "tool_use"]
         earlier = self._key(ctx, last - 1, person_text(orig[prev]))
-        matched = ctx.store.get(f"{earlier}:m{prev}") or ctx.store.get(earlier)
+        matched = ctx.state.get(f"{earlier}:m{prev}") or ctx.state.get(earlier)
         if len(calls) < limit or matched or any(c.endswith("playbook_save") for c in calls):
             return ""
         if self._covered(ctx, orig[prev:seen[last]], person_text(orig[prev])):
@@ -191,7 +191,7 @@ class PlaybookLayer:
             return True
         route = tuple(library._collapse([s for c in library._calls(group) for s in c["steps"]])[:library.MAX_ROUTE])
         found = mine._load(mine.candidates_path(), {}).get("candidates") or []
-        return library._found(route, text, found + library.candidates(ctx.store, found, library.min_tools(ctx.cfg)))
+        return library._found(route, text, found + library.candidates(ctx.memory_store, found, library.min_tools(ctx.cfg)))
 
     @staticmethod
     def _place(messages, orig, kept):
@@ -207,8 +207,8 @@ class PlaybookLayer:
     def _skipped(ctx, orig, start, key):
         """The reminder for this turn: decided once, when the model has made 2 tool calls without taking an offered script."""
         suffix = key[len("playbook"):]
-        kept = ctx.store.get("playbookskip" + suffix)
-        name = ctx.store.get("playbookoffer" + suffix)
+        kept = ctx.state.get("playbookskip" + suffix)
+        name = ctx.state.get("playbookoffer" + suffix)
         if kept or not name:
             return kept
         calls = [b.get("name") or "" for m in orig[start + 1:] if isinstance(m, dict) and m.get("role") == "assistant"
@@ -223,7 +223,7 @@ class PlaybookLayer:
         text = (f'<system-reminder>\nAlmanac playbook "{name}" has an approved script that does this job. Call the tool '
                 f'`playbook_run` with name "{name}" and args [{args}] now instead of continuing by hand, '
                 "unless this request really differs from the playbook.\n</system-reminder>")
-        return ctx.store.frozen("playbookskip" + suffix, lambda: {"at": len(orig) - 1, "text": text})
+        return ctx.state.frozen("playbookskip" + suffix, lambda: {"at": len(orig) - 1, "text": text})
 
     @staticmethod
     def _auto(ctx, low, key):
@@ -235,7 +235,7 @@ class PlaybookLayer:
         if pb is None or not ps.automatic(pb) or not po.strong(pb, low):
             return None
         with pr.AUTO_LOCK:  # a second request of the same turn waits here, then finds the stored note
-            kept = ctx.store.get(key)
+            kept = ctx.state.get(key)
             if kept is not None:
                 return kept
             try:
@@ -244,18 +244,18 @@ class PlaybookLayer:
             except Exception:  # a script that cannot run leaves the ordinary note
                 return None
             ctx.stats["playbook"] = {"ran": pb["name"], **({"exit": code} if code is not None else {"timeout": True})}
-            ctx.store.put(key, text)
+            ctx.state.put(key, text)
             return text
 
     @staticmethod
     def _entry(ctx, low) -> str:
         """The note for the prompt-library entry that best matches the typed text, or "" (decided once per turn, so counted once)."""
         cfg = ctx.cfg.get("library") or {}
-        hit = library.find(ctx.store, low, ctx.project or "", cfg.get("threshold", library.THRESHOLD), library.min_tools(ctx.cfg))
-        if not hit or f"[{hit[0]['node']}]" in (ctx.store.get(f"recall:{ctx.lane}") or ""):  # the recall note already cites it
+        hit = library.find(ctx.memory_store, low, ctx.project or "", cfg.get("threshold", library.THRESHOLD), library.min_tools(ctx.cfg))
+        if not hit or f"[{hit[0]['node']}]" in (ctx.state.get(f"recall:{ctx.lane}") or ""):  # the recall note already cites it
             return ""
         entry, score = hit
-        entry["uses"] = library.bump(ctx.store, entry["id"])
+        entry["uses"] = library.bump(ctx.memory_store, entry["id"])
         ctx.stats["library"] = {"id": entry["id"], "score": score}
         return library.note(entry, cfg.get("note_chars", library.NOTE_CHARS), _memory_tools(ctx.cfg))
 
@@ -266,5 +266,5 @@ class PlaybookLayer:
             return cls._entry(ctx, low) if entries else ""
         done = ps.bump(best[0]["name"]) or best[0]
         if ps.runnable(done):  # offered, not run: remember it, so a skipped offer can be called back
-            ctx.store.put("playbookoffer" + key[len("playbook"):], done["name"])
+            ctx.state.put("playbookoffer" + key[len("playbook"):], done["name"])
         return po.note(done)

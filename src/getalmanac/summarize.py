@@ -102,7 +102,7 @@ def line(memory, cfg) -> str:
     if not cfg["memory"]["summary_model"]:
         return "off (memory.summary_model is empty)"
     done = memory.store.run("select count(*) n from node where kind = 'leaf' and summary != ''")[0]["n"]
-    used, until = today(memory.store), paused_until(memory.store)
+    used, until = today(memory.state), paused_until(memory.state)
     text = (f"{done} exchange(s) summarized by {cfg['memory']['summary_model']}; today {used['calls']} call(s), "
             f"{used['in']:,} tokens in, {used['out']:,} out")
     return text + (f"; paused until {time.strftime('%H:%M', time.localtime(until))}" if until else "; not paused")
@@ -165,7 +165,7 @@ def outline_lines(ctx, orig, kind, text, timeout=SYNTH_TIMEOUT):
     Made with the login of the request that triggers the compaction, inside the daily cap and the pause. `why` says what
     stopped it (off, cooling, paused, cap, status, error, parse) and the lines are [] then; the caller goes on without.
     """
-    cfg, store = ctx.cfg["memory"], ctx.store
+    cfg, store = ctx.cfg["memory"], ctx.state
     if not (cfg["enabled"] and cfg["summary_model"]):
         return [], "off"
     if accounts.cooling_until(ctx.headers.get("authorization", "")[7:].strip()):
@@ -193,7 +193,7 @@ def call(ctx, body, timeout=TIMEOUT, seen=None):
     Adds its tokens to today's totals and pauses all small-model calls after a login or allowance error.
     The HTTP status, if one came back, goes in `seen`.
     """
-    store = ctx.store
+    store = ctx.state
     conn = ctx.proxy.connect()
     conn.timeout = timeout
     try:
@@ -218,11 +218,11 @@ def call(ctx, body, timeout=TIMEOUT, seen=None):
 
 
 class Idle:
-    """What a waiting conversation's summary call needs, and no more: the login's headers, the lane, the store and
+    """What a waiting conversation's summary call needs, and no more: the login's headers, the lane, the state store and
     proxy. The request body is not kept."""
 
     def __init__(self, ctx, orig):
-        self.cfg, self.store, self.proxy, self.lane = ctx.cfg, ctx.store, ctx.proxy, ctx.lane
+        self.cfg, self.state, self.proxy, self.lane = ctx.cfg, ctx.state, ctx.proxy, ctx.lane
         self.headers = _headers(ctx.headers)
         self.system = _identity(orig)
 
@@ -276,12 +276,12 @@ class SummaryLayer:
 
     def _idle(self, ctx, timeout=TIMEOUT):
         """One call that summarizes a conversation, if it has grown since it was last summarized. `ctx` is an Idle."""
-        cfg, store = ctx.cfg["memory"], ctx.store
+        cfg, store = ctx.cfg["memory"], ctx.state
         if not (cfg["enabled"] and cfg["summary_model"]):
             return
         if accounts.cooling_until(ctx.headers.get("authorization", "")[7:].strip()):  # this login is out of usage: do not make it worse
             return
-        rows = store.run("select id, turns, sumturns from convo where lane = ?", (ctx.lane,))
+        rows = self.memory.store.run("select id, turns, sumturns from convo where lane = ?", (ctx.lane,))
         if not rows or rows[0]["turns"] < 2 or rows[0]["sumturns"] >= rows[0]["turns"]:  # one exchange has its own summary already
             return
         if paused_until(store) or not reserve(store, cfg["summary_daily_calls"]):
@@ -310,14 +310,14 @@ class SummaryLayer:
         if reply.get("stop_reason") in ("tool_use", None) or not ctx.project:  # nothing finished yet (None: cut off)
             return
         self._arm(ctx, orig)
-        store = ctx.store
+        store = ctx.state
         # Only this conversation's exchanges: the login on this request must not carry another conversation's text.
-        rows = store.run("select id from node where kind = 'leaf' and convo = (select id from convo where lane = ?) "
+        rows = self.memory.store.run("select id from node where kind = 'leaf' and convo = (select id from convo where lane = ?) "
                          "and summary = '' and tries < ? order by ts desc, id desc limit ?", (ctx.lane, MAX_TRIES, PER_JOB))
         for row in rows:
             if paused_until(store) or not reserve(store, cfg["summary_daily_calls"]):
                 break
-            store.run("update node set tries = tries + 1 where id = ?", (row["id"],))
+            self.memory.store.run("update node set tries = tries + 1 where id = ?", (row["id"],))
             if not self._ask(ctx, orig, row["id"], cfg["summary_model"]):
                 break  # the upstream is refusing or not answering: do not wait for it once per exchange
         self.memory.embed_pending()  # a new summary clears its exchange's vector; make it again from the summary
@@ -325,8 +325,8 @@ class SummaryLayer:
     def _ask(self, ctx, orig, node_id, model, facts_only=False):
         """One summary call for one exchange. Any failure leaves the rule-written text and returns False.
         With `facts_only` the exchange already has its summary: only its facts are taken from the answer."""
-        store, memory = ctx.store, self.memory
-        text = memory.detail(node_id) or store.run("select text from node where id = ?", (node_id,))[0]["text"]
+        memory = self.memory
+        text = memory.detail(node_id) or memory.store.run("select text from node where id = ?", (node_id,))[0]["text"]
         if len(text) > INPUT_CHARS:
             text = text[: INPUT_CHARS // 3] + "\n... (middle not shown) ...\n" + text[-(2 * INPUT_CHARS // 3):]
         body = {"model": model, "max_tokens": 1500, "thinking": {"type": "disabled"},  # measured: the same note takes about 380 output tokens, not 1,000
@@ -380,8 +380,8 @@ class _Upstream:
 class _Ask:
     """What call() and SummaryLayer._ask need, with the personal login's token in place of a live request's headers."""
 
-    def __init__(self, store, upstream, token):
-        self.store, self.proxy = store, upstream
+    def __init__(self, state, upstream, token):
+        self.state, self.proxy = state, upstream
         self.headers = {"authorization": "Bearer " + token, "anthropic-version": API_VERSION, "anthropic-beta": BETA}
 
 
@@ -391,7 +391,7 @@ def refine(memory, cfg, project=None, limit=None, dry_run=False, say=print, fact
     may exceed it when given. Stops, keeping the exchange's try, when the API answers 401/403/429/529 or a pause is set.
     With `facts`, the exchanges that have a summary but were never asked for facts are the ones done: only their facts
     are stored. `say` receives the progress lines."""
-    store, model = memory.store, cfg["memory"]["summary_model"]
+    store, state, model = memory.store, memory.state, cfg["memory"]["summary_model"]
     report = {"pending": 0, "summarized": 0, "failed": 0, "stopped": ""}
     if not model:
         report["stopped"] = "memory.summary_model is empty"
@@ -405,14 +405,14 @@ def refine(memory, cfg, project=None, limit=None, dry_run=False, say=print, fact
                "and n.summary = '' and n.tries < ?" + (" and n.project = ?" if project else "") + " order by n.ts desc, n.id desc")
         ids = [r["id"] for r in store.run(sql, (MAX_TRIES, project) if project else (MAX_TRIES,))]
     if limit is None:
-        limit = max(0, cfg["memory"]["summary_daily_calls"] - today(store)["calls"])
+        limit = max(0, cfg["memory"]["summary_daily_calls"] - today(state)["calls"])
     ids = ids[:limit]
     report["pending"] = len(ids)
     say(f"{len(ids)} {'exchange(s) to add facts to' if facts else 'imported exchange(s) to summarize'} with {model}")
     if dry_run or not ids:
         return report
-    if paused_until(store):
-        report["stopped"] = "paused until " + time.strftime("%H:%M", time.localtime(paused_until(store)))
+    if paused_until(state):
+        report["stopped"] = "paused until " + time.strftime("%H:%M", time.localtime(paused_until(state)))
     folder = profile.user_dir()
     tok = accounts.token(folder)
     if not report["stopped"] and not tok:
@@ -425,12 +425,12 @@ def refine(memory, cfg, project=None, limit=None, dry_run=False, say=print, fact
     if report["stopped"]:
         say("stopped: " + report["stopped"])
         return report
-    layer, ctx = SummaryLayer(memory), _Ask(store, upstream, tok)
+    layer, ctx = SummaryLayer(memory), _Ask(state, upstream, tok)
     orig = {"system": IDENTITY}
     for n, node_id in enumerate(ids, 1):
         if not facts:
             store.run("update node set tries = tries + 1 where id = ?", (node_id,))
-        reserve(store)  # no cap: an explicit --limit may go past the daily count
+        reserve(state)  # no cap: an explicit --limit may go past the daily count
         upstream.log.last = {}
         had = store.run("select summary, facts from node where id = ?", (node_id,))[0]
         ok = layer._ask(ctx, orig, node_id, model, facts_only=facts)

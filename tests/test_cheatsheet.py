@@ -16,7 +16,7 @@ from helpers import playbook
 from getalmanac import cheatsheet, cli, config, proxy as proxy_mod, request as rq
 from getalmanac.cheatsheet import CheatsheetLayer
 from getalmanac.routing import RoutingLayer
-from getalmanac.store import Store
+from getalmanac.store import State, Store
 
 IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
 CACHE = {"type": "ephemeral"}
@@ -197,10 +197,11 @@ class ProxyTest(Fresh):
     def setUp(self):
         super().setUp()
         self.store = Store(os.path.join(tempfile.mkdtemp(prefix="almanac-sheet-"), "a.db"))
+        self.state = State(self.store.path.with_name("state.db"))
         self.addCleanup(self.store.close)
 
     def start(self, respond=None, mode="off"):
-        self.rig = Rig(respond=respond, layers=[SetProject(), RoutingLayer(), CheatsheetLayer()], store=self.store,
+        self.rig = Rig(respond=respond, layers=[SetProject(), RoutingLayer(), CheatsheetLayer()], store=self.store, state=self.state,
                        overrides={"routing.mode": mode, "startup.lean_rules": False})
         self.addCleanup(self.rig.close)
 
@@ -254,7 +255,7 @@ class ProxyTest(Fresh):
         self.assertEqual(self.rig.upstream.requests[-1]["body"], raw)
 
     def test_the_full_proxy_includes_the_layer_after_routing(self):
-        with mock.patch.object(proxy_mod, "Proxy", side_effect=lambda cfg, store, layers: layers):
+        with mock.patch.object(proxy_mod, "Proxy", side_effect=lambda cfg, layers, **_: layers):
             layers = [type(layer).__name__ for layer in proxy_mod.build(config.load())]
         self.assertEqual(layers.index("CheatsheetLayer"), layers.index("RoutingLayer") + 1)
 

@@ -11,7 +11,7 @@ from helpers import Rig, SESSION, sse
 
 from getalmanac import cheatsheet, config, embed, mcp, project
 from getalmanac.memory import Memory, MemoryLayer, ProjectLayer, exchange, redact
-from getalmanac.store import Store
+from getalmanac.store import State, Store
 
 
 def make_repo(parent, name, remote=None):
@@ -49,8 +49,9 @@ class Case(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="almanac-mem-")
         self.store = Store(os.path.join(self.tmp, "a.db"))
+        self.state = State(self.store.path.with_name("state.db"))
         self.addCleanup(self.store.close)
-        self.memory = Memory(self.store)
+        self.memory = Memory(self.store, self.state)
         self.work = os.path.join(self.tmp, "work")
         os.makedirs(self.work)
         self.alpha = make_repo(self.work, "alpha", "https://github.com/Someone/Alpha.git")
@@ -283,7 +284,7 @@ class RecallTest(Case):
         old = [human("Why does the proxy drop the cache after a tool loads?"),
                said("The proxy rewrote the tools array, which sits at the start of the cached prefix.")]
         self.memory.index("old-lane", "old", self.key, old[:1], reply(old[1]["content"][0]["text"]))
-        self.rig = Rig(layers=[ProjectLayer(self.memory), MemoryLayer(self.memory)], store=self.store)
+        self.rig = Rig(layers=[ProjectLayer(self.memory), MemoryLayer(self.memory)], store=self.store, state=self.state)
         self.addCleanup(self.rig.close)
 
     def body(self, prompt, cwd=None, extra=()):
@@ -304,14 +305,14 @@ class RecallTest(Case):
     def test_the_main_thread_leaves_its_lane_and_answering_model_under_one_key(self):
         self.rig.messages(self.body("the proxy cache drops again after loading a tool"))
         self.rig.records()  # waits for the reply to be observed
-        state = self.store.get(f"main:{SESSION}")
+        state = self.state.get(f"main:{SESSION}")
         self.assertEqual(state, {"lane": self.rig.records()[-1]["lane"], "answered": "m"})
 
     def test_memory_and_routing_classify_a_request_alike(self):
         odd = {"x-claude-code-request-class": "classifier"}  # neither main nor sub: no note, no stored lane
         self.rig.messages(self.body("the proxy cache drops again after loading a tool"), extra=odd)
         self.assertNotIn("memory", self.rig.records()[-1])
-        self.assertIsNone(self.store.get(f"main:{SESSION}"))
+        self.assertIsNone(self.state.get(f"main:{SESSION}"))
         self.rig.messages(self.body("the proxy cache drops again after loading a tool"))
         self.assertIn("memory", self.rig.records()[-1])
 
@@ -370,13 +371,13 @@ class SubagentTest(Case):
     def setUp(self):
         super().setUp()
         self.key = self.memory.projects.see(self.alpha)
-        self.rig = Rig(layers=[ProjectLayer(self.memory), MemoryLayer(self.memory)], store=self.store)
+        self.rig = Rig(layers=[ProjectLayer(self.memory), MemoryLayer(self.memory)], store=self.store, state=self.state)
         self.addCleanup(self.rig.close)
         self.rig.upstream.respond = lambda req: (200, {"content-type": "text/event-stream"}, sse("Found the retry helper in net.py."))
         # the main conversation, stored by its first reply
         self.memory.index("main-lane", SESSION, self.key, [human("Find out why requests are retried twice")], reply("Looking.", "tool_use"))
         self.parent = self.store.run("select id from convo where lane = 'main-lane'")[0]["id"]
-        self.store.merge(f"main:{SESSION}", lane="main-lane")  # what the main thread's own request leaves behind
+        self.state.merge(f"main:{SESSION}", lane="main-lane")  # what the main thread's own request leaves behind
 
     def body(self, prompt="Search the code for the retry helper and report where it lives"):
         env = f"# Environment\n - Primary working directory: {self.alpha}\n"
@@ -401,7 +402,7 @@ class SubagentTest(Case):
             self.sub(self.body())
         # a newer main conversation appears in the same session: the note this lane already has does not change
         self.memory.index("main-2", SESSION, self.key, [human("A different main task entirely")], reply("ok", "tool_use"))
-        self.store.merge(f"main:{SESSION}", lane="main-2")
+        self.state.merge(f"main:{SESSION}", lane="main-2")
         self.rig.cfg["memory"]["tools"] = False  # nor does turning the tools off mid-run
         fifth = self.sub(self.body())
         self.assertEqual(self.rig.upstream.requests[-1]["body"], self.rig.upstream.requests[-5]["body"])
@@ -417,7 +418,7 @@ class SubagentTest(Case):
     def test_no_note_when_memory_is_off_or_the_parent_is_not_stored(self):
         raw = json.dumps(self.body()).encode()
         for cfg in ({"memory.enabled": False}, {"memory.recall": False}):
-            rig = Rig(layers=[ProjectLayer(self.memory), MemoryLayer(self.memory)], store=self.store, overrides=cfg)
+            rig = Rig(layers=[ProjectLayer(self.memory), MemoryLayer(self.memory)], store=self.store, state=self.state, overrides=cfg)
             self.addCleanup(rig.close)
             rig.messages(raw, extra=self.HEADERS)
             self.assertEqual(rig.upstream.requests[-1]["body"], raw)
@@ -487,14 +488,14 @@ class SubagentTest(Case):
 
     def test_a_subagent_that_starts_before_its_parent_is_stored_gets_the_note_later_and_is_filed_under_it(self):
         late = "99999999-aaaa-bbbb-cccc-000000000001"
-        self.store.merge(f"main:{late}", lane="late-lane")  # the main thread has sent its request; its row is not written yet
+        self.state.merge(f"main:{late}", lane="late-lane")  # the main thread has sent its request; its row is not written yet
         replies = [sse("Checking.", tool=("Bash", {"command": "ls"})), sse("Found the retry helper in net.py.")]
         self.rig.upstream.respond = lambda req: (200, {"content-type": "text/event-stream"}, replies[min(len(self.rig.upstream.requests) - 1, 1)])
         raw = json.dumps(self.body()).encode()
         self.rig.messages(raw, session=late, extra=self.HEADERS)
         self.assertEqual(self.rig.upstream.requests[-1]["body"], raw)  # no parent yet: no note
         self.rig.records()
-        self.assertEqual(self.store.run("select count(*) n from state where key like 'subparent:%'")[0]["n"], 0)  # nothing was frozen
+        self.assertEqual(self.state.run("select count(*) n from state where key like 'subparent:%'")[0]["n"], 0)  # nothing was frozen
         self.memory.index("late-lane", late, self.key, [human("Find out why requests are retried twice")], reply("Looking.", "tool_use"))
         late_id = self.store.run("select id from convo where lane = 'late-lane'")[0]["id"]
         self.rig.messages(self.body(), session=late, extra=self.HEADERS)
@@ -513,7 +514,7 @@ class SubagentTest(Case):
         self.assertEqual([r["parent"] for r in self.store.run("select parent from convo where parent != 0")], [new])
 
     def test_a_subagent_started_just_after_clear_never_takes_the_old_conversation_as_its_parent(self):
-        self.store.merge(f"main:{SESSION}", lane="new-lane")  # cleared: the new main thread has sent its request, its row is still queued
+        self.state.merge(f"main:{SESSION}", lane="new-lane")  # cleared: the new main thread has sent its request, its row is still queued
         raw = json.dumps(self.body()).encode()
         self.rig.messages(raw, extra=self.HEADERS)
         self.assertEqual(self.rig.upstream.requests[-1]["body"], raw)
@@ -640,17 +641,17 @@ class SubagentTest(Case):
         self.sub(self.body())
         self.rig.records()
         child = self.store.run("select id from convo where parent = ?", (self.parent,))[0]["id"]
-        self.store.merge(f"main:{SESSION}", answered="claude-sonnet-5")
+        self.state.merge(f"main:{SESSION}", answered="claude-sonnet-5")
         self.assertEqual(self.memory.gate(SESSION), "")  # a model whose review would not count is never held
         with mock.patch.dict(cheatsheet.ALIASES, {"zenith": "opus"}):  # the one rule for "is this Opus" knows aliases
-            self.store.merge(f"main:{SESSION}", answered="zenith-1")
+            self.state.merge(f"main:{SESSION}", answered="zenith-1")
             self.assertIn(f"{child}:", self.memory.gate(SESSION))
-        self.store.run("delete from state where key = 'gateheld:main-lane'")
-        self.store.merge(f"main:{SESSION}", answered="claude-opus-5")
+        self.state.run("delete from state where key = 'gateheld:main-lane'")
+        self.state.merge(f"main:{SESSION}", answered="claude-opus-5")
         self.assertIn(f"{child}:", self.memory.gate(SESSION))
         self.assertIn("memory_review", self.memory.gate(SESSION))
         self.assertEqual(self.memory.gate(SESSION), "")  # held twice at most: never stuck
-        self.store.run("delete from state where key = 'gateheld:main-lane'")
+        self.state.run("delete from state where key = 'gateheld:main-lane'")
         self.store.run("update convo set review = 'reviewed' where id = ?", (child,))
         self.assertEqual(self.memory.gate(SESSION), "")
         self.assertEqual(self.memory.gate("unknown-session"), "")

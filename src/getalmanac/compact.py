@@ -316,7 +316,7 @@ def build_prefix(messages, covered, ids, budget_chars, told=None, statuses=None,
 def estimate(body, ctx, messages, seen=False) -> int:
     """Input tokens this request would take, from the last reply's exact count when there is one (or from `seen`)."""
     if seen is False:
-        seen = ctx.store.get(f"usage:{ctx.lane}")
+        seen = ctx.state.get(f"usage:{ctx.lane}")
     if seen and 0 < seen["messages"] <= len(body["messages"]):
         added = sum(len(json.dumps(m, ensure_ascii=False)) for m in body["messages"][seen["messages"]:]
                     if m.get("role") != "assistant")  # the reply itself is already in the count
@@ -349,7 +349,7 @@ RETRY_AFTER = 40  # messages: a refused compaction is tried again after this muc
 def blocked(ctx, messages) -> bool:
     """True while a refusal of this conversation's compacted form still holds. It lapses after RETRY_AFTER more messages,
     so a long conversation is never left with no compaction at all (an old mark without a count lapses at once)."""
-    mark = ctx.store.get(f"nocompact:{ctx.lane}")
+    mark = ctx.state.get(f"nocompact:{ctx.lane}")
     if not mark:
         return False
     at = mark.get("at") if isinstance(mark, dict) else None
@@ -376,11 +376,11 @@ class CompactLayer:
         cfg, messages, key = ctx.cfg["compaction"], body["messages"], f"compact:{ctx.lane}"
         if blocked(ctx, messages):  # the upstream refused this conversation's compacted form not long ago
             return
-        state = ctx.store.get(key)
+        state = ctx.state.get(key)
         if state and not (len(messages) >= state["covered"] and fingerprint(messages[:state["covered"]]) == state["hash"]):
-            ctx.store.run("delete from state where key = ?", (key,))  # rewound or edited: the summary no longer fits
-            ctx.store.run("delete from state where key = ?", (f"usage:{ctx.lane}",))  # its count described the compacted body
-            ctx.store.run("delete from state where key = ?", (f"stubs:{ctx.lane}",))  # so did the stubs
+            ctx.state.run("delete from state where key = ?", (key,))  # rewound or edited: the summary no longer fits
+            ctx.state.run("delete from state where key = ?", (f"usage:{ctx.lane}",))  # its count described the compacted body
+            ctx.state.run("delete from state where key = ?", (f"stubs:{ctx.lane}",))  # so did the stubs
             state = None
         fresh = False
         size = self._size_if_cold(body, ctx, (state["prefix"] + messages[state["covered"]:]) if state else messages)  # what would go out without the cold rule
@@ -420,7 +420,7 @@ class CompactLayer:
 
     @staticmethod
     def _stubs(ctx) -> int:
-        return len((ctx.store.get(f"stubs:{ctx.lane}") or {}).get("ids") or {})
+        return len((ctx.state.get(f"stubs:{ctx.lane}") or {}).get("ids") or {})
 
     @classmethod
     def _size_if_cold(cls, body, ctx, messages) -> int:
@@ -453,7 +453,7 @@ class CompactLayer:
             return 0
         same = []
         try:
-            kept = ctx.store.get(key) or {}
+            kept = ctx.state.get(key) or {}
             ids = dict(kept.get("ids") or {})
             # The wording is chosen when a set is first written and stored with it: a set written by an earlier
             # version has none and keeps the old wording, so a turn in progress sends the same bytes.
@@ -468,12 +468,12 @@ class CompactLayer:
             turns = rq.human_turns(out)
             current = _results(out[(turns[-1] + 1 if turns else 0):])
             window = routing.window(ctx.cfg["routing"], str(body.get("model") or ""))
-            limit = share * min(window, int(ctx.store.get(f"window:{ctx.lane}") or window))  # a size refusal taught the real one
+            limit = share * min(window, int(ctx.state.get(f"window:{ctx.lane}") or window))  # a size refusal taught the real one
             if self._cold(ctx, cfg):
                 limit = min(limit, COLD_FLOOR * cfg["target_tokens"])
             # The last reply's count may not be stored yet (it is written in the background): the count made when
             # the stubs were last changed stands in for it, so a second pass is not made for a body already shrunk.
-            counts = [c for c in (ctx.store.get(f"usage:{ctx.lane}"), kept.get("est")) if c and 0 < c["messages"] <= len(body["messages"])]
+            counts = [c for c in (ctx.state.get(f"usage:{ctx.lane}"), kept.get("est")) if c and 0 < c["messages"] <= len(body["messages"])]
             seen = max(counts, key=lambda c: c["messages"], default=None)
             tokens = estimate(body, ctx, out, seen)
             if tokens < limit:
@@ -499,7 +499,7 @@ class CompactLayer:
             ids[block["tool_use_id"]] = n
             block["content"] = tpl.format(n=n, id=block["tool_use_id"])
         if fresh or keep != kept.get("keep"):
-            ctx.store.put(key, {"ids": ids, "keep": keep, "tpl": tpl,
+            ctx.state.put(key, {"ids": ids, "keep": keep, "tpl": tpl,
                                 "est": {"messages": len(body["messages"]), "tokens": int(tokens - freed)}})
         return len(same) + len(fresh)
 
@@ -533,14 +533,14 @@ class CompactLayer:
         log["gens"] = len(info["gens"])
         state = {"covered": covered, "hash": fingerprint(messages[:covered]), "prefix": prefix, "ts": time.time(),
                  "gens": info["gens"], "recent_from": info["recent_from"], "nopen": info["nopen"], "log": log}
-        ctx.store.put(f"compact:{ctx.lane}", state)
-        ctx.store.run("delete from state where key = ?", (f"usage:{ctx.lane}",))  # the old count no longer describes it
-        ctx.store.run("delete from state where key = ?", (f"stubs:{ctx.lane}",))  # the prefix now stands for those results
+        ctx.state.put(f"compact:{ctx.lane}", state)
+        ctx.state.run("delete from state where key = ?", (f"usage:{ctx.lane}",))  # the old count no longer describes it
+        ctx.state.run("delete from state where key = ?", (f"stubs:{ctx.lane}",))  # the prefix now stands for those results
         return state
 
     def observe(self, ctx, orig, reply):
         if ctx.agent or not rq.has_client_tools(orig):
             return
         usage = reply.get("usage") or {}
-        ctx.store.put(f"usage:{ctx.lane}", {"tokens": sse.input_tokens(usage) + int(usage.get("output_tokens") or 0),
+        ctx.state.put(f"usage:{ctx.lane}", {"tokens": sse.input_tokens(usage) + int(usage.get("output_tokens") or 0),
                                              "messages": len(orig["messages"])})

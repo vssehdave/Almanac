@@ -10,7 +10,7 @@ from helpers import Rig, sse
 from getalmanac import config, library, startup
 from getalmanac.match import Index, tokens
 from getalmanac.memory import Memory
-from getalmanac.store import Store
+from getalmanac.store import State, Store
 
 LONG = " It also covers many adjacent situations and edge cases that take a lot of words to describe in full."
 SKILLS = {
@@ -83,10 +83,11 @@ class ListingTest(unittest.TestCase):
 class LayerCase(unittest.TestCase):
     def setUp(self):
         self.store = Store(os.path.join(tempfile.mkdtemp(prefix="almanac-db-"), "a.db"))
-        self.rig = Rig(layers=[startup.SkillsLayer(), startup.AgentsLayer(), startup.ToolsLayer()], store=self.store)
+        self.state = State(self.store.path.with_name("state.db"))
+        self.rig = Rig(layers=[startup.SkillsLayer(), startup.AgentsLayer(), startup.ToolsLayer()], store=self.store, state=self.state)
         self.addCleanup(self.rig.close)
         self.addCleanup(self.store.close)
-        Memory(self.store)  # the tables a real store has: conversations and the library
+        Memory(self.store, self.state)  # the tables a real store has: conversations and the library
 
     def used(self, kind, name, *convos, project="/repo/demo"):
         """Library rows of exchanges in these conversations that used `name`: what the pinning reads."""
@@ -186,7 +187,7 @@ class AgentsLayerTest(LayerCase):
 
     def alone(self, layer=None):
         """A rig where only the agents layer runs, so an untouched request is byte for byte what was sent."""
-        rig = Rig(layers=[layer or startup.AgentsLayer()], store=self.store)
+        rig = Rig(layers=[layer or startup.AgentsLayer()], store=self.store, state=self.state)
         self.addCleanup(rig.close)
         return rig
 

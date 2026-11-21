@@ -10,7 +10,7 @@ from test_memory import make_repo
 from getalmanac import cli, report, routing
 from getalmanac.memory import Memory
 from getalmanac.routing import GUIDANCE, RoutingLayer, classify
-from getalmanac.store import Store
+from getalmanac.store import State, Store
 
 SMALL, MEDIUM, LARGE = "claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"
 AGENT_TOOL = {"name": "Agent", "description": "Launch a new agent.", "input_schema": {"type": "object"}}
@@ -151,6 +151,7 @@ class Case(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="almanac-route-")
         self.store = Store(os.path.join(self.tmp, "a.db"))
+        self.state = State(self.store.path.with_name("state.db"))
         self.addCleanup(self.store.close)
         self.start()
 
@@ -158,7 +159,7 @@ class Case(unittest.TestCase):
         if getattr(self, "rig", None):
             self.rig.close()
         overrides = {"routing.mode": self.mode, "routing.route_inherited": True, **overrides}  # the older tests below predate the floor
-        self.rig = Rig(respond=respond, layers=[SetProject(), *getattr(self, "before", []), RoutingLayer()], store=self.store, overrides=overrides)
+        self.rig = Rig(respond=respond, layers=[SetProject(), *getattr(self, "before", []), RoutingLayer()], store=self.store, state=self.state, overrides=overrides)
         self.addCleanup(self.rig.close)
 
     def send(self, messages, model=MEDIUM, extra=None, **kw):
@@ -166,7 +167,7 @@ class Case(unittest.TestCase):
         return self.rig.sent()
 
     def decisions(self):
-        return self.store.get("route:log", [])
+        return self.state.get("route:log", [])
 
 
 class Tag:
@@ -225,14 +226,14 @@ class DecisionTest(Case):
 
     def test_the_main_thread_keeps_one_state_key_per_session_with_the_model_it_sent(self):
         self.send(convo([{"text": "list the files in src"}]), model=SMALL)
-        keys = [r["key"] for r in self.store.run("select key from state where key like '%main%'")]
+        keys = [r["key"] for r in self.state.run("select key from state where key like '%main%'")]
         self.assertEqual(keys, [f"main:{SESSION}"])
-        self.assertEqual(self.store.get(f"main:{SESSION}"), {"sent": SMALL})
+        self.assertEqual(self.state.get(f"main:{SESSION}"), {"sent": SMALL})
 
     def test_a_model_outside_the_table_is_left_alone_and_named_in_status(self):
         sent = self.send(convo([{"text": "list the files in src"}]), model="claude-other-9")
         self.assertEqual((sent["model"], sent["output_config"]["effort"]), ("claude-other-9", "high"))
-        self.assertEqual((self.store.get("route:outside"), self.decisions()), ("claude-other-9", []))
+        self.assertEqual((self.state.get("route:outside"), self.decisions()), ("claude-other-9", []))
 
     def test_a_hard_question_on_the_first_turn_keeps_the_model(self):
         sent = self.send(convo([{"text": "Why do requests hang when two users save at once?"}]), model=LARGE)
@@ -263,12 +264,12 @@ class DecisionTest(Case):
         self.rig.messages(raw, extra=MAIN)
         self.assertEqual(len(self.rig.upstream.requests), 1)
         self.assertEqual(self.rig.sent()["model"], MEDIUM)
-        self.assertEqual((routing.bad_tiers(self.store), self.decisions()), ({}, []))
+        self.assertEqual((routing.bad_tiers(self.state), self.decisions()), ({}, []))
 
     def test_a_skipped_decision_stays_on_the_same_model_and_effort(self):
         import time
         self.send(convo([{"text": "write a parser in utils.py"}]))
-        self.store.put("route:bad:small", {"why": "x", "ts": time.time(), "lane": "l"})
+        self.state.put("route:bad:small", {"why": "x", "ts": time.time(), "lane": "l"})
         sent = self.send(convo([{"text": "write a parser in utils.py"}, {"text": "list the files in src"}]))
         self.assertEqual((sent["model"], sent["output_config"]["effort"]), (MEDIUM, "medium"))
 
@@ -287,12 +288,12 @@ class DecisionTest(Case):
         self.assertEqual(self.send(convo([{"text": "design a plugin system"}]))["model"], MEDIUM)
 
     def test_a_pin_wins_over_the_text(self):
-        self.store.put(routing.pin_key("proj1"), "small")
+        self.state.put(routing.pin_key("proj1"), "small")
         self.assertEqual(self.send(convo([{"text": "design a plugin system"}]), model=LARGE)["model"], SMALL)
 
     def test_a_pin_to_a_lower_tier_holds_on_a_warm_cache(self):
         self.send(convo([{"text": "write a parser in utils.py"}]))
-        self.store.put(routing.pin_key("proj1"), "small")
+        self.state.put(routing.pin_key("proj1"), "small")
         sent = self.send(convo([{"text": "write a parser in utils.py", "pad": 800000}, {"text": "design a plugin system"}]))
         self.assertEqual(sent["model"], SMALL)
 
@@ -348,7 +349,7 @@ class SwitchPriceTest(Case):
         self.send(convo([first, {"text": "design a plugin system"}, {"text": "fix cli.py"}]))
         self.send(convo([first, {"text": "list the files in src"}]))
         last = self.decisions()[-1]
-        dec = self.store.get(last["key"])
+        dec = self.state.get(last["key"])
         warm = routing.price(self.rig.proxy.cfg["routing"], "medium", dec["prefix"], True, "small")
         self.assertEqual((last["from"], last["stay"]), ("medium", round(warm)))
 
@@ -530,7 +531,7 @@ class RefusedTest(Case):
         original = json.loads(raw)
         original["tools"][0]["description"] += GUIDANCE
         self.assertEqual(sent[1], original)
-        self.assertIn("large", routing.bad_tiers(self.store))
+        self.assertIn("large", routing.bad_tiers(self.state))
         self.assertIn("404", self.decisions()[-1]["skip"])
         self.assertEqual(self.rig.proxy.fused, {})  # nothing else about the conversation is switched off
 
@@ -565,7 +566,7 @@ class RefusedTest(Case):
         self.start(respond=respond)
         status, _, _ = self.rig.messages(body(convo([{"text": "design a plugin system"}]), MEDIUM), extra=MAIN)
         self.assertEqual((status, len(self.rig.upstream.requests)), (200, 3))
-        self.assertEqual(routing.bad_tiers(self.store), {})
+        self.assertEqual(routing.bad_tiers(self.state), {})
 
     def test_an_overloaded_retry_keeps_the_turn_unrouted_and_marks_nothing(self):
         def respond(req):
@@ -575,7 +576,7 @@ class RefusedTest(Case):
         self.start(respond=respond)
         status, _, _ = self.rig.messages(body(convo([{"text": "design a plugin system"}]), MEDIUM), extra=MAIN)
         self.assertEqual(status, 529)
-        self.assertEqual(routing.bad_tiers(self.store), {})
+        self.assertEqual(routing.bad_tiers(self.state), {})
         self.assertIn("404", self.decisions()[-1]["skip"])
 
     def test_a_failing_layer_hook_does_not_drop_the_request(self):
@@ -588,7 +589,7 @@ class RefusedTest(Case):
         self.start(respond=lambda req: (400, {"content-type": "application/json"}, b'{"type":"error","error":{"message":"bad request"}}'))
         status, _, _ = self.rig.messages(body(convo([{"text": "design a plugin system"}]), MEDIUM), extra=MAIN)
         self.assertEqual(status, 400)
-        self.assertEqual(routing.bad_tiers(self.store), {})
+        self.assertEqual(routing.bad_tiers(self.state), {})
         self.assertEqual(self.decisions()[-1]["skip"], "")
 
 
@@ -613,7 +614,7 @@ class ModelClassifierTest(Case):
         self.assertEqual(len(self.calls), 1)
         self.assertEqual((self.calls[0]["model"], self.calls[0]["max_tokens"]), (SMALL, 120))
         self.assertIn("a small model judged", self.decisions()[-1]["why"])
-        self.assertEqual(self.store.get("summary:day")["calls"], 1)  # shares the daily count with summaries
+        self.assertEqual(self.state.get("summary:day")["calls"], 1)  # shares the daily count with summaries
 
     def test_terminal_escapes_in_the_models_reason_are_dropped(self):
         self.start_with('{"tier": "large", "why": "\\u001b[31mhard"}')
@@ -635,7 +636,7 @@ class ModelClassifierTest(Case):
     def test_a_paused_login_skips_the_call(self):
         self.start_with('{"tier": "large", "why": "x"}')
         import time
-        self.store.put("summary:pause", time.time() + 600)
+        self.state.put("summary:pause", time.time() + 600)
         self.assertEqual(self.send(convo([{"text": "How do I fix this bug in login.py?"}]))["model"], MEDIUM)
         self.assertEqual(self.calls, [])
 
@@ -647,14 +648,15 @@ class CommandTest(unittest.TestCase):
         self.addCleanup(store.close)
         repo = make_repo(tmp, "alpha", "https://github.com/Someone/Alpha.git")
         memory = Memory(store)
+        self.addCleanup(memory.state.close)
         key = memory.projects.see(repo)
         old = os.getcwd()
         os.chdir(repo)
         self.addCleanup(os.chdir, old)
         with mock.patch.object(cli, "_memory_handle", return_value=memory), mock.patch("builtins.print") as shown:
             self.assertEqual(cli._route(["pin", "large"]), 0)
-            self.assertEqual(store.get(routing.pin_key(key)), "large")
-            store.put("route:log", [{"ts": 1.0, "key": "k", "kind": "main", "tier": "large", "from": "medium", "why": "w", "move": "up",
+            self.assertEqual(memory.state.get(routing.pin_key(key)), "large")
+            memory.state.put("route:log", [{"ts": 1.0, "key": "k", "kind": "main", "tier": "large", "from": "medium", "why": "w", "move": "up",
                                      "stay": 10, "switch": 20, "skip": "", "escalated": None}])
             self.assertEqual(cli._route([]), 0)
             text = "\n".join(str(c.args[0]) for c in shown.call_args_list)
@@ -662,7 +664,7 @@ class CommandTest(unittest.TestCase):
             self.assertIn(f"project    {key}", text)
             self.assertIn("cost to stay 10 / to switch 20", text)
             self.assertEqual(cli._route(["pin", "off"]), 0)
-            self.assertIsNone(store.get(routing.pin_key(key)))
+            self.assertIsNone(memory.state.get(routing.pin_key(key)))
             self.assertEqual(cli._route(["pin", "huge"]), 2)
 
 
@@ -689,7 +691,7 @@ class ReportTest(unittest.TestCase):
 
     def test_the_log_carries_the_route_and_the_model_that_answered(self):
         rig = Rig(respond=lambda req: (200, {"content-type": "text/event-stream"}, sse(model=SMALL)),
-                  layers=[SetProject(), RoutingLayer()], store=Store(os.path.join(tempfile.mkdtemp(), "a.db")), overrides={"routing.mode": "all"})
+                  layers=[SetProject(), RoutingLayer()], state=State(os.path.join(tempfile.mkdtemp(), "a.db")), overrides={"routing.mode": "all"})
         self.addCleanup(rig.close)
         rig.messages(body(convo([{"text": "list the files in src"}]), MEDIUM), extra=MAIN)
         record = rig.records()[-1]
@@ -795,7 +797,7 @@ class AgentFloorTest(Case):
 
     def test_a_pin_overrides_the_floor(self):
         self.send(convo([{"text": "hello"}]), model=MEDIUM)
-        self.store.put(routing.pin_key("proj1"), "small")
+        self.state.put(routing.pin_key("proj1"), "small")
         self.assertEqual(self.sub("Add a retry to fetch() in net.py.", LARGE), SMALL)
 
 

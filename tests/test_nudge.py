@@ -7,7 +7,7 @@ from test_playbook import ASK, Home, SetProject, body, call, human, make, result
 from getalmanac import request as rq
 from getalmanac.memory import Memory
 from getalmanac.playbook_layer import PlaybookLayer
-from getalmanac.store import Store
+from getalmanac.store import State, Store
 
 OLD = "refactor the parser module so it streams"
 NEW = "now tidy the changelog wording a bit"
@@ -21,11 +21,12 @@ class NudgeTest(Home):
     def setUp(self):
         super().setUp()
         self.store = Store(os.path.join(self.home, "a.db"))
-        Memory(self.store)  # makes the tables, the library's included, as the proxy's own store has them
+        self.state = State(self.store.path.with_name("state.db"))
+        Memory(self.store, self.state)  # makes the tables, the library's included, as the proxy's own store has them
         self.addCleanup(self.store.close)
 
     def rig(self, **overrides):
-        rig = Rig(layers=[SetProject(""), PlaybookLayer()], store=self.store, overrides=overrides or None)
+        rig = Rig(layers=[SetProject(""), PlaybookLayer()], store=self.store, state=self.state, overrides=overrides or None)
         self.addCleanup(rig.close)
         return rig
 

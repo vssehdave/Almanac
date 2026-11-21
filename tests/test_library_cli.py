@@ -9,7 +9,7 @@ from test_playbook import Home
 
 from getalmanac import cli, library, mcp, report
 from getalmanac.memory import QUOTED, Memory, MemoryLayer
-from getalmanac.store import Store
+from getalmanac.store import State, Store
 
 PROMPT = "Make the x test pass in the proxy"
 
@@ -22,8 +22,9 @@ class CliCase(tl.LibraryCase, Home):
         tl.LibraryCase.setUp(self)
         self.store.close()
         self.store = Store(os.path.join(self.home, "almanac.db"))
+        self.state = State(self.store.path.with_name("state.db"))
         self.addCleanup(self.store.close)
-        self.memory = Memory(self.store)
+        self.memory = Memory(self.store, self.state)
         self.key = self.memory.projects.see(self.alpha)
         self.memory.projects.see(self.beta)
         self.layer = MemoryLayer(self.memory)

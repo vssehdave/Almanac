@@ -47,7 +47,7 @@ def run_once(memory, cfg, now=None) -> dict:
     or None when no embedding model is installed)."""
     now = now or time.time()
     days, report = cfg["memory"]["auto_import_days"], {"ts": round(now), "files": 0, "exchanges": 0}
-    seen = memory.store.get(FILES) or {}
+    seen = memory.state.get(FILES) or {}
     known, kept = _known(memory), {}
     for path in sorted(source().glob("*/*.jsonl")):
         try:
@@ -70,13 +70,13 @@ def run_once(memory, cfg, now=None) -> dict:
         report["exchanges"] += done["exchanges"]
         # a run of a project not stored yet is looked at again once another project is stored
         kept[str(path)] = sig + [len(known)] if done["skipped"].get("project not stored yet") else sig
-    memory.store.put(FILES, kept)
+    memory.state.put(FILES, kept)
     report.update(summarized=0, failed=0, stopped="")
     if cfg["memory"]["summary_model"]:
         refined = summarize.refine(memory, cfg, say=lambda *_: None)
         report.update(summarized=refined["summarized"], failed=refined["failed"], stopped=refined["stopped"])
     report["vectors"] = memory.embed_all()
-    memory.store.put(LAST, report)
+    memory.state.put(LAST, report)
     return report
 
 
@@ -94,7 +94,7 @@ def line(store) -> str:
 def start(proxy, first=FIRST, every=EVERY):
     """Start the background thread for a running proxy. Returns it, or None when memory.auto_import is off."""
     cfg = proxy.cfg
-    if not (cfg["memory"]["enabled"] and cfg["memory"]["auto_import"]) or proxy.store is None:
+    if not (cfg["memory"]["enabled"] and cfg["memory"]["auto_import"]) or proxy.state is None:
         return None
     if not _own_home() and config._file().get("memory", {}).get("auto_import") is not True:
         return None  # a scratch or eval home (often a copy of the real store) must not import the real transcripts or spend the login's summary calls
@@ -102,15 +102,15 @@ def start(proxy, first=FIRST, every=EVERY):
     def loop():
         time.sleep(first)
         while True:
-            store = None
+            memory = None
             try:
-                store = Store(proxy.store.path)  # a connection of its own: the proxy's requests never wait for an import
-                run_once(Memory(store), cfg)
+                memory = Memory(Store(proxy.memory_store.path))  # connections of its own, to both files: the proxy's requests never wait for an import
+                run_once(memory, cfg)
             except Exception as exc:  # background work never reaches the user
                 proxy.log.write({"ts": time.time(), "kind": "error", "where": "autoimport", "error": f"{type(exc).__name__}: {exc}"[:300]})
             finally:
-                if store:
-                    store.close()
+                if memory:
+                    memory.close()
             time.sleep(every)
 
     thread = threading.Thread(target=loop, daemon=True)

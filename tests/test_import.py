@@ -14,7 +14,7 @@ from test_memory import make_repo
 
 from getalmanac import cli, importer, memory as memory_mod, project, request as rq
 from getalmanac.memory import Memory
-from getalmanac.store import Store
+from getalmanac.store import State, Store
 
 SID = "aaaaaaaa-0000-4000-8000-000000000001"
 
@@ -74,7 +74,8 @@ class ImportBase(unittest.TestCase):
         self.folder = os.path.join(self.tmp, "projects", "alpha-folder")
         os.makedirs(self.folder)
         self.store = Store(os.path.join(self.tmp, "almanac.db"))
-        self.memory = Memory(self.store)
+        self.state = State(self.store.path.with_name("state.db"))
+        self.memory = Memory(self.store, self.state)
         self.scratch = os.path.join(self.tmp, "scratch")  # the test repos sit in the temp folder, so it is not the ignored one here
         patch = mock.patch.object(importer, "scratch_dirs", lambda: [project.normalize(self.scratch)])
         patch.start()

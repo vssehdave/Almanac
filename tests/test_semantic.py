@@ -18,7 +18,7 @@ from test_memory import human, make_repo, reply
 
 from getalmanac import cli, config, embed, memory as memory_mod, semantic
 from getalmanac.memory import Memory, MemoryLayer, ProjectLayer
-from getalmanac.store import Store
+from getalmanac.store import State, Store
 
 CONCEPTS = [("cache", "cache prefix proxy"), ("bread", "bread sourdough flour loaf baguette bake"),
             ("retry", "retry backoff jitter"), ("money", "invoice cent rounding refund penny bill")]
@@ -54,8 +54,9 @@ class Case(unittest.TestCase):
             patch.start()
             self.addCleanup(patch.stop)
         self.store = Store(os.path.join(self.tmp, "almanac.db"))
+        self.state = State(self.store.path.with_name("state.db"))
         self.addCleanup(self.store.close)
-        self.memory = Memory(self.store)
+        self.memory = Memory(self.store, self.state)
         self.alpha = make_repo(self.tmp, "alpha", "https://github.com/Someone/Alpha.git")
         self.key = self.memory.projects.see(self.alpha)
 
@@ -225,7 +226,7 @@ class RecallTest(Case):
     def test_a_later_vector_never_changes_a_recall_note_already_sent(self):
         self.add("old-lane", BREAD, "Mix flour, water and starter.")
         self.memory.embed_pending()
-        rig = Rig(layers=[ProjectLayer(self.memory), MemoryLayer(self.memory)], store=self.store)
+        rig = Rig(layers=[ProjectLayer(self.memory), MemoryLayer(self.memory)], store=self.store, state=self.state)
         self.addCleanup(rig.close)
         env = f"# Environment\n - Primary working directory: {self.alpha}\n"
         body = {"model": "m", "tools": [{"name": "Bash", "description": "x", "input_schema": {"type": "object"}}],
@@ -341,7 +342,7 @@ class RecallLockTest(Case):
 
     def ctx(self, lane):
         cfg = config.load()
-        return SimpleNamespace(cfg=cfg, thread="main", session="s", lane=lane, store=self.store, project=self.key, stats={}, agent_type="")
+        return SimpleNamespace(cfg=cfg, thread="main", session="s", lane=lane, state=self.state, memory_store=self.store, project=self.key, stats={}, agent_type="")
 
     def body(self, text):
         return {"model": "m", "tools": [{"name": "Bash", "description": "x", "input_schema": {"type": "object"}}],
@@ -385,7 +386,7 @@ class RecallLockTest(Case):
             t.join()
         self.assertEqual(json.dumps(bodies[0]), json.dumps(bodies[1]))
         self.assertIn("Almanac memory", json.dumps(bodies[0]))
-        self.assertEqual(len(self.store.run("select 1 from state where key = 'recall:l2'")), 1)
+        self.assertEqual(len(self.state.run("select 1 from state where key = 'recall:l2'")), 1)
 
 
 @unittest.skipIf(semantic.missing() or not semantic.present(), "needs the semantic packages and the downloaded model")

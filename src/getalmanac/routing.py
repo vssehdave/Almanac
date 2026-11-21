@@ -244,7 +244,7 @@ class RoutingLayer:
 
     def transform(self, body, ctx):
         cfg = ctx.cfg["routing"]
-        if cfg["mode"] not in ("subagents", "all") or ctx.kind != "messages" or ctx.store is None:
+        if cfg["mode"] not in ("subagents", "all") or ctx.kind != "messages" or ctx.state is None:
             return
         self._guide(body)
         if body.get("speed"):  # a fast-mode request named its model on purpose, and other models may refuse the field
@@ -253,11 +253,11 @@ class RoutingLayer:
         if kind is None or not isinstance(body.get("model"), str):
             return
         if kind == "main":
-            ctx.store.merge(f"main:{ctx.session}", sent=body["model"])  # what a sub-agent's model is compared with, see _decide
+            ctx.state.merge(f"main:{ctx.session}", sent=body["model"])  # what a sub-agent's model is compared with, see _decide
         tier_now = _tier_of(cfg, body["model"])
         if not tier_now:  # the person chose some other model on purpose
-            if ctx.store.get("route:outside") != body["model"]:
-                ctx.store.put("route:outside", body["model"])  # so `almanac route status` can say why nothing is routed
+            if ctx.state.get("route:outside") != body["model"]:
+                ctx.state.put("route:outside", body["model"])  # so `almanac route status` can say why nothing is routed
             return
         messages = ctx.orig["messages"]
         turns = person_turns(messages)
@@ -270,13 +270,13 @@ class RoutingLayer:
         hits = strikes(settled(messages, cfg.get("calm_after", 2)), cfg["escalate_after"]) if kind == "sub" else 0
         key += f":s{hits}" if hits else ""
         first = False
-        dec = ctx.store.get(key)
+        dec = ctx.state.get(key)
         if dec is None:
             fresh = self._decide(ctx, body, cfg, kind, tier_now, text, turns, turn, key, hits)
-            dec = ctx.store.frozen(key, lambda: fresh)
+            dec = ctx.state.frozen(key, lambda: fresh)
             first = dec is fresh
             if first:
-                self._log(ctx.store, dec)
+                self._log(ctx.state, dec)
         if dec.get("skip"):
             return
         self._apply(body, ctx, cfg, dec, first)
@@ -296,7 +296,7 @@ class RoutingLayer:
                     tool["description"] += GUIDANCE
 
     def _decide(self, ctx, body, cfg, kind, tier_now, text, turns, turn, key, hits=0) -> dict:
-        store, messages = ctx.store, ctx.orig["messages"]
+        store, messages = ctx.state, ctx.orig["messages"]
         dec = {"kind": kind, "key": key, "from": tier_now, "ts": round(time.time(), 1), "skip": "", "move": "none", "ms": 0}
         pin = store.get(pin_key(ctx.project)) if ctx.project else None
         top = TIERS.index(cfg["ceiling"]) if cfg["ceiling"] in TIERS else len(TIERS) - 1
@@ -378,7 +378,7 @@ class RoutingLayer:
 
     def _ask(self, ctx, cfg, text):
         """(tier, why) from one small-model call, or None. Shares the pause and daily cap of the summary calls."""
-        store = ctx.store
+        store = ctx.state
         if summarize.paused_until(store) or not summarize.reserve(store, ctx.cfg["memory"]["summary_daily_calls"]):
             return None
         body = {"model": cfg["models"]["small"], "max_tokens": 120,
@@ -413,7 +413,7 @@ class RoutingLayer:
     def refused(self, ctx, status, detail):
         """The upstream refused a routed request: stop routing this turn. The tier is marked only by `blame`."""
         note = ctx.stats.get("route") or {}
-        store = ctx.store
+        store = ctx.state
         with store.lock:
             dec = store.get(note.get("key", ""))
             if dec:
@@ -421,7 +421,7 @@ class RoutingLayer:
 
     def blame(self, ctx, note):
         """The same request without routing was accepted, so the model was the cause: keep the tier off for a while."""
-        store = ctx.store
+        store = ctx.state
         with store.lock:
             dec = store.get(note.get("key", ""))
             if dec and dec.get("skip"):
@@ -440,7 +440,7 @@ class RoutingLayer:
 
     def forgive(self, ctx, note):
         """The original request failed too, so the model was not the cause: undo what `refused` did."""
-        store = ctx.store
+        store = ctx.state
         with store.lock:
             dec = store.get(note.get("key", ""))
             if dec and dec.get("skip"):

@@ -132,10 +132,12 @@ def _status(_rest):
     else:
         print("  no requests recorded yet")
     memory = _memory_handle()
+    for name, file in (("memory db", "almanac.db"), ("state db", "state.db")):  # after the handle: it creates both
+        print(f"  {name:<10} {file}, {(home / file).stat().st_size / 1e6:.1f} MB")
     counts = memory.counts()
     print(f"  memory     {counts['convos']} conversation(s), {counts['exchanges']} exchange(s), {counts['topics']} topic(s)")
     print(f"  summaries  {summarize.line(memory, cfg)}")
-    print(f"  auto import {autoimport.line(memory.store) if cfg['memory']['auto_import'] else 'off (memory.auto_import)'}")
+    print(f"  auto import {autoimport.line(memory.state) if cfg['memory']['auto_import'] else 'off (memory.auto_import)'}")
     print(f"  statuses   {_status_counts(memory)}")
     seen = report.render_routing(records)
     if seen:
@@ -163,6 +165,9 @@ def _doctor(_rest):
         probe.write_text("x")
         probe.unlink()
         check("files", True, str(config.home()))
+        for file in ("almanac.db", "state.db"):
+            path = config.home() / file
+            check(file, True, f"{path.stat().st_size / 1e6:.1f} MB" if path.exists() else "not created yet")
     except OSError as exc:
         check("files", False, f"{config.home()} is not writable: {exc}")
     try:
@@ -358,7 +363,7 @@ def _cloud(rest):
         _print(WATCHDOG_STEPS.format(prompt=cloud.watchdog(cfg["cloud"]["heartbeat_minutes"]), here=here, key=cloud.handoff_key()))
         return 0
     if args.cmd == "status":
-        _print(cloud.status(cwd, cfg, memory.store, listed))
+        _print(cloud.status(cwd, cfg, memory.state, listed))
         return 0
     if args.conversation is None:
         found = memory.recent(project=memory.projects.see(cwd, touch=False), limit=1)
@@ -470,7 +475,7 @@ def _route(rest):
 
     cfg, memory = config.load(), _memory_handle()
     project = memory.projects.see(os.getcwd(), touch=False)
-    store = memory.store
+    store = memory.state
     print(f"  project    {project or 'unknown'}  (a pin applies only if the proxy works out this same project)")
     if rest[:1] == ["pin"] and len(rest) == 2 and rest[1] in (*routing.TIERS, "off"):
         if not project:

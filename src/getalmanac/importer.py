@@ -30,7 +30,7 @@ from . import config, request as rq
 from .memory import OPEN_SECONDS, Memory
 from .project import describe, normalize, repo_root, tool_paths
 from .status import aged, combine, rule
-from .store import Store
+from .store import STATE_FILE, Store
 from . import summarize
 
 _ARG = r"""("[^"]+"|'[^']+'|[^\s;&|<>()]+)"""
@@ -351,16 +351,17 @@ def run(memory, words, days=None, dry_run=False, idle=OPEN_SECONDS, only=None) -
     if not dry_run:
         return _import(memory, files, days, idle, now, only)
     scratch = tempfile.mkdtemp(prefix="almanac-dry-")
-    store = None
+    copy = None
     try:
-        target = sqlite3.connect(os.path.join(scratch, "almanac.db"))
-        memory.store.db.backup(target)
-        target.close()
-        store = Store(os.path.join(scratch, "almanac.db"))
-        return _import(Memory(store), files, days, idle, now, only)
+        for src, name in ((memory.store, "almanac.db"), (memory.state, STATE_FILE)):  # both files: the copy is all a dry run may touch
+            target = sqlite3.connect(os.path.join(scratch, name))
+            src.db.backup(target)
+            target.close()
+        copy = Memory(Store(os.path.join(scratch, "almanac.db")))
+        return _import(copy, files, days, idle, now, only)
     finally:
-        if store:
-            store.db.close()
+        if copy:
+            copy.close()
         shutil.rmtree(scratch, ignore_errors=True)
 
 

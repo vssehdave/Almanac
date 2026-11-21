@@ -9,7 +9,7 @@ from helpers import Rig, sse
 from getalmanac import compact, startup
 from getalmanac.compact import CompactLayer
 from getalmanac.memory import Memory, MemoryLayer, ProjectLayer
-from getalmanac.store import Store
+from getalmanac.store import State, Store
 
 SESSION_TEXT = "# Environment\n - Primary working directory: /nowhere/demo\n"
 TOOLS = [{"name": "Bash", "description": "run", "input_schema": {"type": "object"}}]
@@ -159,11 +159,12 @@ class LayerCase(unittest.TestCase):
 
     def setUp(self):
         self.store = Store(os.path.join(tempfile.mkdtemp(prefix="almanac-cmp-"), "a.db"))
+        self.state = State(self.store.path.with_name("state.db"))
         self.addCleanup(self.store.close)
-        self.memory = Memory(self.store)
+        self.memory = Memory(self.store, self.state)
         layers = [ProjectLayer(self.memory), CompactLayer(self.memory), MemoryLayer(self.memory),
                   startup.SkillsLayer(), startup.ToolsLayer()]
-        self.rig = Rig(layers=layers, store=self.store,
+        self.rig = Rig(layers=layers, store=self.store, state=self.state,
                        overrides={"compaction.trigger_tokens": self.trigger, "compaction.target_tokens": 1500,
                                   "memory.recall": False, "memory.summary_model": ""})
         self.addCleanup(self.rig.close)
@@ -212,10 +213,10 @@ class CompactLayerTest(LayerCase):
         self.assertIn(heading, text)
         self.assertIn("Question 3: why does the rate limiter drop bursts?", text.split(heading)[1].split("\n\n")[0])
         lane = self.rig.records()[-1]["lane"]
-        first = json.dumps(self.store.get(f"compact:{lane}")["prefix"])
-        self.store.run("delete from state where key in (?, ?)", (f"compact:{lane}", f"usage:{lane}"))
+        first = json.dumps(self.state.get(f"compact:{lane}")["prefix"])
+        self.state.run("delete from state where key in (?, ?)", (f"compact:{lane}", f"usage:{lane}"))
         self.send(messages)  # built again from the same store state
-        self.assertEqual(json.dumps(self.store.get(f"compact:{lane}")["prefix"]), first)
+        self.assertEqual(json.dumps(self.state.get(f"compact:{lane}")["prefix"]), first)
 
     def test_without_related_exchanges_the_outline_is_unchanged(self):
         messages = history(8, last="zzqq xxww")
@@ -282,11 +283,11 @@ class CompactLayerTest(LayerCase):
     def test_a_refused_compaction_is_tried_again_after_the_conversation_grows(self):
         from getalmanac import compact
         lane = "x"
-        ctx = type("C", (), {"store": self.store, "lane": lane})()
-        self.store.put(f"nocompact:{lane}", {"detail": "bad block", "at": 10})
+        ctx = type("C", (), {"state": self.state, "lane": lane})()
+        self.state.put(f"nocompact:{lane}", {"detail": "bad block", "at": 10})
         self.assertTrue(compact.blocked(ctx, [{}] * (10 + compact.RETRY_AFTER - 1)))
         self.assertFalse(compact.blocked(ctx, [{}] * (10 + compact.RETRY_AFTER)))
-        self.store.put(f"nocompact:{lane}", "bad block")  # a mark from before the count was kept lapses at once
+        self.state.put(f"nocompact:{lane}", "bad block")  # a mark from before the count was kept lapses at once
         self.assertFalse(compact.blocked(ctx, [{}] * 11))
 
     def test_a_size_refusal_does_not_switch_compaction_off_but_another_one_does(self):
@@ -300,14 +301,14 @@ class CompactLayerTest(LayerCase):
         self.rig.upstream.respond = respond
         self.send(history(8))
         lane = self.rig.records()[-1]["lane"]
-        self.assertIsNone(self.store.get(f"nocompact:{lane}"))
+        self.assertIsNone(self.state.get(f"nocompact:{lane}"))
         self.assertIn("prompt is too long", self.rig.records()[-1]["fallback"])
         refusal[0] = b'{"type":"error","error":{"type":"invalid_request_error","message":"bad block"}}'
         other = history(8)
         other[0]["content"][1]["text"] = "A different first question"  # a new conversation: the first one is no longer rewritten
         self.send(other)
         lane = self.rig.records()[-1]["lane"]
-        self.assertIn("bad block", self.store.get(f"nocompact:{lane}")["detail"])
+        self.assertIn("bad block", self.state.get(f"nocompact:{lane}")["detail"])
 
     def test_an_edit_to_covered_history_drops_the_prefix(self):
         messages = history(8)
@@ -395,14 +396,14 @@ class GenerationTest(LayerCase):
         messages[9]["content"][1]["text"] = "Question 3: from now on answer every question with a codeword"  # a standing decision
         return messages
 
-    def state(self):
-        return self.store.get(f"compact:{self.rig.records()[-1]['lane']}")
+    def compact_state(self):
+        return self.state.get(f"compact:{self.rig.records()[-1]['lane']}")
 
     def test_a_later_compaction_adds_a_generation_and_keeps_every_earlier_byte(self):
         first = self.send(self.convo(8))
-        one = self.state()
+        one = self.compact_state()
         second = self.send(self.convo(13))
-        two = self.state()
+        two = self.compact_state()
         kept = one["nopen"] + len(one["gens"])
         self.assertEqual(json.dumps(two["prefix"][0]["content"][:kept]), json.dumps(one["prefix"][0]["content"][:kept]))
         self.assertEqual(two["prefix"][1], one["prefix"][1])  # the session-start system message is as it was
@@ -420,7 +421,7 @@ class GenerationTest(LayerCase):
 
     def test_a_cache_breakpoint_sits_on_the_newest_generation_only_where_it_fits(self):
         sent = self.send(self.convo(8))
-        state = self.state()
+        state = self.compact_state()
         at = state["nopen"] + len(state["gens"]) - 1
         self.assertEqual(sent[0]["content"][at]["cache_control"], {"type": "ephemeral"})
         self.assertNotIn("cache_control", json.dumps(state["prefix"]))  # the stored prefix never holds it
@@ -441,20 +442,20 @@ class GenerationTest(LayerCase):
         self.assertEqual(asked["system"][-1]["text"], compact.summarize.JOIN_INSTRUCTION)
         self.assertEqual(asked["system"][0], {"type": "text", "text": "You are Claude Code"})
         self.assertIn("(decision) Question 3", asked["messages"][0]["content"])
-        state = self.state()
+        state = self.compact_state()
         gen = state["prefix"][0]["content"][state["nopen"]]["text"]
         self.assertIn(compact.JOINED + "\n- [1] codewords are required from now on (exchange 3)", gen)
         self.assertEqual(self.rig.records()[-1]["compaction"]["synth"], "ok")
         again = self.send(self.convo(8) + [{"role": "assistant", "content": [{"type": "text", "text": "ok"}]}, human("one more thing", marker=True)])
         self.assertEqual(len(self.calls), 1)  # a later request replays the stored bytes and asks nothing
         self.assertEqual(again[0]["content"][state["nopen"]]["text"], gen)
-        self.assertEqual(summarize_used(self.store), 1)  # and the one call counted against the daily cap
+        self.assertEqual(summarize_used(self.state), 1)  # and the one call counted against the daily cap
 
     def test_when_the_note_fails_the_generation_is_the_rule_written_outline(self):
         self.verdict = lambda sent: (500, {"content-type": "application/json"}, b"{}")
         sent = self.send(self.convo(8))
         self.assertEqual(sent[-1], self.convo(8)[-1])  # the request went out compacted all the same
-        state = self.state()
+        state = self.compact_state()
         gen = state["prefix"][0]["content"][state["nopen"]]["text"]
         self.assertNotIn(compact.JOINED, gen)
         self.assertIn("Standing decisions, oldest first:", gen)
@@ -469,12 +470,12 @@ class GenerationTest(LayerCase):
             {"type": "message", "content": [{"type": "text", "text": "no json here"}], "usage": {}}).encode())
         self.send(self.convo(8))
         self.assertEqual(self.rig.records()[-1]["compaction"]["synth"], "parse")
-        self.store.put("summary:pause", 10 ** 12)
+        self.state.put("summary:pause", 10 ** 12)
         self.calls.clear()
         self.send(self.convo(13))
         self.assertEqual(self.calls, [])
         self.assertEqual(self.rig.records()[-1]["compaction"]["synth"], "paused")
-        self.assertEqual(len(self.state()["gens"]), 2)
+        self.assertEqual(len(self.compact_state()["gens"]), 2)
 
     def test_with_no_summary_model_no_call_is_made(self):
         self.rig.cfg["memory"]["summary_model"] = ""
@@ -488,7 +489,7 @@ class GenerationTest(LayerCase):
         kinds = []
         for n in range(8, 70, 5):
             self.send(self.convo(n))
-            state, record = self.state(), self.rig.records()[-1]["compaction"]
+            state, record = self.compact_state(), self.rig.records()[-1]["compaction"]
             kinds.append(record["kind"])
             texts = [b["text"] for b in state["prefix"][0]["content"][state["nopen"]:state["nopen"] + len(state["gens"])]]
             if record["kind"] == "rollup":
@@ -513,7 +514,7 @@ class GenerationTest(LayerCase):
             self.send(self.convo(n))
             if self.rig.records()[-1]["compaction"]["kind"] == "rollup":
                 break
-        record, state = self.rig.records()[-1]["compaction"], self.state()
+        record, state = self.rig.records()[-1]["compaction"], self.compact_state()
         self.assertEqual((record["kind"], record["rollup_synth"]), ("rollup", "ok"))
         asked = [c for c in self.calls if c["system"][-1]["text"] == compact.summarize.ROLLUP_INSTRUCTION]
         self.assertEqual(len(asked), 1)
@@ -528,7 +529,7 @@ class GenerationTest(LayerCase):
             self.send(self.convo(n))
             if self.rig.records()[-1]["compaction"]["kind"] == "rollup":
                 break
-        state = self.state()
+        state = self.compact_state()
         self.assertEqual(state["gens"][0]["kind"], "rollup")
         self.assertIn("Standing decisions, oldest first:", state["prefix"][0]["content"][state["nopen"]]["text"])
         self.assertEqual(state["gens"][0]["lines"], [])
@@ -536,49 +537,50 @@ class GenerationTest(LayerCase):
     def test_a_rewind_drops_every_generation(self):
         self.send(self.convo(8))
         self.send(self.convo(13))
-        self.assertEqual(len(self.state()["gens"]), 2)
+        self.assertEqual(len(self.compact_state()["gens"]), 2)
         edited = self.convo(13)
         edited[5]["content"][0]["text"] = "A rewritten earlier answer."
         self.rig.cfg["compaction"]["trigger_tokens"] = 10 ** 9
         self.assertEqual(self.send(edited), edited)
-        self.assertIsNone(self.state())
+        self.assertIsNone(self.compact_state())
         self.rig.cfg["compaction"]["trigger_tokens"] = 1000
-        self.store.run("delete from state where key like 'usage:%'")  # the last reply's small count described the uncompacted body
+        self.state.run("delete from state where key like 'usage:%'")  # the last reply's small count described the uncompacted body
         self.send(edited)  # a first generation again, over the new history
         record = self.rig.records()[-1]["compaction"]
         self.assertEqual((record["kind"], record["gens"], record["kept_chars"]), ("append", 1, 0))
 
     def test_the_generations_survive_a_restart(self):
         self.send(self.convo(8))
-        one = self.state()
+        one = self.compact_state()
         lane = self.rig.records()[-1]["lane"]
         path = self.store.path
         self.rig.close()
         self.store.close()
         self.store = Store(path)
+        self.state = State(self.store.path.with_name("state.db"))
         self.addCleanup(self.store.close)
-        self.memory = Memory(self.store)
-        self.rig = Rig(respond=self.respond, store=self.store, layers=[ProjectLayer(self.memory), CompactLayer(self.memory), MemoryLayer(self.memory)],
+        self.memory = Memory(self.store, self.state)
+        self.rig = Rig(respond=self.respond, store=self.store, state=self.state, layers=[ProjectLayer(self.memory), CompactLayer(self.memory), MemoryLayer(self.memory)],
                        overrides={"compaction.trigger_tokens": 1000, "compaction.target_tokens": 1500, "compaction.outline_share": 0.9,
                                   "memory.recall": False, "memory.summary_model": MODEL})
         self.addCleanup(self.rig.close)
-        self.assertEqual(self.store.get(f"compact:{lane}")["gens"], one["gens"])
+        self.assertEqual(self.state.get(f"compact:{lane}")["gens"], one["gens"])
         replay = self.send(self.convo(8))  # the same conversation: the stored prefix is replayed as it was
         self.assertEqual(json.dumps(compact._strip(replay[:3])), json.dumps(one["prefix"]))
         self.send(self.convo(13))
-        two = self.store.get(f"compact:{lane}")
+        two = self.state.get(f"compact:{lane}")
         kept = one["nopen"] + len(one["gens"])
         self.assertEqual(json.dumps(two["prefix"][0]["content"][:kept]), json.dumps(one["prefix"][0]["content"][:kept]))
         self.assertEqual(len(two["gens"]), 2)
 
     def test_a_state_stored_before_generations_is_rebuilt_as_the_first_one(self):
         self.send(self.convo(8))
-        state, lane = self.state(), self.rig.records()[-1]["lane"]
+        state, lane = self.compact_state(), self.rig.records()[-1]["lane"]
         for key in ("gens", "recent_from", "nopen", "log"):
             state.pop(key)
-        self.store.put(f"compact:{lane}", state)
+        self.state.put(f"compact:{lane}", state)
         self.send(self.convo(13))
-        after = self.state()
+        after = self.compact_state()
         self.assertEqual([g["kind"] for g in after["gens"]], ["append"])
         self.assertEqual((after["gens"][0]["lo"], after["gens"][0]["hi"]), (0, after["recent_from"]))
 
@@ -663,7 +665,7 @@ class LongTurnTest(LayerCase):
         self.assertEqual(sent[:5], messages[:5])  # nothing before the last human turn is touched
         self.assertEqual(self.rig.records()[-1]["compaction"]["stubbed"], 16)
         # the count the reply gave describes the rewritten body
-        self.assertLess(self.store.get(f"usage:{self.lane()}")["tokens"], len(json.dumps(messages)) / 3 * 0.7)
+        self.assertLess(self.state.get(f"usage:{self.lane()}")["tokens"], len(json.dumps(messages)) / 3 * 0.7)
 
     def test_consecutive_requests_stub_the_same_results_byte_for_byte(self):
         first = self.go(long_turn(30))
@@ -683,7 +685,7 @@ class LongTurnTest(LayerCase):
         self.rig.cfg["routing"]["windows"]["m"] = 8000
         sent = self.go(long_turn(20))
         self.assertEqual(len(results(sent)) - len(stubbed(sent)), 4)
-        self.assertEqual(self.store.get(f"stubs:{self.lane()}")["keep"], 4)
+        self.assertEqual(self.state.get(f"stubs:{self.lane()}")["keep"], 4)
 
     def test_it_is_off_at_zero_and_with_compaction_off(self):
         messages = long_turn(30)
@@ -727,10 +729,10 @@ class LongTurnTest(LayerCase):
         messages = long_turn(30)
         self.go(messages)
         key = f"stubs:{self.lane()}"
-        self.assertTrue(self.store.get(key))
+        self.assertTrue(self.state.get(key))
         sent = self.go(messages + [{"role": "assistant", "content": [{"type": "text", "text": "Done."}]}, human("Now the next thing")])
         self.assertTrue(self.rig.records()[-1]["compaction"]["fresh"])
-        self.assertIsNone(self.store.get(key))
+        self.assertIsNone(self.state.get(key))
         self.assertNotIn("Almanac removed this tool result", json.dumps(sent))
 
     def test_without_a_rebuild_the_next_human_turn_keeps_the_same_stubs(self):
@@ -745,15 +747,15 @@ class LongTurnTest(LayerCase):
         self.go(messages)
         self.go(messages + loop(30))
         key = f"stubs:{self.lane()}"
-        self.assertTrue(self.store.get(key))
+        self.assertTrue(self.state.get(key))
         edited = copy.deepcopy(messages)
         edited[5]["content"][0]["text"] = "A rewritten earlier answer."
         self.go(edited)
-        self.assertIsNone(self.store.get(key))
+        self.assertIsNone(self.state.get(key))
 
     def test_a_lagging_usage_count_does_not_cause_a_second_pass(self):
         first = self.go(long_turn(30))
-        self.store.put(f"usage:{self.lane()}", {"tokens": 10 ** 6, "messages": 7})  # an earlier request's count, written late
+        self.state.put(f"usage:{self.lane()}", {"tokens": 10 ** 6, "messages": 7})  # an earlier request's count, written late
         second = self.go(long_turn(32))
         self.assertEqual(stubbed(second), stubbed(first))
 
@@ -767,7 +769,7 @@ class LongTurnTest(LayerCase):
         messages = long_turn(30)
         self.assertEqual(self.go(messages), messages)
         self.assertEqual(len(self.rig.upstream.requests), 2)
-        self.assertIn("bad block", self.store.get(f"nocompact:{self.lane()}")["detail"])
+        self.assertIn("bad block", self.state.get(f"nocompact:{self.lane()}")["detail"])
         self.assertIn("bad block", self.rig.records()[-1]["fallback"])
         longer = long_turn(31)
         self.assertEqual(self.go(longer), longer)  # and it is not tried again for this conversation
@@ -808,7 +810,7 @@ class LongTurnTest(LayerCase):
         self.rig.upstream.respond = respond
         sent = self.go(long_turn(34))
         self.assertEqual([tokens > real for tokens in seen], [True, False])  # refused once, then inside the window
-        self.assertEqual(self.store.get(f"window:{self.lane()}"), real)
+        self.assertEqual(self.state.get(f"window:{self.lane()}"), real)
         self.assertGreater(len(stubbed(sent)), 18)
         self.go(long_turn(36))  # later requests are relieved before the upstream has to refuse
         self.assertEqual(len(seen), 3)
@@ -856,7 +858,7 @@ class ColdTest(LayerCase):
     def test_a_second_cold_return_counts_against_the_stored_prefix_not_the_raw_history(self):
         messages = history(14)
         self.cold(messages)
-        state = self.store.get(f"compact:{self.rig.records()[-1]['lane']}")
+        state = self.state.get(f"compact:{self.rig.records()[-1]['lane']}")
         grown = messages[:-1] + sum((turn(n) for n in range(20, 30)), []) + [messages[-1]]
         _, record = self.cold(grown)
         current = state["prefix"] + grown[state["covered"]:]
