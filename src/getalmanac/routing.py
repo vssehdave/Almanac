@@ -32,10 +32,8 @@ from .memory import clean
 TIERS = ("small", "medium", "large")
 EFFORTS = ("low", "medium", "high", "xhigh", "max")  # the levels the API takes, weakest first
 AGENT_TOOLS = ("Agent", "Task")  # the sub-agent tool: "Task" in older Claude Code versions
-GUIDANCE = ("\n\nAlmanac routing: split work by difficulty. Begin each sub-agent prompt with one line, "
-            "'Difficulty: simple' (lookups, reading, summaries, small edits), 'Difficulty: standard' "
-            "(normal coding and tests) or 'Difficulty: hard' (design, security review, root cause of a hard "
-            "bug, or work that already failed). Almanac chooses the sub-agent's model from that line.")
+# A sub-agent prompt may begin with 'Difficulty: simple|standard|hard'; Almanac no longer asks for it, since an
+# agent's own file sets its model and the rules below classify the task when the line is missing.
 MARKER = re.compile(r"(?im)^\W*difficulty:\s*(simple|standard|hard)\b")
 MARKED = {"simple": "small", "standard": "medium", "hard": "large"}
 BAD_SECONDS = 3600  # how long a tier stays off after the upstream refused it
@@ -287,7 +285,6 @@ class RoutingLayer:
         cfg = ctx.cfg["routing"]
         if cfg["mode"] not in ("subagents", "all") or ctx.kind != "messages" or ctx.state is None:
             return
-        self._guide(body)
         if body.get("speed"):  # a fast-mode request named its model on purpose, and other models may refuse the field
             return
         kind = ctx.thread if ctx.thread in ("main", "sub") else None  # a fork stays on its parent's model
@@ -328,13 +325,6 @@ class RoutingLayer:
             log = store.get("route:log", [])
             log.append({k: dec.get(k) for k in ("ts", "key", "kind", "tier", "from", "why", "move", "stay", "switch", "skip", "escalated")})
             store.put("route:log", log[-LOG_KEEP:])
-
-    @staticmethod
-    def _guide(body):
-        for tool in body.get("tools") or []:
-            if isinstance(tool, dict) and tool.get("name") in AGENT_TOOLS and isinstance(tool.get("description"), str):
-                if GUIDANCE not in tool["description"]:
-                    tool["description"] += GUIDANCE
 
     def _decide(self, ctx, body, cfg, kind, tier_now, text, turns, turn, key, hits=0) -> dict:
         store, messages = ctx.state, ctx.orig["messages"]

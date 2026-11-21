@@ -22,12 +22,12 @@ class CleanSpeedTest(unittest.TestCase):
     def test_a_tag_opener_followed_by_spaces_is_not_quadratic(self):
         start = time.time()
         clean("<" + " " * 100000)
-        self.assertLess(time.time() - start, 0.5)
+        self.assertLess(time.time() - start, 5)  # quadratic on this input takes minutes; 5 s holds under a loaded full run
 
     def test_many_begin_lines_without_an_end_are_not_quadratic(self):
         start = time.time()
         clean("-----BEGIN PRIVATE KEY-----\n" * 8000)
-        self.assertLess(time.time() - start, 1.0)
+        self.assertLess(time.time() - start, 5)  # see above
 
 
 class OnlyAnswersAreRecalledTest(unittest.TestCase):

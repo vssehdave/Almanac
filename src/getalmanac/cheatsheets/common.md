@@ -36,7 +36,8 @@
 
 - Lead with the result. Say what was done, what was verified and how, what was
   not, and anything the owner has to decide. No padding and no praise of your
-  own work. Report a failure as plainly as a success.
+  own work. Report a failure as plainly as a success. A comparison goes in a
+  small table.
 - Do not stop while work the owner asked for is still owed, and do not ask
   permission for reversible steps inside the task.
 - Do ask before anything destructive, irreversible or outward-facing: deleting,
@@ -44,23 +45,5 @@
 
 ## Commits and branches
 
-- A commit is one finished, working, reviewable unit of change. It is not a
-  save point. Do not commit after every edit; commit when a unit is complete
-  and its tests pass.
-- Scale: a normal feature or fix is 1 to 4 commits, for example the change with
-  its tests, a refactor it needed, and the docs. A whole day of work is rarely
-  more than about ten. If the count is climbing past that, you are committing
-  steps, not units.
-- Split by reason, not by file. A change and its tests go in the same commit.
-  Unrelated changes go in separate commits.
-- A follow-up to your own unpushed commit ("fix typo", "wip", "address
-  review") is folded into the commit it belongs to, not added as a new one.
-- One branch per piece of work that would be reviewed on its own, one pull
-  request per branch, merged when its checks pass. Never commit straight to the
-  main branch. Do not open a new branch for what is one more commit on an open
-  branch of the same topic.
-- Commit and push only when the owner asked for it or the task includes it.
-- Before committing, read `git status` and the staged diff. Stage only what
-  belongs: no scratch files, secrets or generated output.
-- The message says why the change was made. Follow the repository's own commit
-  rules (format, attribution) over these when they differ.
+- Follow the repository's own commit and branch rules. Where it has none: one
+  finished, tested unit per commit, on its own branch, never on main.
