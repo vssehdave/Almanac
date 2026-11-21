@@ -728,7 +728,7 @@ def build(cfg=None) -> Proxy:
     from .memory import Memory, MemoryLayer, ProjectLayer
     from .playbook_layer import PlaybookLayer
     from .routing import RoutingLayer
-    from .startup import AgentsLayer, SkillsLayer, ToolsLayer
+    from .startup import AgentsLayer, ForceAgentsLayer, SkillsLayer, ToolsLayer
     from .strip import StripLayer
     from . import semantic
     from .store import Store
@@ -746,7 +746,7 @@ def build(cfg=None) -> Proxy:
     # Routing comes after them: it prices the prefix as it will really be sent.
     # The cheatsheet comes after routing: it is chosen by the model the request goes out on.
     # The system prefix comes last of the rewriters: it moves what they leave, and must see their final text.
-    layers = [StripLayer(), ProjectLayer(memory), CompactLayer(memory), MemoryLayer(memory), PlaybookLayer(), SkillsLayer(), AgentsLayer(), ToolsLayer(), RoutingLayer(),
+    layers = [StripLayer(), ProjectLayer(memory), CompactLayer(memory), MemoryLayer(memory), PlaybookLayer(), SkillsLayer(), AgentsLayer(), ForceAgentsLayer(), ToolsLayer(), RoutingLayer(),
               CheatsheetLayer(), SysPrefixLayer(), SummaryLayer(memory)]
     if cfg["cloud"]["auto"] is True:  # off adds nothing: no layer, no thread, no git; a hand-typed "false" is off too
         from .cloud import HandoffLayer

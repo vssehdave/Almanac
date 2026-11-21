@@ -42,6 +42,8 @@ DEFAULTS = {
     },
     "startup": {
         "agent_chars": 160,  # characters of description kept for a listed agent type (enough to tell when to use it); 0 leaves the agent listing alone
+        "force_agents": True,  # the sub-agent tool accepts only the listed specialist agent types (startup.ForceAgentsLayer)
+        "force_agents_skip": ["general-purpose", "claude"],  # agent types it may not pick: the generic ones
         "lean_rules": True,  # Almanac's own minimal-change rules, added to the main thread and every sub-agent (cheatsheet.py)
         "lean_level": "full",  # lite: build what was asked and name the smaller option; full; ultra: also question the request
         "lean_rules_text": "",  # your own wording instead of the packaged rules ("" keeps them)
@@ -163,7 +165,7 @@ DEFAULTS = {
 # ALMANAC_DISABLE name -> the (section, key, off value) settings that switch it off
 _OFF = {
     "skills": [("skills", "enabled", False)],
-    "agents": [("startup", "agent_chars", 0)],
+    "agents": [("startup", "agent_chars", 0), ("startup", "force_agents", False)],
     "tools": [("tools", "enabled", False)],
     "memory": [("memory", "enabled", False)],
     "compaction": [("compaction", "enabled", False)],
@@ -176,7 +178,7 @@ _OFF = {
     "cloud": [("cloud", "auto", False)],
     "keepalive": [("keepalive", "enabled", False)],
     "accounts": [("accounts", "fallback", [])],
-    "startup": [("startup", "agent_chars", 0), ("startup", "lean_rules", False), ("startup", "system_prefix", False)],
+    "startup": [("startup", "agent_chars", 0), ("startup", "force_agents", False), ("startup", "lean_rules", False), ("startup", "system_prefix", False)],
 }
 
 POSIX = os.name != "nt"

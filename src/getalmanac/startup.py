@@ -298,3 +298,43 @@ class ToolsLayer:
                 msg["content"] = [note, {"type": "text", "text": msg["content"]}]
             else:
                 msg["content"].insert(0, note)
+
+
+FORCE_NOTE = ("\n\nAlmanac: subagent_type is required and must be one of the listed specialist agents; "
+              "pick the one whose job fits the task.")
+
+
+class ForceAgentsLayer:
+    """Make the sub-agent tool take only the listed specialist agent types, so the model cannot fall back to a generic one.
+
+    The choice set comes from the agent listing Claude Code sends, minus `startup.force_agents_skip`. When nothing is left
+    (no specialists installed), the tool is left alone, so sub-agents still work."""
+
+    def transform(self, body, ctx):
+        cfg = ctx.cfg["startup"]
+        if not cfg.get("force_agents") or ctx.kind != "messages":
+            return
+        tools = [t for t in body.get("tools") or [] if isinstance(t, dict) and t.get("name") in ("Agent", "Task")]
+        props = tools and ((tools[0].get("input_schema") or {}).get("properties") or {})
+        if not props or "subagent_type" not in props:
+            return
+        names = None
+        for msg in (body.get("messages") or [])[:8]:
+            for block in rq.blocks(msg) if isinstance(msg.get("content"), list) else []:
+                if block.get("type") == "text" and AGENT_MARK in (block.get("text") or ""):
+                    names = [n for n, _ in parse_listing(block["text"], AGENT_MARK)[2]]
+                    break
+            if names is not None:
+                break
+        skip = set(cfg.get("force_agents_skip") or [])
+        allowed = [n for n in names or [] if n not in skip]
+        if not allowed:
+            return
+        if '"fork"' in (tools[0].get("description") or ""):  # forking yourself is not a generic fallback
+            allowed.append("fork")
+        schema = tools[0]["input_schema"]
+        schema["properties"]["subagent_type"] = {**props["subagent_type"], "enum": allowed}
+        schema["required"] = list(dict.fromkeys([*(schema.get("required") or []), "subagent_type"]))
+        if isinstance(tools[0].get("description"), str) and FORCE_NOTE not in tools[0]["description"]:
+            tools[0]["description"] += FORCE_NOTE
+        ctx.stats["force_agents"] = allowed
