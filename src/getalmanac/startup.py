@@ -156,7 +156,8 @@ class _ListingLayer:
                     break
             if found:
                 break
-        if not found or not found[1]:
+        late = _frozen(ctx, self.KEY + "-late", lambda: not (found and found[1]))
+        if late or not found or not found[1]:  # a listing the thread's first request lacked (a sub-agent's) stays as sent: editing it would rewrite the first message
             return
         block, (start, end, entries) = found
         catalog = dict(entries)
@@ -318,6 +319,18 @@ class ForceAgentsLayer:
         props = tools and ((tools[0].get("input_schema") or {}).get("properties") or {})
         if not props or "subagent_type" not in props:
             return
+        allowed = _frozen(ctx, "force_agents", lambda: self._allowed(body, cfg, tools[0]))  # the first request of a thread decides, so its tools never change
+        if not allowed:
+            return
+        schema = tools[0]["input_schema"]
+        schema["properties"]["subagent_type"] = {**props["subagent_type"], "enum": allowed}
+        schema["required"] = list(dict.fromkeys([*(schema.get("required") or []), "subagent_type"]))
+        if isinstance(tools[0].get("description"), str) and FORCE_NOTE not in tools[0]["description"]:
+            tools[0]["description"] += FORCE_NOTE
+        ctx.stats["force_agents"] = allowed
+
+    @staticmethod
+    def _allowed(body, cfg, tool) -> list:
         names = None
         for msg in (body.get("messages") or [])[:8]:
             for block in rq.blocks(msg) if isinstance(msg.get("content"), list) else []:
@@ -328,13 +341,6 @@ class ForceAgentsLayer:
                 break
         skip = set(cfg.get("force_agents_skip") or [])
         allowed = [n for n in names or [] if n not in skip]
-        if not allowed:
-            return
-        if '"fork"' in (tools[0].get("description") or ""):  # forking yourself is not a generic fallback
+        if allowed and '"fork"' in (tool.get("description") or ""):  # forking yourself is not a generic fallback
             allowed.append("fork")
-        schema = tools[0]["input_schema"]
-        schema["properties"]["subagent_type"] = {**props["subagent_type"], "enum": allowed}
-        schema["required"] = list(dict.fromkeys([*(schema.get("required") or []), "subagent_type"]))
-        if isinstance(tools[0].get("description"), str) and FORCE_NOTE not in tools[0]["description"]:
-            tools[0]["description"] += FORCE_NOTE
-        ctx.stats["force_agents"] = allowed
+        return allowed

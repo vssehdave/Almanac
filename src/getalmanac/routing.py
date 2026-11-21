@@ -243,24 +243,41 @@ _EFFORT = re.compile(r"(?m)^effort:\s*(\w+)\s*$")
 _agent_efforts = {}
 
 
-def agent_effort(name) -> str:
-    """The `effort:` line in the front matter of agent `name` (the user's agents, then Almanac's bundle); "" when none.
+def _agent_files() -> dict:
+    """{name: (effort, start of the body)} for the user's agents, then Almanac's bundle (the first of a name wins).
 
-    shortcut: read once per name per proxy run, so an edited agent file needs a restart."""
-    if not name or "/" in name or "\\" in name:
-        return ""
-    if name not in _agent_efforts:
-        from . import config, profile
-        found = ""
-        for folder in [profile.user_dir() / "agents", *sorted(config.home().glob("bundle/*/agents"))]:
-            path = folder / f"{name}.md"
-            if path.is_file():
-                head = path.read_text(encoding="utf-8", errors="replace").split("---", 2)
-                hit = _EFFORT.search(head[1]) if len(head) == 3 else None
-                found = hit.group(1).lower() if hit and hit.group(1).lower() in EFFORTS else ""
-                break
-        _agent_efforts[name] = found
-    return _agent_efforts[name]
+    shortcut: read once per proxy run, so an edited agent file needs a restart."""
+    if _agent_efforts:
+        return _agent_efforts
+    from . import config, profile
+    for folder in [profile.user_dir() / "agents", *sorted(config.home().glob("bundle/*/agents"))]:
+        for path in sorted(folder.glob("*.md")) if folder.is_dir() else []:
+            head = path.read_text(encoding="utf-8", errors="replace").split("---", 2)
+            if len(head) < 3 or path.stem in _agent_efforts:
+                continue
+            hit = _EFFORT.search(head[1])
+            effort = hit.group(1).lower() if hit and hit.group(1).lower() in EFFORTS else ""
+            _agent_efforts[path.stem] = (effort, " ".join(head[2].split())[:200])
+    _agent_efforts.setdefault("", ("", ""))  # marks the folders as read
+    return _agent_efforts
+
+
+def _system_text(body) -> str:
+    system = body.get("system")
+    return system if isinstance(system, str) else " ".join(b.get("text") or "" for b in system or [] if isinstance(b, dict))
+
+
+def agent_effort(name, system="") -> str:
+    """The `effort:` line of the sub-agent's file; "" when none. Claude Code names every user agent `custom`, so
+    when `name` is not a file the agent is found by its body, which Claude Code sends as the system prompt."""
+    files = _agent_files()
+    if name in files and name:
+        return files[name][0]
+    flat = " ".join((system or "").split())
+    for effort, start in files.values():
+        if start and len(start) >= 40 and start in flat:
+            return effort
+    return ""
 
 
 class RoutingLayer:
@@ -362,7 +379,7 @@ class RoutingLayer:
         if pin not in TIERS and TIERS.index(tier) > top:
             tier, why = TIERS[top], why + f" (held at the {cfg['ceiling']} ceiling)"
         effort = cfg["effort"].get(tier, "")
-        own = agent_effort(getattr(ctx, "agent_type", None)) if kind == "sub" else ""
+        own = agent_effort(getattr(ctx, "agent_type", None), _system_text(body)) if kind == "sub" else ""
         if own:  # the agent's own `effort:` line is its starting rung; a failure still climbs from there
             effort, why = own, why + f"; effort {own} from the agent's file"
         if pin not in TIERS:  # a failure moves one rung up the ladder of the model the thread was on
