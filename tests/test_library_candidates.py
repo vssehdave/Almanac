@@ -89,8 +89,8 @@ class Home(unittest.TestCase):
         self.cfg = copy.deepcopy(config.DEFAULTS)
 
     def three_sessions(self, texts=REPORT, tools=BUILD, folder="C--code-billing-app"):
-        for sid in (0, 1):
-            write_session(self.cfg_dir, folder, f"sess-{sid}", [(t, tools) for n, t in enumerate(texts) if n % 2 == sid])
+        for sid in (0, 1, 2):  # Playbook counts a repeat once per session, so three requests need three sessions
+            write_session(self.cfg_dir, folder, f"sess-{sid}", [(t, tools) for n, t in enumerate(texts) if n % 3 == sid])
         return texts
 
 

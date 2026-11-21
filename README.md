@@ -592,9 +592,11 @@ ignores the ladder. When the person says an earlier attempt failed (or a task
 says so), the thread takes the next rung of its model's ladder at once, for
 example Haiku to Sonnet low, not straight to Opus.
 
-**Sub-agents.** Almanac adds one fixed paragraph to Claude Code's `Agent` (or `Task`) tool.
-It asks the model to start each sub-agent prompt with `Difficulty: simple`,
-`standard` or `hard`. Almanac reads that line and picks the sub-agent's model.
+**Sub-agents.** A sub-agent prompt may start with `Difficulty: simple`, `standard`
+or `hard`; Almanac reads that line, or classifies the task by its rules when there
+is none, and picks the sub-agent's model. It no longer asks the model to write the
+line, since an agent's own file usually sets its model. An agent file may also set
+`effort:`, which is the sub-agent's starting effort.
 A sub-agent keeps its model until its own tool calls start failing: each run of
 `escalate_after` failures in its own thread moves its next requests one rung up
 its ladder. Routing never takes a sub-agent below the model its own definition

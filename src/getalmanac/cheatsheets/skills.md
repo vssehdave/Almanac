@@ -8,9 +8,9 @@ apply, and load them before you start. Say in one line which you used.
 - Your own adopted skills and agents are listed with the others: use one when
   its description fits the request.
 - To add a skill or plugin the owner names, use the `almanac:adopt` skill.
-- Hand a self-contained piece of work to an agent when one fits it. Start its
-  prompt with a `Difficulty:` line. Do small things yourself: no agent for a
-  job of a few tool calls, and never more than two agents at once.
+- Hand a self-contained piece of work to an agent when one fits it; the
+  agent's file sets its model. Do small things yourself: no agent for a
+  job of a few tool calls, and never more than four agents at once.
 - A skill that changes a lot without supervision (a clean-up of a whole
   codebase, unattended improvements on a branch): start it only when the owner
   has asked for that outcome in words, and on a clean branch.

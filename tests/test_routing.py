@@ -9,7 +9,7 @@ from test_memory import make_repo
 
 from getalmanac import cli, report, routing
 from getalmanac.memory import Memory
-from getalmanac.routing import GUIDANCE, RoutingLayer, classify
+from getalmanac.routing import RoutingLayer, classify
 from getalmanac.store import State, Store
 
 SMALL, MEDIUM, LARGE = "claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"
@@ -484,32 +484,10 @@ class OffTest(Case):
 
 
 class GuidanceTest(Case):
-    def descriptions(self):
-        return [next(t for t in json.loads(r["body"])["tools"] if t["name"] == "Agent")["description"] for r in self.rig.upstream.requests]
-
-    def test_the_paragraph_is_added_once_and_is_byte_identical_every_time(self):
-        for text in ("list the files in src", "design a plugin system", "fix cli.py"):
-            self.send(convo([{"text": text}]))
-        first = self.descriptions()
-        self.assertEqual(len(set(first)), 1)
-        self.assertEqual(first[0], AGENT_TOOL["description"] + GUIDANCE)
-        self.send(convo([{"text": "x"}]), tools=[dict(AGENT_TOOL, description=first[0]), BASH])
-        self.assertEqual(self.descriptions()[-1], first[0])  # already there: not added twice
-
-    def test_it_is_added_when_the_tool_is_called_task(self):
-        self.send(convo([{"text": "fix cli.py"}]), tools=[dict(AGENT_TOOL, name="Task"), BASH])
-        tool = json.loads(self.rig.upstream.requests[-1]["body"])["tools"][0]
-        self.assertEqual(tool["description"], AGENT_TOOL["description"] + GUIDANCE)
-
-    def test_it_is_only_added_when_the_agent_tool_is_present(self):
-        self.send(convo([{"text": "fix cli.py"}]), tools=[BASH])
-        self.assertEqual(json.loads(self.rig.upstream.requests[-1]["body"])["tools"], [BASH])
-
-    def test_it_is_added_in_subagents_mode_and_not_when_off(self):
-        self.mode = "off"
-        self.start()
+    def test_the_agent_tool_is_sent_as_the_client_wrote_it(self):
         self.send(convo([{"text": "fix cli.py"}]))
-        self.assertEqual(self.descriptions(), [AGENT_TOOL["description"]])
+        tool = next(t for t in json.loads(self.rig.upstream.requests[-1]["body"])["tools"] if t["name"] == "Agent")
+        self.assertEqual(tool["description"], AGENT_TOOL["description"])
 
 
 class RefusedTest(Case):
@@ -527,10 +505,7 @@ class RefusedTest(Case):
         self.assertEqual(status, 200)
         sent = [json.loads(r["body"]) for r in self.rig.upstream.requests]
         self.assertEqual([s["model"] for s in sent], [LARGE, MEDIUM])
-        # the second request is the original, apart from the sub-agent paragraph, which is on every request
-        original = json.loads(raw)
-        original["tools"][0]["description"] += GUIDANCE
-        self.assertEqual(sent[1], original)
+        self.assertEqual(sent[1], json.loads(raw))  # the second request is the original
         self.assertIn("large", routing.bad_tiers(self.state))
         self.assertIn("404", self.decisions()[-1]["skip"])
         self.assertEqual(self.rig.proxy.fused, {})  # nothing else about the conversation is switched off
