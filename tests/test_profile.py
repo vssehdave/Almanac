@@ -11,6 +11,7 @@ from getalmanac import config, profile
 
 CFG = copy.deepcopy(config.DEFAULTS)
 CFG["memory"]["review_gate"] = False  # these tests are about the user's own hooks
+CFG["playbooks"]["enforce"] = False
 USER = {
     "model": "opus",
     "enabledPlugins": {"keeper@market": True, "claude-mem@thedotmack": True, "logbook@logbook": True},
@@ -58,6 +59,16 @@ class SettingsTest(unittest.TestCase):
         cfg["memory"]["enabled"] = False
         self.assertNotIn("hooks", profile.curated_settings({"model": "x"}, cfg))
         cfg["memory"].update(enabled=True, tools=False)  # the verdict is filed by a memory tool: no tool, no gate
+        self.assertNotIn("hooks", profile.curated_settings({"model": "x"}, cfg))
+
+    def test_the_playbook_enforce_hook_is_added_as_a_pre_tool_use_hook(self):
+        cfg = copy.deepcopy(CFG)
+        cfg["playbooks"]["enforce"] = True
+        pre = profile.curated_settings(USER, cfg)["hooks"]["PreToolUse"]
+        self.assertEqual(pre[0], USER["hooks"]["PreToolUse"][0])  # the user's own stay first, the Logbook one is still left out
+        self.assertEqual(len(pre), 2)
+        self.assertTrue(pre[-1]["hooks"][0]["command"].endswith("-m getplaybook hook pre-tool-use"))
+        cfg["playbooks"]["enabled"] = False
         self.assertNotIn("hooks", profile.curated_settings({"model": "x"}, cfg))
 
     def test_a_setting_without_hooks_gets_none(self):

@@ -102,6 +102,10 @@ def curated_settings(user: dict, cfg, md_path: str = "") -> dict:
     if review_gate_on(cfg):  # Opus reviews sub-agent work before a turn ends
         gate = {"type": "command", "command": f'"{Path(sys.executable).as_posix()}" -m getalmanac review-gate', "timeout": 10}
         out["hooks"] = {**out.get("hooks", {}), "Stop": [*out.get("hooks", {}).get("Stop", []), {"hooks": [gate]}]}
+    books = cfg.get("playbooks") or {}
+    if books.get("enabled", True) and books.get("enforce", True):  # no Playbook plugin runs under Almanac, and enforce needs this hook
+        deny = {"type": "command", "command": f'"{Path(sys.executable).as_posix()}" -m getplaybook hook pre-tool-use', "timeout": 10}
+        out["hooks"] = {**out.get("hooks", {}), "PreToolUse": [*out.get("hooks", {}).get("PreToolUse", []), {"matcher": "*", "hooks": [deny]}]}
     if md_path:  # the filtered CLAUDE.md is read from the profile folder instead: do not read the original too
         out["claudeMdExcludes"] = [*out.get("claudeMdExcludes", []), md_path]
         out["env"] = {**out.get("env", {}), MD_FROM_ADDED_DIR: "1"}
