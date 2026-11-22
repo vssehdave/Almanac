@@ -36,6 +36,7 @@ AGENT_TOOLS = ("Agent", "Task")  # the sub-agent tool: "Task" in older Claude Co
 # agent's own file sets its model and the rules below classify the task when the line is missing.
 MARKER = re.compile(r"(?im)^\W*difficulty:\s*(simple|standard|hard)\b")
 MARKED = {"simple": "small", "standard": "medium", "hard": "large"}
+EFFORT_BETA = "mid-conversation-output-config-2026-07-01"  # lets a final system message change effort without touching the cached prefix
 CACHED_LANE_TOKENS = 30000  # past this a model switch rewrites more cache than a harder retry is worth
 BAD_SECONDS = 3600  # how long a tier stays off after the upstream refused it
 DEFAULT_WINDOW = 200000  # for a model id this file does not know
@@ -381,6 +382,8 @@ class RoutingLayer:
                 if failed_text or (TIERS.index(up) >= TIERS.index(tier) and (up, rung) != (tier, effort)):  # said to have failed: the next rung, outright
                     if kind == "sub" and up != tier and estimate(body, ctx, body["messages"]) >= CACHED_LANE_TOKENS:
                         up, rung = tier, climb(cfg, tier, len(EFFORTS) * 2, top)[1]  # keep the model: only effort rises, to the top rung
+                        if "effort" in (body.get("output_config") or {}):  # a changed output_config would break the cache: say it in a last message instead
+                            up, dec["append"] = tier_now, True
                     tier, effort, dec["escalated"] = up, rung, True
                     if not failed_text:
                         why = f"raised a rung: {raised or 'its own tool calls kept failing'}"
@@ -434,10 +437,15 @@ class RoutingLayer:
 
     def _apply(self, body, ctx, cfg, dec, first):
         before = (body["model"], (body.get("output_config") or {}).get("effort"))
-        body["model"] = dec["model"]
         config = body.get("output_config")
-        if isinstance(config, dict) and "effort" in config and dec["effort"]:  # only where the client already sends one
-            config["effort"] = dec["effort"]
+        if dec.get("append"):  # model and output_config stay as sent; the refusal fallback sends the original
+            body["messages"] = body["messages"] + [{"role": "system", "content": [], "output_config": {"effort": dec["effort"]}}]
+            ctx.beta = EFFORT_BETA
+            before = None
+        else:
+            body["model"] = dec["model"]
+            if isinstance(config, dict) and "effort" in config and dec["effort"]:  # only where the client already sends one
+                config["effort"] = dec["effort"]
         after = (body["model"], (body.get("output_config") or {}).get("effort"))
         note = {"tier": dec["tier"], "model": dec["model"], "move": dec["move"], "kind": dec["kind"], "key": dec["key"]}
         if dec.get("escalated"):

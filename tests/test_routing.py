@@ -464,7 +464,11 @@ class SubagentTest(Case):
                      {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "x", "is_error": True}]}]
         self.rig.messages(body(loop, MEDIUM), extra=sub_headers("big"))
         sent = self.rig.sent()
-        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (MEDIUM, "high"))
+        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (MEDIUM, "high"))  # the cached prefix is untouched
+        last = sent["messages"][-1]
+        self.assertEqual((last["role"], last["content"]), ("system", []))
+        self.assertIn(last["output_config"]["effort"], routing.EFFORTS)
+        self.assertTrue(self.rig.upstream.requests[-1]["headers"]["anthropic-beta"].endswith(routing.EFFORT_BETA))  # merged after the client's own value
 
 class SubagentsModeTest(Case):
     mode = "subagents"

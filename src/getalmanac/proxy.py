@@ -93,6 +93,7 @@ class Ctx:
         self.thread = None  # "main", "sub", "fork" or None, see rq.thread
         self.frozen_lane = ""  # where startup decisions are kept: a fork reads its parent's, so both send the same bytes
         self.stats = {}
+        self.beta = ""  # an anthropic-beta value a layer needs on the request, added to the client's own
         self.cold = False  # the cache this request would have read has expired (see Proxy.rewrite)
         self.after = None  # the rewritten body, when a layer changed it
         self.orig = None  # the body as Claude Code sent it, for layers that decide from the whole history
@@ -597,11 +598,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             sent, orig = proxy.rewrite(raw, ctx) if ctx else (raw, None)
         except Exception:  # fail open, whatever went wrong
             sent, orig = raw, None
+        self._beta0 = self.headers.get("anthropic-beta")  # what the client sent, to put back when a rewrite is refused
+        self._beta(ctx.beta if ctx else "")
         proxy.keepalive.begin(ctx.lane if ctx else "")  # a tick of the cache keepalive waits while a real request is in flight
         try:
             self._forward(proxy, ctx, raw, sent, orig, started)
         finally:
             proxy.keepalive.end(ctx.lane if ctx else "")
+
+    def _beta(self, add):
+        """Send the client's anthropic-beta value plus `add` (nothing added puts the client's own back)."""
+        value = ",".join(dict.fromkeys(v.strip() for x in (self._beta0, add) for v in (x or "").split(",") if v.strip()))
+        del self.headers["anthropic-beta"]
+        if value:
+            self.headers["anthropic-beta"] = value
 
     def _forward(self, proxy, ctx, raw, sent, orig, started):
         self.hold, self.switched = None, None
@@ -635,6 +645,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     if mark == "compaction":
                         ctx.stats.pop("cold", None)  # the compacted body is the one refused: nothing was saved
                     if mark == "route":
+                        ctx.beta = ""
+                        self._beta("")
                         _tell(proxy, "refused", ctx, resp.status, detail)
                     else:
                         try:
