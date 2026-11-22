@@ -500,6 +500,7 @@ class Update(Base):
         self.assertEqual(skills.source_url("github.com/o/r"), ("https://github.com/o/r.git", ""))
         self.assertEqual(skills.source_url("github.com/o/r (`a/b`)"), ("https://github.com/o/r.git", "a/b"))
         self.assertEqual(skills.source_url("https://github.com/o/r.git"), ("https://github.com/o/r.git", ""))
+        self.assertIsNone(skills.source_url("https://a.com/x;id"))  # the URL is printed as a command to run
         for bad in ("written here", "C:/some/folder", "/tmp/x"):
             self.assertIsNone(skills.source_url(bad))
 

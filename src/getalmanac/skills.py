@@ -525,7 +525,7 @@ def _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, bo
 
 SOURCE_ROW = re.compile(r"\| `([^`]+)` \| (.*?) \| ([^|]*?) \| [^|]* \| (.*) \|\s*\Z")
 GITHUB_SOURCE = re.compile(r"github\.com/([\w.-]+)/([\w.-]+?)(?:\.git)?(?: \(`([^`]+)`\))?\Z")
-HTTPS_SOURCE = re.compile(r"(https://\S+)(?: \(`([^`]+)`\))?\Z")
+HTTPS_SOURCE = re.compile(r"(https://[\w.:/@%~+-]+)(?: \(`([^`]+)`\))?\Z")
 
 
 def source_url(source: str):
@@ -573,7 +573,9 @@ def update(name=None, out=print) -> int:
             if kind == "shipped":
                 out("  shipped with Almanac: re-adopt in the Almanac repo and bump SOURCES.md")
             else:
-                pick = f" --skill {sub.rstrip('/').rsplit('/', 1)[-1]}" if sub else ""
+                last = sub.rstrip('/').rsplit('/', 1)[-1]
+                # an agents/ folder holds agents, not a SKILL.md folder, so --skill would take nothing
+                pick = f" --skill {last}" if sub and last != "agents" else ""
                 out(f"  almanac skill add --bundle {url} --name {folder}{pick} --replace")
             out(f"  edits to re-apply after re-adopting (old Changed cell): {changed}")
     if name and not seen:
