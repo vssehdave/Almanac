@@ -82,7 +82,7 @@ DENSE_TOP = 30  # most near exchanges that go into a search
 FACTS = 5  # most facts kept for one exchange
 FACT_CHARS = 140  # most characters of one fact
 RRF_K = 60  # reciprocal rank fusion: a hit at rank r adds 1 / (RRF_K + r)
-_TAG = re.compile(r"</?[a-zA-Z][\w-]{0,40}>")
+_TAG = re.compile(r"""</?[a-zA-Z][\w-]{0,40}(?:\s+[\w-]+=(?:"[^"\n]{0,80}"|'[^'\n]{0,80}'))*\s*/?>""")  # a tag with quoted attributes too, such as <pasted_content id="1fb9">
 _REMINDER = re.compile(r"(?i)<\s*(?:/\s*)?system-reminder\s*>?")  # the spellings _TAG misses; only the tag name goes, so a stray one cannot eat prose
 
 
@@ -807,7 +807,10 @@ class Memory:
             sql, args = sql + " and project = ?", args + [project]
         if exclude_lane:
             sql, args = sql + " and lane != ?", args + [exclude_lane]
-        return [dict(r) for r in self.store.run(sql + " order by updated desc limit ?", args + [limit])]
+        rows = [dict(r) for r in self.store.run(sql + " order by updated desc limit ?", args + [limit])]
+        for r in rows:  # titles stored before _TAG took attributes still carry a tag
+            r["title"] = clean(r["title"])
+        return rows
 
     def set_convo_summary(self, convo_id, summary, turns):
         """Give a conversation a model-written summary, covering its first `turns` exchanges."""
