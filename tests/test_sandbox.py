@@ -57,6 +57,34 @@ class SandboxTest(unittest.TestCase):
         self.assertIn("/login", shown)
         self.assertFalse((self.dir / "sb").exists())
 
+    def test_playbook_home_is_inside_the_sandbox(self):
+        env = sandbox.environment({"PLAYBOOK_HOME": "/real", "PLAYBOOK_CONFIG": "/real/c"})
+        self.assertEqual(env["PLAYBOOK_HOME"], str(self.dir / "sb" / "playbook"))
+        self.assertNotIn("PLAYBOOK_CONFIG", env)
+
+    def test_plugin_source_root_leads_pythonpath(self):
+        plugin = self.dir / "wt" / "src" / "pkg" / "plugin"
+        plugin.mkdir(parents=True)
+        env = sandbox.environment({"PYTHONPATH": "old"}, [str(plugin), str(self.plugin)])
+        self.assertEqual(env["PYTHONPATH"], os.pathsep.join([str(self.dir / "wt" / "src"), "old"]))
+        self.assertNotIn("PYTHONPATH", sandbox.environment({}, [str(self.plugin)]))
+
+    def test_no_terminal_opens_a_window_on_windows_and_refuses_elsewhere(self):
+        self.assertTrue(self._needs(False, []))
+        self.assertFalse(self._needs(True, []))
+        self.assertFalse(self._needs(False, ["--print", "hi"]))
+        with mock.patch("getalmanac.sandbox.needs_window", return_value=True),                 mock.patch("getalmanac.sandbox.subprocess.call") as call:
+            with mock.patch("getalmanac.sandbox.sys.platform", "linux"):
+                self.assertEqual(sandbox.run([]), 2)
+            call.assert_not_called()
+            with mock.patch("getalmanac.sandbox.sys.platform", "win32"),                     mock.patch("getalmanac.sandbox.subprocess.Popen") as popen,                     mock.patch("getalmanac.sandbox.subprocess.CREATE_NEW_CONSOLE", 16, create=True):
+                self.assertEqual(sandbox.run([]), 0)
+            self.assertEqual(popen.call_args[1]["creationflags"], 16)
+
+    def _needs(self, tty, args):
+        with mock.patch("getalmanac.sandbox.sys.stdin.isatty", return_value=tty, create=True),                 mock.patch("getalmanac.sandbox.sys.stdout.isatty", return_value=tty, create=True):
+            return sandbox.needs_window(args)
+
     def test_a_real_config_folder_is_refused(self):
         with mock.patch.dict(os.environ, {"ALMANAC_SANDBOX": str(Path.home() / ".claude-work")}), \
                 mock.patch("getalmanac.sandbox.subprocess.call") as call:

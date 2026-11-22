@@ -21,11 +21,16 @@ The sandbox keeps its own settings, login, history and plugins in ~/.claude-sand
 (ALMANAC_SANDBOX sets another folder). Run /login in it once."""
 
 CLEARED = ("ANTHROPIC_BASE_URL", "ALMANAC_PROXY", "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL", "ALMANAC_HOME",
-           "PLAYBOOK_HOME", "PLAYBOOK_CONFIG")
+           "PLAYBOOK_CONFIG")
 
 
 def folder() -> Path:
     return Path(os.environ.get("ALMANAC_SANDBOX") or Path.home() / ".claude-sandbox")
+
+
+def source_root(plugin: str):
+    """The nearest `src` folder above a plugin folder (where its package code lives), or None."""
+    return next((str(p) for p in Path(plugin).parents if p.name == "src"), None)
 
 
 def protected() -> list:
@@ -68,12 +73,20 @@ def command(exe, plugins, args):
     return [exe, *[x for p in plugins for x in ("--plugin-dir", p)], *args]
 
 
-def environment(parent=None) -> dict:
+def environment(parent=None, plugins=()) -> dict:
     env = dict(os.environ if parent is None else parent)
     for name in CLEARED:
         env.pop(name, None)
     env["CLAUDE_CONFIG_DIR"] = str(folder())
+    env["PLAYBOOK_HOME"] = str(folder() / "playbook")
+    roots = [r for r in map(source_root, plugins) if r]
+    if roots:  # first on sys.path, so `playbook` run from PATH imports the plugin's own code
+        env["PYTHONPATH"] = os.pathsep.join([*roots, *filter(None, [env.get("PYTHONPATH")])])
     return env
+
+
+def needs_window(args) -> bool:
+    return not (sys.stdin.isatty() and sys.stdout.isatty()) and not {"-p", "--print"} & set(args)
 
 
 def run(rest) -> int:
@@ -100,6 +113,8 @@ def run(rest) -> int:
         print(f"login          {'found' if login else 'none yet: run /login inside the sandbox once'}")
         print(f"claude         {exe or 'not found'}")
         print("plugins        " + ("; ".join(f"{plugin_name(p)} ({p})" for p in plugins) if plugins else "none (only Claude Code's own)"))
+        print(f"playbook       {where / 'playbook'}")
+        print("plugin code    " + ("; ".join(f"{plugin_name(p)} from {source_root(p) or 'installed packages'}" for p in plugins) if plugins else "none"))
         print("proxy          none (Almanac is not in the path)")
         print("command        " + " ".join(command(exe or "claude", plugins, args)))
         return 0
@@ -109,4 +124,12 @@ def run(rest) -> int:
     where.mkdir(parents=True, exist_ok=True)
     if not login:
         print(f"almanac sandbox: first run in {where}: type /login once.", file=sys.stderr)
-    return subprocess.call(command(exe, plugins, args), env=environment())
+    env = environment(plugins=plugins)
+    if needs_window(args):
+        if sys.platform != "win32":
+            print("almanac sandbox: no terminal here; run it in a real terminal.", file=sys.stderr)
+            return 2
+        subprocess.Popen(command(exe, plugins, args), env=env, creationflags=subprocess.CREATE_NEW_CONSOLE)
+        print("almanac sandbox: no terminal here, opened the sandbox in a new window.")
+        return 0
+    return subprocess.call(command(exe, plugins, args), env=env)
