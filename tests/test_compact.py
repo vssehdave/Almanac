@@ -881,7 +881,7 @@ class LongTurnTest(LayerCase):
 
 
 class ColdTest(LayerCase):
-    """A request back after its cache expired is compacted from twice target_tokens (1500 here), not from the trigger."""
+    """A request back after its cache expired is compacted from 1.5 times target_tokens (1500 here), not from the trigger."""
     trigger = 10 ** 6
 
     def setUp(self):

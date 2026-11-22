@@ -82,7 +82,7 @@ DEFAULTS = {
         "trigger_tokens": 150000,  # a conversation this large is compacted at its next message
         "target_tokens": 40000,  # most tokens the summary that replaces it may take
         "outline_share": 0.35,  # share of target_tokens the outline generations may take together; past it the oldest are merged into one
-        "on_cold": True,  # a request that returns after the cache has expired is compacted from twice target_tokens, since the prefix is rewritten anyway
+        "on_cold": True,  # a request that returns after the cache has expired is compacted from 1.5 times target_tokens, since the prefix is rewritten anyway
         "window_share": 0.85,  # inside one long turn, old tool results are removed from this share of the model's window; 0 turns it off
         "stub_tokens": 120000,  # inside one long turn or a sub-agent, old tool results are removed past this many tokens too; 0: only window_share
         "agent_outline": True,  # past stub_tokens, a sub-agent's older steps become a stored outline (results kept in memory)
