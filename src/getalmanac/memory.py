@@ -809,8 +809,13 @@ class Memory:
             sql, args = sql + " and lane != ?", args + [exclude_lane]
         rows = [dict(r) for r in self.store.run(sql + " order by updated desc limit ?", args + [limit])]
         for r in rows:  # titles stored before _TAG took attributes still carry a tag
-            r["title"] = clean(r["title"])
+            r["title"] = clean(r["title"]) or self._first_exchange(r["id"])
         return rows
+
+    def _first_exchange(self, convo_id) -> str:
+        """A title for a conversation whose own title was only a tag: its first exchange's summary, else its text."""
+        rows = self.store.run("select summary, text from node where convo = ? and kind = 'leaf' order by seq limit 1", (convo_id,))
+        return _first_line(rows[0]["summary"] or rows[0]["text"]) if rows else ""
 
     def set_convo_summary(self, convo_id, summary, turns):
         """Give a conversation a model-written summary, covering its first `turns` exchanges."""
