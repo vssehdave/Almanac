@@ -69,6 +69,14 @@ extend its "Changed" cell with each edit you made, in a few words each. Then
 tell the user the plugin loads in the next session started through `almanac`,
 and what you changed.
 
+## Updating an adopted skill
+
+Run `almanac skill update`. It changes nothing; it lists adopted skills with a
+newer upstream commit. For each newer one: first note the "Changed" cell it
+prints, since re-adopting overwrites the copy. Then run the printed command
+(that is step 1 above, and the scan rules apply). Redo the edits from the old
+Changed cell in step 2, and write the row's Changed cell again in step 3.
+
 ## Worked examples
 
 **A pack of specialist agents (`crew`).** 71 agents, each with a long
