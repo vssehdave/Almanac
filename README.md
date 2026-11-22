@@ -174,16 +174,16 @@ section Claude Code writes after it.
 
 ```bash
 almanac sandbox --list                       # what would load, nothing starts
-almanac sandbox --plugin ~/code/Pocketbook/plugins/pocketbook
-almanac sandbox --plugin ~/code/Logbook -- -p "hello"   # Claude Code arguments after --
+almanac sandbox --plugin ~/code/my-plugin
+almanac sandbox --plugin installed-plugin-name -- -p "hello"   # Claude Code arguments after --
 ```
 
 The sandbox is plain Claude Code (no proxy, none of your plugins, hooks or skills) with
 `CLAUDE_CONFIG_DIR=~/.claude-sandbox` (`ALMANAC_SANDBOX` picks another folder; it refuses
-`~/.claude` and `~/.claude-work`). It is made on first use: type `/login` there once. Only the
-folders named with `--plugin` are loaded, for that run. Run `logbook setup` or
-`pocketbook` inside a test repository from there; project-level hooks apply in the sandbox, which is
-where you want them. `almanac sandbox` never changes `~/.claude`.
+`~/.claude` and `$CLAUDE_CONFIG_DIR`). It is made on first use: type `/login` there once. Only the
+folders named with `--plugin` are loaded, for that run. Project-level hooks apply in the sandbox, which is where you want them. `--plugin NAME` loads
+a plugin installed in your real Claude Code; `--env NAME=VALUE` sets a variable inside the sandbox.
+Plugins that keep state in `CLAUDE_PLUGIN_DATA` are isolated; others can be redirected with `--env`. `almanac sandbox` never changes `~/.claude`.
 
 ### 2. Memory per project
 
@@ -1464,7 +1464,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac library list` | The prompt library's current entries: id, date, uses, the request's first 70 characters. `--project NAME` filters. Also `show ID` (the entry, its fixes and its history of replaced entries) and `forget ID` (deletes the entry and the older ones it replaced) |
 | `almanac projects` | Projects seen. `projects merge FROM INTO`, `projects rename NAME NEW` |
 | `almanac config [set KEY VALUE \| path]` | Show or change settings |
-| `almanac sandbox [--plugin PATH ...] [--list] [-- ARGS]` | Plain Claude Code in `~/.claude-sandbox`, loading only those plugins |
+| `almanac sandbox [--plugin PATH|NAME ...] [--env N=V ...] [--list] [-- ARGS]` | Plain Claude Code in `~/.claude-sandbox`, loading only those plugins |
 | `almanac serve [--port N]` | Run only the proxy, for clients you start yourself |
 | `almanac mcp` | The memory tools over stdio (Claude Code starts this itself) |
 
