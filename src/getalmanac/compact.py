@@ -459,6 +459,8 @@ class CompactLayer:
         grows past the limit again, the new steps are added as one more block after the old ones, which stay as they were."""
         messages, key = body["messages"], f"agentcompact:{ctx.lane}"
         limit = self._agent_limit(body, ctx, cfg)
+        if limit and self._cold(ctx, cfg):
+            limit = min(limit, int(COLD_FLOOR * cfg["target_tokens"]))  # the prefix is rewritten anyway
         if not (limit and cfg.get("agent_outline", True)):
             return messages
         state = ctx.state.get(key)
@@ -467,7 +469,7 @@ class CompactLayer:
             state = None
         current = (state["prefix"] + messages[state["covered"]:]) if state else messages
         tail = messages[state.get("at", state["covered"]):] if state else messages  # what came after the last outline
-        grown = not state or sum(len(json.dumps(m, ensure_ascii=False)) for m in tail) / CHARS_PER_TOKEN >= limit / 2  # not every request
+        grown = not state or self._cold(ctx, cfg) or sum(len(json.dumps(m, ensure_ascii=False)) for m in tail) / CHARS_PER_TOKEN >= limit / 2  # not every request
         if grown and estimate(body, ctx, current, None) >= limit:
             state = self._agent_prefix(ctx, messages, state, cfg, limit) or state
         if not state:

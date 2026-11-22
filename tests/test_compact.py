@@ -941,6 +941,17 @@ class ColdTest(LayerCase):
         self.rig.messages(body(copy.deepcopy(messages)))
         self.assertGreater(self.rig.records()[-1]["idle"], 3900)
 
+    def test_a_cold_sub_agent_is_outlined_under_its_limit(self):
+        self.rig.cfg["routing"]["windows"]["m"] = 1000000  # the warm limit is far above this history
+        self.rig.cfg["compaction"]["stub_tokens"] = 100000
+        extra = {"x-claude-code-agent-id": "a1"}
+        messages = long_turn(40)
+        sent, record = self.cold(messages, extra=extra, gap=4000)
+        self.assertIn("agent_outline", record["compaction"])
+        self.assertLess(len(sent), len(messages))
+        warm, record = self.cold(messages, extra={"x-claude-code-agent-id": "a2"}, gap=100)
+        self.assertEqual(len(warm), len(messages))
+
     def test_a_refused_cold_compaction_is_not_counted(self):
         self.rig.upstream.respond = lambda req: (
             (400, {"content-type": "application/json"}, b'{"type":"error","error":{"type":"invalid_request_error"}}')
