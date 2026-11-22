@@ -36,6 +36,7 @@ AGENT_TOOLS = ("Agent", "Task")  # the sub-agent tool: "Task" in older Claude Co
 # agent's own file sets its model and the rules below classify the task when the line is missing.
 MARKER = re.compile(r"(?im)^\W*difficulty:\s*(simple|standard|hard)\b")
 MARKED = {"simple": "small", "standard": "medium", "hard": "large"}
+CACHED_LANE_TOKENS = 30000  # past this a model switch rewrites more cache than a harder retry is worth
 BAD_SECONDS = 3600  # how long a tier stays off after the upstream refused it
 DEFAULT_WINDOW = 200000  # for a model id this file does not know
 CLASSIFY_TIMEOUT = 2  # seconds: the call delays the live request, so it must be short
@@ -378,6 +379,8 @@ class RoutingLayer:
             if steps:
                 up, rung = climb(cfg, TIERS[min(TIERS.index(cur), top)] if failed_text else tier, steps, top)
                 if failed_text or (TIERS.index(up) >= TIERS.index(tier) and (up, rung) != (tier, effort)):  # said to have failed: the next rung, outright
+                    if kind == "sub" and up != tier and estimate(body, ctx, body["messages"]) >= CACHED_LANE_TOKENS:
+                        up, rung = tier, climb(cfg, tier, len(EFFORTS) * 2, top)[1]  # keep the model: only effort rises, to the top rung
                     tier, effort, dec["escalated"] = up, rung, True
                     if not failed_text:
                         why = f"raised a rung: {raised or 'its own tool calls kept failing'}"

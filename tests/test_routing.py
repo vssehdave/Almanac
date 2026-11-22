@@ -457,6 +457,15 @@ class SubagentTest(Case):
         self.rig.messages(body(loop, MEDIUM), extra=sub_headers("c"))
         self.assertEqual(self.rig.sent()["model"], MEDIUM)  # two clean: back down
 
+    def test_a_large_cached_subagent_keeps_its_model_and_only_raises_effort(self):
+        loop = [human("Difficulty: standard\nfix the failing test " + "x" * 120000)]
+        for i in range(3):
+            loop += [{"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": "Bash", "input": {"command": "pytest"}}]},
+                     {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "x", "is_error": True}]}]
+        self.rig.messages(body(loop, MEDIUM), extra=sub_headers("big"))
+        sent = self.rig.sent()
+        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (MEDIUM, "high"))
+
 class SubagentsModeTest(Case):
     mode = "subagents"
 
