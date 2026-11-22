@@ -561,8 +561,8 @@ traces and code blocks are not taken as a sign of a hard job or a failure). A tu
 such as a "why" question, a short follow-up or text that is not English, keeps
 the model you were on. A turn that says the last answer was wrong takes the next
 rung of the failure ladder (below). Fast-mode requests (`speed`) are never routed. Three tool errors in a row, or one call failing three times,
-raise the next turn one rung of the failure ladder (below), for three turns, while the conversation is under 30,000
-tokens; past that a failure raises effort instead (below). With `routing.classifier` set to
+raise the thread one rung of the failure ladder (below) while the conversation is under 30,000
+tokens; past that the model never changes, not even for a turn the rules call hard or simple, and a failure raises effort instead (below). With `routing.classifier` set to
 `"model"`, the turns the rules are unsure about are settled by one small-model
 call. It adds a short wait (each network step gives up after 2 seconds) to that turn and uses a little of
 your allowance. It shares the daily cap on small-model calls with the summaries
@@ -582,9 +582,9 @@ and an effort level, never past the end of the ladder of the model it started on
 The ladders are `routing.ladders` and each tier's first rung is `routing.effort`;
 `routing.ceiling` still caps both. A failure is any of: `escalate_after` tool errors
 in a row (or one call failing that often) in the thread's own history, the person
-saying it went wrong, or a task that says an earlier attempt failed. On the main
-thread the rung is kept for `escalate_turns` turns, then the thread drops back; a
-sub-agent drops back after `calm_after` requests in a row with clean tool results.
+saying it went wrong, or a task that says an earlier attempt failed. The main thread
+and sub-agents alike drop back after `calm_after` requests in a row with clean tool
+results (on the main thread a move down is still priced, so it can be declined).
 When the person says an earlier attempt failed (or a task says so), the thread
 takes the next rung of its model's ladder at once, for example Haiku to Sonnet low,
 not straight to Opus.
@@ -626,12 +626,13 @@ model. If a conversation moves to another model, the whole history is written
 into that model's cache again, at the cache-write price, and the old cache goes
 cold. Almanac's memory does not change that. So on the main thread:
 
-- A move **up** is made whenever the turn needs it. Getting it right beats cost.
+- Once the history reaches 30,000 tokens the model never moves, up or down,
+  whatever the turn asks for; only effort does, after a failure.
+- Under that, a move **up** is made whenever the turn needs it. Getting it right beats cost.
 - A move **down** is made only if it is clearly cheaper (`routing.margin`, 20%).
   Almanac counts the history's tokens, the price of writing them into the new
   cache against reading them from the warm one, and the work the turn is
-  expected to take. One quick lookup while 150,000 tokens sit warm in Sonnet's
-  cache stays on Sonnet.
+  expected to take.
 - The prices in `routing.prices` are relative numbers for comparing models.
   The defaults are list-price ratios as of 2026-11-03 for Haiku, Sonnet and
   Opus 5.5 (the Haiku cache-read ratio is assumed, as it is not listed, and
@@ -1532,8 +1533,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `routing.effort_cost` | low 0.6, medium 1.0, high 1.6 | Estimated reply-cost factor per effort, for pricing a switch |
 | `routing.margin` | `0.2` | How much cheaper a move down must be than staying |
 | `routing.escalate_after` | `3` | Errors in a row, or one call failing this often, that raise the thread one rung |
-| `routing.escalate_turns` | `3` | Turns a main-thread rung lasts (mode `all`, under 30,000 tokens) |
-| `routing.calm_after` | `2` | Clean requests in a row before a raised effort, or a small sub-agent's raised model, drops back (`0`: never) |
+| `routing.calm_after` | `2` | Clean requests in a row before a raised effort, or a raised model under 30,000 tokens, drops back (`0`: never) |
 | `routing.prices`, `routing.work` | see `config.py` | Relative prices and expected work per turn, for pricing a switch |
 | `routing.windows` | 1,000,000 each | Context window per model id (unknown ids count as 200,000) |
 | `playbooks.enabled` | `true` | Match requests against playbooks and give Claude the playbook tools |

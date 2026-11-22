@@ -9,9 +9,11 @@
   upstream refuses that message), on until `routing.calm_after` requests in a row
   come back clean. The main thread in mode `all` used to climb to another model
   at any size, and the main thread in mode `subagents` dropped back after a fixed
-  two clean requests. Under 30,000 tokens the model ladder is unchanged;
-  `routing.escalate_turns` now applies only there, on the main thread in mode
-  `all`.
+  two clean requests. Past 30,000 tokens the main thread in mode `all` also keeps
+  its model when a new turn reads as hard or simple. Under 30,000 tokens the main
+  thread climbs the ladder exactly as a sub-agent does, and drops back after
+  `calm_after` clean requests; `routing.escalate_turns` is gone (a value left in
+  `config.json` is ignored).
 - **Per-conversation state has its own file.** The small decisions every request
   reads and writes (compaction prefixes, stubs, recall notes, route choices, usage
   counts, the summary budget) moved from `almanac.db` to `state.db`, with its own

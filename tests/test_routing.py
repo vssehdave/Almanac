@@ -311,14 +311,15 @@ class DecisionTest(Case):
 
 
 class SwitchPriceTest(Case):
-    def test_a_move_down_is_declined_when_a_big_warm_prefix_would_be_rewritten(self):
+    def test_a_move_down_is_declined_when_it_is_not_cheap_enough(self):
+        self.start(**{"routing.margin": 0.99})
         self.send(convo([{"text": "write a parser in utils.py"}]))
-        messages = convo([{"text": "write a parser in utils.py", "pad": 600000}, {"text": "list the files in src"}])
+        messages = convo([{"text": "write a parser in utils.py"}, {"text": "list the files in src"}])
         sent = self.send(messages)
         self.assertEqual(sent["model"], MEDIUM)
         last = self.decisions()[-1]
         self.assertEqual(last["move"], "declined")
-        self.assertGreater(last["switch"], last["stay"])
+        self.assertGreater(last["switch"], last["stay"] * 0.01)
 
     def test_a_move_down_is_made_when_it_is_cheap(self):
         self.send(convo([{"text": "write a parser in utils.py"}]))
@@ -328,19 +329,11 @@ class SwitchPriceTest(Case):
         self.assertEqual(last["move"], "down")
         self.assertLess(last["switch"], last["stay"])
 
-    def move_down(self, start, text, pad):
-        """Turn 1 on `start`'s model, then a small question after `pad` characters of history."""
-        model = {"medium": MEDIUM, "large": LARGE}[start]
-        self.send(convo([{"text": text}]), model=model)
-        return self.send(convo([{"text": text, "pad": pad}, {"text": "list the files in src"}]), model=model)["model"]
-
-    def test_sonnet_to_haiku_moves_at_40k_tokens_and_is_declined_at_80k(self):
-        self.assertEqual(self.move_down("medium", "write a parser in utils.py", 120000), SMALL)
-        self.setUp()
-        self.assertEqual(self.move_down("medium", "write a parser in utils.py", 240000), MEDIUM)
-
-    def test_opus_to_haiku_is_declined_in_the_long_context_tier(self):
-        self.assertEqual(self.move_down("large", "design a plugin system", 450000), LARGE)
+    def test_sonnet_to_haiku_is_cheaper_at_40k_tokens_and_not_at_80k(self):
+        cfg = self.rig.proxy.cfg["routing"]
+        cheaper = [routing.price(cfg, "small", n, False, "small") < routing.price(cfg, "medium", n, True, "small") * (1 - cfg["margin"])
+                   for n in (40000, 80000)]
+        self.assertEqual(cheaper, [True, False])
 
     def test_a_rewound_turn_is_priced_warm_against_the_turn_before_it(self):
         first = {"text": "write a parser in utils.py"}
@@ -362,7 +355,7 @@ class SwitchPriceTest(Case):
 
     def test_a_move_up_is_always_made(self):
         self.send(convo([{"text": "list the files in src"}]), model=SMALL)
-        messages = convo([{"text": "list the files in src", "pad": 600000}, {"text": "design a plugin system"}])
+        messages = convo([{"text": "list the files in src"}, {"text": "design a plugin system"}])
         sent = self.send(messages, model=SMALL)
         self.assertEqual(sent["model"], LARGE)
         self.assertEqual(self.decisions()[-1]["move"], "up")
@@ -372,8 +365,9 @@ class SwitchPriceTest(Case):
         self.assertEqual(sent["model"], SMALL)
 
     def test_a_declined_move_stays_declined_for_the_whole_tool_loop(self):
+        self.start(**{"routing.margin": 0.99})
         self.send(convo([{"text": "write a parser in utils.py"}]))
-        messages = convo([{"text": "write a parser in utils.py", "pad": 600000}, {"text": "list the files in src"}])
+        messages = convo([{"text": "write a parser in utils.py"}, {"text": "list the files in src"}])
         self.send(messages)
         self.send(messages + [{"role": "assistant", "content": [{"type": "tool_use", "id": "z", "name": "Bash", "input": {}}]},
                               {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "z", "content": "ok"}]}])
@@ -381,14 +375,13 @@ class SwitchPriceTest(Case):
 
 
 class EscalationTest(Case):
-    def test_repeated_tool_errors_raise_the_next_turn_one_tier_and_it_decays(self):
-        turns = [{"text": "fix the bug in cli.py", "errors": 3}]
-        self.assertEqual(self.send(convo(turns + [{"text": "ok, try the other file b.py"}]))["model"], LARGE)
-        # the raise lasts three turns, then the turn is judged on its own again
-        for text in ("now update docs.md", "add a flag to cli.py"):
-            turns = turns + [{"text": text}]
-            self.assertEqual(self.send(convo(turns + [{"text": "and change c.py"}]))["model"], LARGE)
-        self.assertEqual(self.send(convo(turns + [{"text": "and change c.py"}, {"text": "and change d.py"}]))["model"], MEDIUM)
+    def test_repeated_tool_errors_raise_the_thread_one_rung_until_calm_after_clean_requests(self):
+        turns = [{"text": "fix the bug in cli.py", "errors": 3}, {"text": "ok, try the other file b.py", "pad": 100}]
+        self.assertEqual(self.send(convo(turns))["model"], LARGE)
+        sent = self.send(convo(turns + [{"text": "continue", "pad": 100}]))  # one clean result: still raised, one rung, not two
+        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (LARGE, "low"))
+        sent = self.send(convo(turns + [{"text": "continue", "pad": 100}, {"text": "continue"}]))  # two clean: back to the start
+        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (MEDIUM, "medium"))
 
     def test_two_errors_are_not_enough(self):
         turns = [{"text": "fix the bug in cli.py", "errors": 2}, {"text": "ok, try the other file b.py"}]
@@ -412,6 +405,16 @@ class EscalationTest(Case):
             self.assertEqual(sent["messages"][-1]["role"], "system")
             self.assertEqual(sent["messages"][-1]["output_config"]["effort"], "high")
             self.assertTrue(self.rig.upstream.requests[-1]["headers"]["anthropic-beta"].endswith(routing.EFFORT_BETA))
+
+    def test_a_cached_main_thread_keeps_its_model_whatever_a_new_turn_asks_for(self):
+        for model, first, then in ((MEDIUM, "write a parser in utils.py", "design a plugin system"),
+                                   (LARGE, "design a plugin system", "list the files in src")):
+            self.start()
+            before = self.send(convo([{"text": first}]), model=model)
+            sent = self.send(convo([{"text": first, "pad": 120000}, {"text": then}]), model=model)
+            self.assertEqual((sent["model"], sent["output_config"]["effort"]), (before["model"], before["output_config"]["effort"]))
+            self.assertEqual(sent["model"], model)
+            self.assertEqual(self.decisions()[-1]["why"], "the history is cached")
 
     def test_the_raise_stops_at_the_top_tier(self):
         turns = [{"text": "design a plugin system", "errors": 3}, {"text": "design a cache"}]
@@ -909,6 +912,26 @@ class BetaRefusedTest(Case):
         self.rig.messages(raw, extra=MAIN)  # the same lane again: straight to the fallback, in one request
         self.assertEqual(len(self.rig.upstream.requests), 3)
         self.assertEqual(self.rig.sent(), sent)
+
+    def test_a_large_subagent_whose_effort_message_is_refused_gets_it_in_output_config(self):
+        def respond(req):
+            if json.loads(req["body"])["messages"][-1]["role"] == "system":
+                return 400, {"content-type": "application/json"}, b'{"type":"error","error":{"message":"unsupported"}}'
+            return 200, {"content-type": "text/event-stream"}, sse()
+        self.start(respond=respond)
+        loop = [human("Difficulty: standard" + chr(10) + "fix the failing test " + "x" * 200000)]
+        for i in range(3):
+            loop += [{"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": "Bash", "input": {"command": "pytest"}}]},
+                     {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "x", "is_error": True}]}]
+        raw = body(loop, MEDIUM)
+        raw["output_config"]["effort"] = "medium"
+        self.assertEqual(self.rig.messages(raw, extra=sub_headers("big"))[0], 200)
+        sent = self.rig.sent()
+        self.assertEqual(len(self.rig.upstream.requests), 2)  # the message, then output_config
+        self.assertEqual((sent["model"], sent["output_config"]["effort"], sent["messages"][-1]["role"]), (MEDIUM, "high", "user"))
+        self.rig.messages(raw, extra=sub_headers("big"))  # the same lane again: straight to output_config
+        self.assertEqual(len(self.rig.upstream.requests), 3)
+        self.assertEqual(self.rig.sent()["output_config"]["effort"], "high")
 
 
 class ConfigCheckTest(unittest.TestCase):

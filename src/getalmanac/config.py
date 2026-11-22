@@ -109,9 +109,8 @@ DEFAULTS = {
         # when comparing a stay with a move on the main thread. An effort that is not listed counts as 1.
         "effort_cost": {"low": 0.6, "medium": 1.0, "high": 1.6},
         "margin": 0.2,  # a move down on the main thread must be at least this much cheaper than staying
-        "escalate_after": 3,  # tool errors in a row, or one call failing this often, raise the next turn one rung
-        "escalate_turns": 3,  # turns a raised rung lasts, on a main thread under 30,000 tokens in mode "all" only
-        "calm_after": 2,  # requests in a row with clean tool results before a raised effort, or a raised small sub-agent's model, drops back (0: never)
+        "escalate_after": 3,  # tool errors in a row, or one call failing this often, raise the thread one rung
+        "calm_after": 2,  # requests in a row with clean tool results before a raised effort, or a raised model, drops back (0: never)
         # Relative prices per token, for comparing models only. They are list-price ratios as of 2026-11-03 for the
         # 5.5 models (cache write 1.25x input, cache read 0.05x for Sonnet and Opus); the Haiku cache-read ratio
         # (0.1x) is assumed, as it is not listed. cache_write and cache_read are what a prefix costs to write into,
