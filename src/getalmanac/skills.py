@@ -187,10 +187,10 @@ def quarantine() -> Path:
     return path
 
 
-def _git(args, cwd=None):
+def _git(args, cwd=None, timeout=600):
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_LFS_SKIP_SMUDGE="1")
     return subprocess.run(["git", *args], cwd=cwd, env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                          timeout=600)
+                          timeout=timeout)
 
 
 def fetch(source: str, ref, into: Path):
@@ -521,6 +521,65 @@ def _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, bo
                                     if n in kept else "left out, no exact version pinned"))
     out(f"bundle folder: {dest}")
     return code(res)
+
+
+SOURCE_ROW = re.compile(r"\| `([^`]+)` \| (.*?) \| ([^|]*?) \| [^|]* \| (.*) \|\s*\Z")
+GITHUB_SOURCE = re.compile(r"github\.com/([\w.-]+)/([\w.-]+?)(?:\.git)?(?: \(`([^`]+)`\))?\Z")
+HTTPS_SOURCE = re.compile(r"(https://\S+)(?: \(`([^`]+)`\))?\Z")
+
+
+def source_url(source: str):
+    """(https git URL, skill path or "") for a SOURCES.md source cell, or None when it is not a git source."""
+    if match := GITHUB_SOURCE.match(source):
+        return f"https://github.com/{match[1]}/{match[2]}.git", match[3] or ""
+    if match := HTTPS_SOURCE.match(source):
+        return match[1], match[2] or ""
+    return None
+
+
+def update(name=None, out=print) -> int:
+    """Say which adopted skills have a newer upstream commit. Changes nothing: re-adopting stays with the adopt skill."""
+    tables = (("user", bundle_dir() / "SOURCES.md"), ("shipped", Path(__file__).parent / "bundle" / "SOURCES.md"))
+    newer = unchecked = seen = 0
+    for kind, path in tables:
+        if not path.is_file():
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            row = SOURCE_ROW.match(line)
+            if not row or (name and row[1] != name):
+                continue
+            seen += 1
+            folder, source, commit, changed = row[1], row[2], row[3], row[4]
+            parsed = source_url(source)
+            if not parsed or not re.fullmatch(r"[0-9a-f]{7,40}", commit):
+                out(f"{folder}: skipped, not a git source ({source})")
+                continue
+            url, sub = parsed
+            try:
+                proc = _git(["ls-remote", "--", url, "HEAD"], timeout=60)
+                reason = proc.stderr.strip()[-200:] or "no HEAD found" if proc.returncode or not proc.stdout.strip() else ""
+            except (OSError, subprocess.SubprocessError) as exc:
+                reason = str(exc)
+            if reason:
+                unchecked += 1
+                out(f"{folder}: could not check ({reason})")
+                continue
+            head = proc.stdout.split()[0]
+            if head.startswith(commit):
+                out(f"{folder}: up to date ({commit})")
+                continue
+            newer += 1
+            out(f"{folder}: newer ({commit} -> {head[:8]})")
+            if kind == "shipped":
+                out("  shipped with Almanac: re-adopt in the Almanac repo and bump SOURCES.md")
+            else:
+                pick = f" --skill {sub.rstrip('/').rsplit('/', 1)[-1]}" if sub else ""
+                out(f"  almanac skill add --bundle {url} --name {folder}{pick} --replace")
+            out(f"  edits to re-apply after re-adopting (old Changed cell): {changed}")
+    if name and not seen:
+        out(f"no adopted skill named {name} in a SOURCES.md")
+        return ERROR
+    return 1 if newer else ERROR if unchecked else 0
 
 
 def _plugin(tree, source, parts, out):

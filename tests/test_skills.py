@@ -472,6 +472,63 @@ class Bundle(Base):
         self.assertEqual((flagged, todo), ([], []))  # the scan at install is remembered
 
 
+class Update(Base):
+    ROWS = ("| `a` | github.com/o/a | 11111111 | MIT | trimmed |\n"
+            "| `b` | github.com/o/b (`skills/pick`) | 22222222 | MIT | rewired |\n"
+            "| `c` | https://github.com/o/c.git | 33333333 | MIT | none |\n"
+            "| `d` | written here | n/a | MIT | x |\n"
+            "| `e` | C:/some/folder | local | MIT | x |\n")
+
+    def run_update(self, heads, name=None):
+        """heads maps a URL to its HEAD sha, or to None for a failing ls-remote; the shipped table is not read."""
+        sources = self.tmp / "home" / "bundle" / "SOURCES.md"
+        sources.parent.mkdir(parents=True, exist_ok=True)
+        sources.write_text(self.ROWS)
+        asked = []
+
+        def git(args, cwd=None, timeout=600):
+            asked.append(args)
+            sha = heads[args[2]]
+            return mock.Mock(returncode=0 if sha else 128, stdout=f"{sha}\tHEAD\n" if sha else "", stderr="" if sha else "boom")
+
+        lines = []
+        with mock.patch.object(skills, "_git", git), mock.patch.object(skills, "__file__", str(self.tmp / "x" / "skills.py")):
+            rc = skills.update(name, out=lines.append)
+        return rc, "\n".join(lines), asked
+
+    def test_source_forms(self):
+        self.assertEqual(skills.source_url("github.com/o/r"), ("https://github.com/o/r.git", ""))
+        self.assertEqual(skills.source_url("github.com/o/r (`a/b`)"), ("https://github.com/o/r.git", "a/b"))
+        self.assertEqual(skills.source_url("https://github.com/o/r.git"), ("https://github.com/o/r.git", ""))
+        for bad in ("written here", "C:/some/folder", "/tmp/x"):
+            self.assertIsNone(skills.source_url(bad))
+
+    def test_up_to_date_is_zero_and_skips_what_is_not_git(self):
+        heads = {f"https://github.com/o/{n}.git": str(i) * 40 for n, i in (("a", 1), ("b", 2), ("c", 3))}
+        rc, text, asked = self.run_update(heads)
+        self.assertEqual(rc, 0, text)
+        self.assertEqual(len(asked), 3)
+        self.assertIn("d: skipped", text)
+        self.assertIn("e: skipped", text)
+
+    def test_newer_prints_the_command_and_old_edits_and_exits_one(self):
+        heads = {"https://github.com/o/a.git": "9" * 40, "https://github.com/o/b.git": "9" * 40, "https://github.com/o/c.git": None}
+        rc, text, _ = self.run_update(heads)
+        self.assertEqual(rc, 1, text)
+        self.assertIn("a: newer (11111111 -> 99999999)", text)
+        self.assertIn("almanac skill add --bundle https://github.com/o/a.git --name a --replace", text)
+        self.assertIn("--bundle https://github.com/o/b.git --name b --skill pick --replace", text)
+        self.assertIn("old Changed cell): rewired", text)
+        self.assertIn("c: could not check (boom)", text)
+
+    def test_unreachable_alone_is_three_and_a_name_picks_one_row(self):
+        rc, text, asked = self.run_update({"https://github.com/o/a.git": None}, "a")
+        self.assertEqual((rc, len(asked)), (skills.ERROR, 1), text)
+        rc, text, _ = self.run_update({}, "nope")
+        self.assertEqual(rc, skills.ERROR)
+        self.assertIn("no adopted skill named nope", text)
+
+
 class ImportBundle(Base):
     def test_copies_plugin_folders_without_links_and_keeps_existing_ones(self):
         old = self.tmp / "old"
