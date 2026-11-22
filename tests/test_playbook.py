@@ -197,7 +197,7 @@ class LayerTest(Home):
         self.assertTrue(text.startswith('<system-reminder>\nAlmanac playbook "weekly-report" matches this request (Weekly report; used 1 time).'))
         self.assertIn("Steps:\n1. If the folder is missing: ask for it\n2. Run the script\n", text)
         self.assertIn("Skills: interfaces:better-layout. Agents: crew:code-reviewer.", text)
-        self.assertIn("Script: call the tool `playbook_run`", text)
+        self.assertIn('Run playbook_run {"name": "weekly-report"', text)
         self.assertIn("record it with `playbook_save`.\n</system-reminder>", text)
         self.assertLessEqual(len(text), 1500)
 
@@ -205,7 +205,7 @@ class LayerTest(Home):
         playbook.save(make(args=[{"name": "path", "help": "the folder"}]), script=SCRIPT)
         playbook.approve("weekly-report")
         sent = self.send(self.rig(), body({"role": "user", "content": ASK}))
-        self.assertIn('Script: call the tool `playbook_run` with name "weekly-report" and args [<path>]', reminders(sent["messages"][0])[0])
+        self.assertIn('Run playbook_run {"name": "weekly-report", "args": [<path>]}', reminders(sent["messages"][0])[0])
         self.assertEqual(rq.human_text(sent["messages"][0]), ASK)
 
     def test_no_script_means_no_script_line(self):
@@ -424,11 +424,11 @@ class AutoTest(Rigged):
     def test_without_the_flag_or_with_the_switch_off_the_script_is_only_offered(self):
         self.make(auto=False)
         text = reminders(self.ask(self.rig())["messages"][0])[0]
-        self.assertIn("call the tool `playbook_run`", text)
+        self.assertIn("Run playbook_run", text)
         self.assertEqual(self.count(), 0)
         self.make()
         text = reminders(self.ask(self.rig(overrides={"playbooks.auto_run": False}), session="s2")["messages"][0])[0]
-        self.assertIn("call the tool `playbook_run`", text)
+        self.assertIn("Run playbook_run", text)
         self.assertEqual(self.count(), 0)
 
     def test_a_missing_folder_or_a_changed_script_leaves_the_ordinary_note(self):
@@ -461,7 +461,7 @@ class AutoTest(Rigged):
             playbook.approve("weekly-report", auto=True)
         playbook.approve("weekly-report")
         text = reminders(self.ask(self.rig())["messages"][0])[0]
-        self.assertIn("args [<path>]", text)
+        self.assertIn('"args": [<path>]', text)
         self.assertEqual(self.count(), 0)
 
     def test_save_never_keeps_auto_and_drops_the_owners_entry(self):
