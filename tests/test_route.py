@@ -62,7 +62,7 @@ class RouteTest(Home):
         sent = self.send(rig, self.ladder())
         (note,) = offers(sent["messages"][-1])
         self.assertEqual(rq.blocks(sent["messages"][-1])[-1]["text"], note)  # at the end of the newest message
-        self.assertIn('playbook "ship-change" covers the rest of this: call playbook_run {"name": "ship-change", "args": [<--message>]}', note)
+        self.assertIn('playbook "ship-change" covers the rest of this. Run playbook_run {"name": "ship-change", "args": [<--message>]}', note)
         self.assertIn("--message: commit message", note)
         self.assertEqual([offers(m) for m in sent["messages"][:-1]], [[]] * 4)
         (record,) = [r for r in rig.records() if "playbook_offer" in r]
