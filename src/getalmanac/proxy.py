@@ -121,7 +121,7 @@ class Proxy:
         self.ctx = upstream.context(cfg, self.env) if self.secure else None
         self.token = secrets.token_urlsafe(16)  # the first path segment every client request must carry
         self.key = secrets.token_urlsafe(32)  # proves this process to `almanac`; never sent in any request
-        self.last_seen = {}  # lane -> start time of its previous request
+        self.last_seen = {}  # lane -> start time of its previous request; state.db keeps it across a restart
         self.fused = {}  # lane -> why its rewrites were switched off
         self.tls = None  # a tls.Session when running as an HTTPS proxy
         self.keepalive = keepalive.Keepalive(self)  # opt-in cache pings for paused conversations (keepalive.py)
@@ -176,7 +176,7 @@ class Proxy:
             ctx.frozen_lane = rq.lane_key(ctx.session, ctx.parent, orig["messages"]) if ctx.thread == "fork" else ctx.lane
             ctx.cwd = rq.working_dir(orig)
             ctx.after, ctx.orig = None, orig
-            before = self.last_seen.get(ctx.lane) if ctx.lane else None  # the same gap `finish` logs as `idle`
+            before = self.seen(ctx.lane) if ctx.lane else None  # the same gap `finish` logs as `idle`
             ctx.cold = before is not None and is_cold(time.time() - before, cache_marks(orig)["ttl"])
             if not self.layers or self.is_fused(ctx.lane) or self.is_fused(ctx.frozen_lane):
                 return raw, orig
@@ -196,6 +196,10 @@ class Proxy:
         ctx.after = work
         return sent, orig
 
+    def seen(self, lane):
+        """When the lane's previous request started, from memory or else from before the last restart."""
+        return self.last_seen.get(lane) or (self.state.get(f"seen:{lane}") if self.state is not None else None)
+
     def finish(self, ctx, orig, raw, sent, status, tee, started):
         reply = sse.parse(tee) if status == 200 and ctx.kind == "messages" and tee else None
         record = {"ts": round(started, 3), "ms": int((time.time() - started) * 1000), "kind": ctx.kind,
@@ -210,9 +214,11 @@ class Proxy:
         if orig and ctx.kind == "messages":
             try:  # observation only: from the client's own body, and never allowed to fail the request
                 record["cache"] = cache_marks(orig)
-                before = self.last_seen.get(ctx.lane) if ctx.lane else None
+                before = self.seen(ctx.lane) if ctx.lane else None
                 if ctx.lane:
                     self.last_seen[ctx.lane] = started
+                    if self.state is not None:
+                        self.state.put(f"seen:{ctx.lane}", started)
                 if before is not None:
                     record["idle"] = round(max(0.0, started - before), 1)
                 if ctx.agent:  # which sub-agent this is, and (first request of its thread only) what it was asked, for `almanac report`

@@ -2,6 +2,7 @@ import copy
 import json
 import os
 import tempfile
+import time
 import unittest
 
 from helpers import Rig, sse
@@ -929,6 +930,16 @@ class ColdTest(LayerCase):
         self.rig.cfg["compaction"]["trigger_tokens"] = 1
         self.rig.messages(body(copy.deepcopy(messages[:-1] + turn(20) + [messages[-1]])))
         self.assertEqual(self.rig.records()[-1]["compaction"]["fresh"], False)
+
+    def test_a_restarted_proxy_still_sees_the_gap_since_the_last_request(self):
+        messages = history(14)
+        self.rig.messages(body(copy.deepcopy(messages)))
+        lane = self.rig.records()[-1]["lane"]
+        self.rig.proxy.last_seen.clear()  # what a restart does
+        self.assertAlmostEqual(self.rig.proxy.seen(lane), self.state.get(f"seen:{lane}"))
+        self.state.put(f"seen:{lane}", time.time() - 4000)
+        self.rig.messages(body(copy.deepcopy(messages)))
+        self.assertGreater(self.rig.records()[-1]["idle"], 3900)
 
     def test_a_refused_cold_compaction_is_not_counted(self):
         self.rig.upstream.respond = lambda req: (
