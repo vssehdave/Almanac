@@ -26,7 +26,7 @@ import time
 
 from . import request as rq
 from . import summarize
-from .compact import estimate
+from .compact import COLD_FLOOR, estimate
 from .memory import clean
 
 TIERS = ("small", "medium", "large")
@@ -342,8 +342,26 @@ class RoutingLayer:
             held = {"on": bad or (held["on"] and calm < 2), "calm": calm, "n": len(messages), "s": hits, "t": len(turns)}
             ctx.state.put(key, held)
         if held["on"]:
-            body["messages"] = body["messages"] + [{"role": "system", "content": [], "output_config": {"effort": "high"}}]
+            RoutingLayer._effort(body, ctx, "high")
+
+    @staticmethod
+    def _effort(body, ctx, effort):
+        """Raise effort by a last system message under the beta; on a lane whose upstream refused that, in output_config,
+        which rewrites the cached prefix anyway, so a large history is compacted first (see Proxy.rewrite)."""
+        if not ctx.state.get(f"nobeta:{ctx.lane}"):
+            body["messages"] = body["messages"] + [{"role": "system", "content": [], "output_config": {"effort": effort}}]
             ctx.beta = EFFORT_BETA
+            ctx.stats["beta"] = True  # under this mark a refused body is retried without the message
+            return
+        cfg = ctx.cfg["compaction"]
+        if (not (ctx.cold or ctx.recompact) and cfg["enabled"] and cfg.get("on_cold", True)
+                and estimate(body, ctx, body["messages"]) >= COLD_FLOOR * cfg["target_tokens"]):
+            ctx.recompact = "ask"
+        body["output_config"]["effort"] = effort
+
+    def unbeta(self, ctx):
+        """The upstream refused the effort message: this lane says its effort in output_config from now on."""
+        ctx.state.put(f"nobeta:{ctx.lane}", True)
 
     @staticmethod
     def _log(store, dec):
@@ -454,9 +472,8 @@ class RoutingLayer:
     def _apply(self, body, ctx, cfg, dec, first):
         before = (body["model"], (body.get("output_config") or {}).get("effort"))
         config = body.get("output_config")
-        if dec.get("append"):  # model and output_config stay as sent; the refusal fallback sends the original
-            body["messages"] = body["messages"] + [{"role": "system", "content": [], "output_config": {"effort": dec["effort"]}}]
-            ctx.beta = EFFORT_BETA
+        if dec.get("append"):  # the model stays as sent
+            self._effort(body, ctx, dec["effort"])
             before = None
         else:
             body["model"] = dec["model"]

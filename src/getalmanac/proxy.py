@@ -95,6 +95,7 @@ class Ctx:
         self.stats = {}
         self.beta = ""  # an anthropic-beta value a layer needs on the request, added to the client's own
         self.cold = False  # the cache this request would have read has expired (see Proxy.rewrite)
+        self.recompact = ""  # "ask": routing will rewrite the cached prefix, so compact as on a cold return; "on": doing so
         self.after = None  # the rewritten body, when a layer changed it
         self.orig = None  # the body as Claude Code sent it, for layers that decide from the whole history
 
@@ -188,6 +189,10 @@ class Proxy:
         try:
             for layer in self.layers:
                 layer.transform(work, ctx)
+            if ctx.recompact == "ask":  # compaction runs before routing: run them all again, compacting this time
+                ctx.recompact, work = "on", json.loads(raw)
+                for layer in self.layers:
+                    layer.transform(work, ctx)
             if work == orig:
                 return raw, orig
             sent = rq.dumps(work)
@@ -624,7 +629,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             auth, used, folder = self._account(ctx)  # a login known to be out of usage is skipped from the start
             resp = self._send(sent, identity=ctx is not None, authorization=auth)
-            if ctx and sent is not raw and (resp.status == 400 or (resp.status in ROUTE_REFUSED and "route" in ctx.stats)):
+            if ctx and sent is not raw and (resp.status == 400 or (resp.status in ROUTE_REFUSED and ("route" in ctx.stats or "beta" in ctx.stats))):
                 detail = resp.read()[:400].decode("utf-8", "replace")
                 routed = ctx.stats.get("route")  # kept: the loop below removes it from the stats
                 ctx.stats["fallback"] = detail
@@ -639,12 +644,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         pass
                 retry, resent = raw, False
                 # The changes most likely to be refused go first, one at a time, so the other savings stay.
-                for mark in ("route", "compaction"):
+                for mark in ("beta", "route", "compaction"):
                     if mark not in ctx.stats or proxy.state is None:
                         continue
                     if mark == "compaction":
                         ctx.stats.pop("cold", None)  # the compacted body is the one refused: nothing was saved
-                    if mark == "route":
+                    if mark == "beta":  # only the effort message: routing says the effort in output_config instead
+                        ctx.beta = ""
+                        self._beta("")
+                        _tell(proxy, "unbeta", ctx)
+                    elif mark == "route":
                         ctx.beta = ""
                         self._beta("")
                         _tell(proxy, "refused", ctx, resp.status, detail)
@@ -671,6 +680,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     retry = raw
                 if retry is raw:  # the rewrite was refused: send the original
                     if not resent:
+                        self._beta("")  # the original goes out with the client's own header too
                         resp = self._send(raw, identity=True, authorization=auth)
                         if resp.status < 400:
                             proxy.fuse(ctx.lane, detail)

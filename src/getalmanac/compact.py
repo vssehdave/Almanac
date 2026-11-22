@@ -416,7 +416,7 @@ class CompactLayer:
 
     @staticmethod
     def _cold(ctx, cfg) -> bool:
-        return bool(ctx.cold and cfg.get("on_cold", True))
+        return bool((ctx.cold or getattr(ctx, "recompact", "") == "on") and cfg.get("on_cold", True))
 
     @classmethod
     def _trigger(cls, ctx, cfg) -> int:
@@ -433,7 +433,7 @@ class CompactLayer:
 
     @classmethod
     def _note_cold(cls, body, ctx, before, after, acted):
-        if acted and cls._cold(ctx, ctx.cfg["compaction"]):
+        if acted and ctx.cold and cls._cold(ctx, ctx.cfg["compaction"]):  # a forced pass (recompact) is not a cold return
             ctx.stats["cold"] = {"before": before, "after": estimate(body, ctx, after, None)}
 
     def _relieve_agent(self, body, ctx):

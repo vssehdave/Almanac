@@ -841,6 +841,53 @@ class MainEffortOnlyTest(Case):
         self.assertIsNone(self.said(self.ask(turns, "high")))
 
 
+class BetaRefusedTest(Case):
+    """An upstream that refuses the effort message: the effort goes in output_config, after compacting a large history."""
+    mode = "subagents"
+
+    def run_case(self, turns, refuse_all=False):
+        from getalmanac.compact import CompactLayer
+
+        def respond(req):
+            data = json.loads(req["body"])
+            if data["messages"][-1]["role"] == "system" or refuse_all and data["output_config"]["effort"] != "low":
+                return 400, {"content-type": "application/json"}, b'{"type":"error","error":{"message":"unsupported"}}'
+            return 200, {"content-type": "text/event-stream"}, sse()
+        self.before = [CompactLayer(Memory(self.store, self.state))]
+        self.start(respond=respond, **{"compaction.trigger_tokens": 10 ** 6, "compaction.target_tokens": 1500,
+                                       "memory.recall": False, "memory.summary_model": ""})
+        raw = body(convo(turns), LARGE)
+        raw["output_config"]["effort"] = "low"
+        status, _, _ = self.rig.messages(raw, extra=MAIN)
+        self.assertEqual(status, 200)
+        return raw
+
+    def last(self):
+        return self.rig.sent(), self.rig.upstream.requests[-1]["headers"]["anthropic-beta"]
+
+    def test_when_every_rewrite_is_refused_the_original_goes_out_with_its_own_header(self):
+        raw = self.run_case([{"text": "design a plugin system"}, {"text": "that's wrong, try again"}], refuse_all=True)
+        self.assertEqual(len(self.rig.upstream.requests), 3)  # the message, then output_config, then the original
+        self.assertEqual(self.last(), (raw, "a,b,c"))
+
+    def test_a_small_history_gets_the_effort_in_output_config(self):
+        raw = self.run_case([{"text": "design a plugin system"}, {"text": "that's wrong, try again"}])
+        self.assertEqual(len(self.rig.upstream.requests), 2)
+        raw["output_config"]["effort"] = "high"
+        self.assertEqual(self.last(), (raw, "a,b,c"))
+
+    def test_a_large_history_is_compacted_first_and_later_requests_skip_the_message(self):
+        turns = [{"text": f"step {i}", "pad": 3000} for i in range(6)] + [{"text": "that's wrong, try again"}]
+        raw = self.run_case(turns)
+        sent, beta = self.last()
+        self.assertEqual(len(self.rig.upstream.requests), 2)
+        self.assertIn("Almanac compacted this conversation", json.dumps(sent["messages"][0]))
+        self.assertEqual((sent["output_config"]["effort"], sent["messages"][-1]["role"], beta), ("high", "user", "a,b,c"))
+        self.rig.messages(raw, extra=MAIN)  # the same lane again: straight to the fallback, in one request
+        self.assertEqual(len(self.rig.upstream.requests), 3)
+        self.assertEqual(self.rig.sent(), sent)
+
+
 class ConfigCheckTest(unittest.TestCase):
     def load(self, **routing):
         from getalmanac import config
