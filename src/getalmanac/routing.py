@@ -317,9 +317,33 @@ class RoutingLayer:
             first = dec is fresh
             if first:
                 self._log(ctx.state, dec)
+        if kind == "main" and cfg["mode"] != "all":
+            try:
+                self._hold(body, ctx, cfg, messages, turns, text)
+            except Exception:  # fail open: the request goes out as the client sent it
+                pass
         if dec.get("skip"):
             return
         self._apply(body, ctx, cfg, dec, first)
+
+    @staticmethod
+    def _hold(body, ctx, cfg, messages, turns, text):
+        """Main thread: after a failure, say "high" in a last message until two requests in a row come back clean.
+        The count moves once per new request length, so a replay of the same request is answered the same way."""
+        sent = (body.get("output_config") or {}).get("effort")
+        if sent not in EFFORTS or EFFORTS.index(sent) >= EFFORTS.index("high") or ctx.state.get(pin_key(ctx.project)) in TIERS:
+            return
+        key = f"route:{ctx.lane}:hi"
+        held = ctx.state.get(key) or {"on": False, "calm": 0, "n": 0, "s": 0, "t": 0}
+        if held["n"] != len(messages):
+            hits = strikes(messages[turns[-1]:], cfg["escalate_after"])
+            bad = hits > held["s"] or (failed(text) and held["t"] != len(turns))  # a new strike, or a new turn the person called wrong
+            calm = 0 if bad else held["calm"] + 1
+            held = {"on": bad or (held["on"] and calm < 2), "calm": calm, "n": len(messages), "s": hits, "t": len(turns)}
+            ctx.state.put(key, held)
+        if held["on"]:
+            body["messages"] = body["messages"] + [{"role": "system", "content": [], "output_config": {"effort": "high"}}]
+            ctx.beta = EFFORT_BETA
 
     @staticmethod
     def _log(store, dec):
@@ -333,16 +357,8 @@ class RoutingLayer:
         dec = {"kind": kind, "key": key, "from": tier_now, "ts": round(time.time(), 1), "skip": "", "move": "none", "ms": 0}
         pin = store.get(pin_key(ctx.project)) if ctx.project else None
         top = TIERS.index(cfg["ceiling"]) if cfg["ceiling"] in TIERS else len(TIERS) - 1
-        if kind == "main" and cfg["mode"] != "all":  # the model stays as it is; only its effort moves along its own ladder
-            raised = "" if pin in TIERS else ("the person said this went wrong" if failed(text) else "") or boosted(messages, turns, turn, cfg)
-            up, rung = climb(cfg, tier_now, 1 if raised else 0, top)
-            sent = (body.get("output_config") or {}).get("effort")
-            effort = ""  # written only on a raise, and never below what the client asks for (its own choice, say xhigh, stands)
-            if raised and up == tier_now and sent in EFFORTS and rung in EFFORTS and EFFORTS.index(rung) > EFFORTS.index(sent):
-                effort = rung
-            dec.update(tier=tier_now, model=body["model"], effort=effort, asked=tier_now, why=f"effort raised: {raised}" if effort else "effort only")
-            if effort:
-                dec["escalated"] = True
+        if kind == "main" and cfg["mode"] != "all":  # the model and the client's effort stay; `_hold` raises effort by message
+            dec.update(tier=tier_now, model=body["model"], effort="", asked=tier_now, why="effort only")
             return dec
         if pin in TIERS:
             tier, why, ambiguous = pin, "pinned by `almanac route pin`", False

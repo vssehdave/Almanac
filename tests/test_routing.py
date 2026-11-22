@@ -801,35 +801,44 @@ class AgentFloorTest(Case):
 class MainEffortOnlyTest(Case):
     mode = "subagents"
 
-    def ask(self, turns, model, effort):
+    def ask(self, turns, effort="low", model=LARGE):
         raw = body(convo(turns), model)
         raw["output_config"]["effort"] = effort
         self.rig.messages(raw, extra=MAIN)
-        sent = self.rig.sent()
-        return sent["model"], sent["output_config"]["effort"]
+        return self.rig.sent()
 
-    def test_the_model_stays_and_the_effort_climbs_then_falls_back(self):
-        turns = [{"text": "design a plugin system", "errors": 3}]
-        got = []
-        for text in ("a", "b", "c", "d"):
-            turns = turns + [{"text": text}]
-            got.append(self.ask(turns, LARGE, "low"))
-        self.assertEqual(got, [(LARGE, "high")] * 3 + [(LARGE, "low")])
+    def said(self, sent):
+        last = sent["messages"][-1]
+        return last["output_config"]["effort"] if last["role"] == "system" else None
 
-    def test_the_client_effort_is_never_lowered_and_is_left_alone_when_nothing_failed(self):
+    def test_effort_is_raised_by_message_after_a_failure_until_two_clean_requests(self):
+        loop = [human("design a plugin system")]
+        for i in range(4):
+            loop += [{"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": "Bash", "input": {"command": f"try {i}"}}]},
+                     {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "x", "is_error": i < 3}]}]
+        said = []
+        for n in (7, 9):  # three errors then clean results, as the loop grows
+            sent = self.ask_raw(loop[:n])
+            said.append(self.said(sent))
+        self.assertEqual(said[0], "high")  # the third error
+        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (LARGE, "low"))
+        self.assertTrue(self.rig.upstream.requests[-1]["headers"]["anthropic-beta"].endswith(routing.EFFORT_BETA))
+        self.assertEqual(self.said(self.ask_raw(loop[:9])), said[1])  # a replay is answered the same way
+        self.assertEqual(said[1], "high")  # one clean result is not enough
+        loop += [{"role": "assistant", "content": [{"type": "tool_use", "id": "t9", "name": "Bash", "input": {"command": "ok"}}]},
+                 {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t9", "content": "x"}]}]
+        self.assertIsNone(self.said(self.ask_raw(loop)))  # the second clean one turns it off
+
+    def ask_raw(self, messages):
+        raw = body(messages, LARGE)
+        raw["output_config"]["effort"] = "low"
+        self.rig.messages(raw, extra=MAIN)
+        return self.rig.sent()
+
+    def test_nothing_is_added_without_a_failure_or_when_the_client_asks_for_high(self):
+        self.assertIsNone(self.said(self.ask([{"text": "design a plugin system"}])))
         turns = [{"text": "design a plugin system", "errors": 3}, {"text": "a"}]
-        self.assertEqual(self.ask(turns, LARGE, "xhigh"), (LARGE, "xhigh"))
-        self.assertEqual(self.ask(turns, LARGE, "high"), (LARGE, "high"))
-        self.assertEqual(self.ask([{"text": "design a plugin system"}], LARGE, "xhigh"), (LARGE, "xhigh"))
-        self.assertEqual(self.ask([{"text": "design a plugin system"}], LARGE, "medium"), (LARGE, "medium"))
-
-    def test_the_turn_where_the_person_says_it_went_wrong_is_raised_too(self):
-        turns = [{"text": "design a plugin system"}, {"text": "that's wrong, try again"}]
-        self.assertEqual(self.ask(turns, LARGE, "low"), (LARGE, "high"))
-
-    def test_a_sonnet_main_thread_keeps_its_model_and_effort(self):
-        turns = [{"text": "fix the bug in cli.py", "errors": 3}, {"text": "ok, b.py"}]
-        self.assertEqual(self.ask(turns, MEDIUM, "medium"), (MEDIUM, "medium"))  # its next rung is another model
+        self.assertIsNone(self.said(self.ask(turns, "high")))
 
 
 class ConfigCheckTest(unittest.TestCase):
