@@ -915,6 +915,21 @@ class ColdTest(LayerCase):
         self.assertEqual(record["cold"]["before"], compact.estimate(body(grown), None, current, None))
         self.assertLess(record["cold"]["before"], compact.estimate(body(grown), None, grown, None))
 
+    def test_a_cold_return_recompacts_a_stored_compaction_without_growth(self):
+        messages = history(14)
+        self.cold(messages)
+        self.rig.cfg["compaction"]["trigger_tokens"] = 1  # the stored prefix is over the trigger, so only the growth gate can hold it back
+        grown = messages[:-1] + turn(20) + [messages[-1]]  # under half the target
+        _, record = self.cold(grown)
+        self.assertEqual(record["compaction"]["fresh"], True)
+
+    def test_a_warm_request_with_little_growth_keeps_the_stored_compaction(self):
+        messages = history(14)
+        self.cold(messages)
+        self.rig.cfg["compaction"]["trigger_tokens"] = 1
+        self.rig.messages(body(copy.deepcopy(messages[:-1] + turn(20) + [messages[-1]])))
+        self.assertEqual(self.rig.records()[-1]["compaction"]["fresh"], False)
+
     def test_a_refused_cold_compaction_is_not_counted(self):
         self.rig.upstream.respond = lambda req: (
             (400, {"content-type": "application/json"}, b'{"type":"error","error":{"type":"invalid_request_error"}}')

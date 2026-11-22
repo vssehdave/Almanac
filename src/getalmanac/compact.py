@@ -394,8 +394,8 @@ class CompactLayer:
             tail = messages[state.get("at", state["covered"]):] if state else messages  # what came after the last outline
             current = (state["prefix"] + tail) if state else messages
             # After a compaction, wait for real growth before the next one: redoing it
-            # every turn would rewrite the prefix each time and waste the cache.
-            grown = not state or sum(len(json.dumps(m, ensure_ascii=False)) for m in tail) / CHARS_PER_TOKEN >= cfg["target_tokens"] / 2
+            # every turn would rewrite the prefix each time and waste the cache. A cold return rewrites it anyway.
+            grown = not state or self._cold(ctx, cfg) or sum(len(json.dumps(m, ensure_ascii=False)) for m in tail) / CHARS_PER_TOKEN >= cfg["target_tokens"] / 2
             if grown and self._estimate(body, ctx, current) >= self._trigger(ctx, cfg):
                 state, fresh = self._compact(ctx, body, messages, covered, cfg, state), True
         out = messages
