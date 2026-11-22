@@ -199,6 +199,10 @@ def _doctor(_rest):
         check("upstream", True, cfg["upstream"] + (f" (CONNECT through {hop.label} works)" if hop else ""))
     except OSError as exc:
         check("upstream", False, f"{cfg['upstream']} is unreachable: {exc}")
+    # not a failure: only skill scanning and adopting need it
+    from . import skills
+    if not skills.scanner():
+        print(f"  note SkillSpector: not installed, so skills cannot be scanned or adopted. Install it with: {skills.INSTALL}")
     return 0 if ok else 1
 
 
@@ -560,6 +564,7 @@ def _skill(rest):
         return skills.audit(args.pending, args.again, out=_print)
     if args.cmd == "add":
         ask = _yes if sys.stdin.isatty() else None
+        skills.offer_scanner(ask, out=_print)
         return skills.add(args.source, args.skill, args.ref, args.accept_caution, args.replace, out=_print,
                           bundle=args.bundle, name=args.name, ask=ask)
     if os.path.exists(args.target):

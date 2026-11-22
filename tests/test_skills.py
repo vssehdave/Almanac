@@ -589,5 +589,27 @@ class Pack(Base):
             self.assertEqual(cli.main(["pack", "--file", str(path), "list"]), 2)
 
 
+class OfferScanner(unittest.TestCase):
+    def run_offer(self, have, uv, answer):
+        lines, asked, ran = [], [], []
+        with mock.patch.object(skills, "scanner", lambda: ["s"] if have or ran else None),                 mock.patch.object(skills.shutil, "which", lambda n: "uv" if uv else None),                 mock.patch.object(skills.subprocess, "run", lambda *a, **k: ran.append(a) or mock.Mock(returncode=0)):
+            skills.offer_scanner(lambda q: asked.append(q) or answer, out=lines.append)
+        return lines, asked, ran
+
+    def test_installed_asks_nothing(self):
+        self.assertEqual(self.run_offer(True, True, True)[1:], ([], []))
+
+    def test_runs_only_on_yes(self):
+        self.assertEqual(self.run_offer(False, True, False)[2], [])
+        lines, _, ran = self.run_offer(False, True, True)
+        self.assertEqual(ran[0][0], skills.INSTALL.split())
+        self.assertIn("SkillSpector installed.", lines)
+
+    def test_no_uv_says_so(self):
+        lines, asked, ran = self.run_offer(False, False, True)
+        self.assertEqual((asked, ran), ([], []))
+        self.assertIn("uv is not found", lines[0])
+
+
 if __name__ == "__main__":
     unittest.main()

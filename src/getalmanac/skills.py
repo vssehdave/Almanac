@@ -29,6 +29,22 @@ SHA = re.compile(r"[0-9a-f]{40}\Z")
 SCAN_SECONDS = 900  # one plugin took over 3 minutes on the owner's machine
 
 
+def offer_scanner(ask, out=print) -> None:
+    """When SkillSpector is missing, offer to run its install command; runs it only on a yes."""
+    if scanner() or not ask:
+        return
+    if not shutil.which("uv"):
+        out(f"almanac: SkillSpector is not installed, and uv is not found to install it. Install uv, then: {INSTALL}")
+        return
+    if ask(f"SkillSpector scans skills before they are installed and is not installed. Run `{INSTALL}` now? [y/N] "):
+        try:
+            done = subprocess.run(INSTALL.split(), stdin=subprocess.DEVNULL).returncode == 0
+        except (OSError, subprocess.SubprocessError) as exc:
+            out(f"almanac: could not run the install: {exc}")
+            return
+        out("SkillSpector installed." if done and scanner() else "almanac: the install did not finish; nothing was added.")
+
+
 def claude_dir() -> Path:
     """Claude Code's config folder: CLAUDE_CONFIG_DIR when set (a second account), else ~/.claude."""
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
