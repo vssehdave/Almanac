@@ -400,6 +400,19 @@ class EscalationTest(Case):
         self.assertEqual((sent["model"], sent["output_config"]["effort"]), (MEDIUM, "low"))  # said to have failed: one rung up Haiku's ladder
         self.assertIn("failed", self.decisions()[-1]["why"])
 
+    def test_a_cached_main_thread_keeps_its_model_and_gets_the_effort_message(self):
+        for turns in ([{"text": "fix the bug in cli.py", "pad": 120000}, {"text": "that's wrong, try again"}],
+                      [{"text": "fix the bug in cli.py", "pad": 120000, "errors": 3}, {"text": "ok, try the other file b.py"}]):
+            self.start()
+            raw = body(convo(turns), MEDIUM)
+            raw["output_config"]["effort"] = "low"
+            self.rig.messages(raw, extra=MAIN)
+            sent = self.rig.sent()
+            self.assertEqual(sent["model"], MEDIUM)  # the old ladder sent this to Opus
+            self.assertEqual(sent["messages"][-1]["role"], "system")
+            self.assertEqual(sent["messages"][-1]["output_config"]["effort"], "high")
+            self.assertTrue(self.rig.upstream.requests[-1]["headers"]["anthropic-beta"].endswith(routing.EFFORT_BETA))
+
     def test_the_raise_stops_at_the_top_tier(self):
         turns = [{"text": "design a plugin system", "errors": 3}, {"text": "design a cache"}]
         self.assertEqual(self.send(convo(turns))["model"], LARGE)
@@ -462,12 +475,13 @@ class SubagentTest(Case):
         for i in range(3):
             loop += [{"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": "Bash", "input": {"command": "pytest"}}]},
                      {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "x", "is_error": True}]}]
-        self.rig.messages(body(loop, MEDIUM), extra=sub_headers("big"))
+        raw = body(loop, MEDIUM)
+        raw["output_config"]["effort"] = "medium"
+        self.rig.messages(raw, extra=sub_headers("big"))
         sent = self.rig.sent()
-        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (MEDIUM, "high"))  # the cached prefix is untouched
+        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (MEDIUM, "medium"))  # the cached prefix is untouched
         last = sent["messages"][-1]
-        self.assertEqual((last["role"], last["content"]), ("system", []))
-        self.assertIn(last["output_config"]["effort"], routing.EFFORTS)
+        self.assertEqual((last["role"], last["content"], last["output_config"]["effort"]), ("system", [], "high"))
         self.assertTrue(self.rig.upstream.requests[-1]["headers"]["anthropic-beta"].endswith(routing.EFFORT_BETA))  # merged after the client's own value
 
 class SubagentsModeTest(Case):
@@ -834,6 +848,15 @@ class MainEffortOnlyTest(Case):
         raw["output_config"]["effort"] = "low"
         self.rig.messages(raw, extra=MAIN)
         return self.rig.sent()
+
+    def test_the_raise_drops_back_after_calm_after_clean_requests(self):
+        self.start(**{"routing.calm_after": 3})
+        loop = [human("design a plugin system")]
+        for i in range(6):
+            loop += [{"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": "Bash", "input": {"command": f"try {i}"}}]},
+                     {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "x", "is_error": i < 3}]}]
+        said = [self.said(self.ask_raw(loop[:n])) for n in (7, 9, 11, 13)]
+        self.assertEqual(said, ["high", "high", "high", None])  # three errors, then off only at the third clean request
 
     def test_nothing_is_added_without_a_failure_or_when_the_client_asks_for_high(self):
         self.assertIsNone(self.said(self.ask([{"text": "design a plugin system"}])))

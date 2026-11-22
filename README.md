@@ -559,17 +559,19 @@ The rules are a short table in `routing.py`. A turn is judged from its length,
 its wording and the files it names, read from what you typed (pasted logs, stack
 traces and code blocks are not taken as a sign of a hard job or a failure). A turn with no sign of being easy or hard,
 such as a "why" question, a short follow-up or text that is not English, keeps
-the model you were on. A turn that says the last answer was wrong goes to
-`large`. Fast-mode requests (`speed`) are never routed. Three tool errors in a row, or one call failing three times,
-raise the next turn one rung of the failure ladder (below), for three turns. With `routing.classifier` set to
+the model you were on. A turn that says the last answer was wrong takes the next
+rung of the failure ladder (below). Fast-mode requests (`speed`) are never routed. Three tool errors in a row, or one call failing three times,
+raise the next turn one rung of the failure ladder (below), for three turns, while the conversation is under 30,000
+tokens; past that a failure raises effort instead (below). With `routing.classifier` set to
 `"model"`, the turns the rules are unsure about are settled by one small-model
 call. It adds a short wait (each network step gives up after 2 seconds) to that turn and uses a little of
 your allowance. It shares the daily cap on small-model calls with the summaries
 (`memory.summary_daily_calls`) and is not turned off by `memory.summary_model`.
 If the call fails, the rules decide.
 
-**The failure ladder.** A thread that goes wrong moves up one rung, a model and
-an effort level, never past the end of the ladder of the model it started on:
+**The failure ladder.** A thread's model is chosen when it starts. While its
+history is under 30,000 tokens, a thread that goes wrong moves up one rung, a model
+and an effort level, never past the end of the ladder of the model it started on:
 
 | Started on | First rung | After a failure | After another |
 |---|---|---|---|
@@ -581,16 +583,22 @@ The ladders are `routing.ladders` and each tier's first rung is `routing.effort`
 `routing.ceiling` still caps both. A failure is any of: `escalate_after` tool errors
 in a row (or one call failing that often) in the thread's own history, the person
 saying it went wrong, or a task that says an earlier attempt failed. On the main
-thread the rung is kept for `escalate_turns` turns, then the thread drops back. With
-`routing.mode` set to `subagents` the main thread's model is never changed, but
-after a failure its effort moves up its own model's ladder (for Opus, to high for
-those turns, the turn where the person says it went wrong included). Effort is
-written only on such a raise, only where Claude Code already sends one, and never
-below what it sent (an `xhigh` you chose stays). A Sonnet or Haiku main thread
-gets no effort climb in this mode, because its next rung is another model. A pin
-ignores the ladder. When the person says an earlier attempt failed (or a task
-says so), the thread takes the next rung of its model's ladder at once, for
-example Haiku to Sonnet low, not straight to Opus.
+thread the rung is kept for `escalate_turns` turns, then the thread drops back; a
+sub-agent drops back after `calm_after` requests in a row with clean tool results.
+When the person says an earlier attempt failed (or a task says so), the thread
+takes the next rung of its model's ladder at once, for example Haiku to Sonnet low,
+not straight to Opus.
+
+**Past 30,000 tokens a failure never changes the model.** Moving a large history to
+another model rewrites all of it into that model's cache, so once a thread (main or
+sub-agent, in either mode) has grown that large its model stays, and the one answer
+to a failure is effort `high`, said in a last message so the cached prefix and
+`output_config` stay as they were (an upstream that refuses that message gets the
+effort in `output_config` instead). It stays on until `calm_after` requests in a
+row come back with clean tool results; a new failure starts the count again. The
+main thread in `subagents` mode takes this path at any size, since its model is
+never changed there. Nothing is added when Claude Code already asks for `high` or
+more, or under a pin.
 
 **Sub-agents.** A sub-agent prompt may start with `Difficulty: simple`, `standard`
 or `hard`; Almanac reads that line, or classifies the task by its rules when there
@@ -599,7 +607,8 @@ line, since an agent's own file usually sets its model. An agent file may also s
 `effort:`, which is the sub-agent's starting effort.
 A sub-agent keeps its model until its own tool calls start failing: each run of
 `escalate_after` failures in its own thread moves its next requests one rung up
-its ladder. Routing never takes a sub-agent below the model its own definition
+its ladder, while it is under 30,000 tokens (past that it gets the effort message
+above). Routing never takes a sub-agent below the model its own definition
 asked for, or inherited from its parent: a sub-agent that starts on Opus stays on
 Opus for a simple task, and climbs from there. Set `routing.route_inherited` to
 `true` to let a sub-agent that only inherited its parent's model (same model as the
@@ -1523,7 +1532,8 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `routing.effort_cost` | low 0.6, medium 1.0, high 1.6 | Estimated reply-cost factor per effort, for pricing a switch |
 | `routing.margin` | `0.2` | How much cheaper a move down must be than staying |
 | `routing.escalate_after` | `3` | Errors in a row, or one call failing this often, that raise the thread one rung |
-| `routing.escalate_turns` | `3` | Turns a main-thread raise lasts |
+| `routing.escalate_turns` | `3` | Turns a main-thread rung lasts (mode `all`, under 30,000 tokens) |
+| `routing.calm_after` | `2` | Clean requests in a row before a raised effort, or a small sub-agent's raised model, drops back (`0`: never) |
 | `routing.prices`, `routing.work` | see `config.py` | Relative prices and expected work per turn, for pricing a switch |
 | `routing.windows` | 1,000,000 each | Context window per model id (unknown ids count as 200,000) |
 | `playbooks.enabled` | `true` | Match requests against playbooks and give Claude the playbook tools |

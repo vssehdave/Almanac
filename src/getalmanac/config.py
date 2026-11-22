@@ -97,7 +97,8 @@ DEFAULTS = {
         "ceiling": "large",  # the highest tier routing may pick (a pin ignores it)
         "classifier": "rules",  # "model" lets a small model settle the turns the rules are unsure about
         "effort": {"small": "medium", "medium": "medium", "large": "low"},  # a tier's normal effort: set only where Claude Code already sends one; "" keeps its value
-        # After a failure a thread moves one rung up the ladder of the tier it started on, never past its end or the ceiling.
+        # After a failure a thread under 30,000 tokens moves one rung up the ladder of the tier it started on, never past
+        # its end or the ceiling. A larger thread keeps its model and is told effort "high" in a last message instead.
         # A rung is [tier, effort]; the start itself is the first rung, at the tier's normal effort above.
         "ladders": {
             "small": [["medium", "low"], ["medium", "medium"]],  # Haiku -> Sonnet low -> Sonnet medium
@@ -109,8 +110,8 @@ DEFAULTS = {
         "effort_cost": {"low": 0.6, "medium": 1.0, "high": 1.6},
         "margin": 0.2,  # a move down on the main thread must be at least this much cheaper than staying
         "escalate_after": 3,  # tool errors in a row, or one call failing this often, raise the next turn one rung
-        "escalate_turns": 3,  # turns the raise lasts
-        "calm_after": 2,  # a raised sub-agent drops back after this many requests in a row with clean tool results (0: never)
+        "escalate_turns": 3,  # turns a raised rung lasts, on a main thread under 30,000 tokens in mode "all" only
+        "calm_after": 2,  # requests in a row with clean tool results before a raised effort, or a raised small sub-agent's model, drops back (0: never)
         # Relative prices per token, for comparing models only. They are list-price ratios as of 2026-11-03 for the
         # 5.5 models (cache write 1.25x input, cache read 0.05x for Sonnet and Opus); the Haiku cache-read ratio
         # (0.1x) is assumed, as it is not listed. cache_write and cache_read are what a prefix costs to write into,

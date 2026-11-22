@@ -11,7 +11,9 @@ priced decision (see `price`), and a move up is made whenever the turn needs it.
 Sub-agent threads start small and fresh, so they are routed freely, though never below the model
 their own definition asked for. One that names no model and carries no difficulty line, so would only
 inherit the main thread's large model, starts on medium instead. A thread that keeps failing climbs one rung of its starting
-tier's ladder (`routing.ladders`: a model, then an effort level) and never past the end of it.
+tier's ladder (`routing.ladders`: a model, then an effort level) and never past the end of it, but only while its history is
+under CACHED_LANE_TOKENS. Past that a failure never changes the model: the one response, on main threads and sub-agents in
+either mode, is effort "high" said in a last message (see `_hold`), until `calm_after` requests in a row come back clean.
 
 Every decision is made once per human turn and stored, so the whole tool loop of
 that turn, and any replay of it, uses the same model. The decision reads the
@@ -37,7 +39,7 @@ AGENT_TOOLS = ("Agent", "Task")  # the sub-agent tool: "Task" in older Claude Co
 MARKER = re.compile(r"(?im)^\W*difficulty:\s*(simple|standard|hard)\b")
 MARKED = {"simple": "small", "standard": "medium", "hard": "large"}
 EFFORT_BETA = "mid-conversation-output-config-2026-07-01"  # lets a final system message change effort without touching the cached prefix
-CACHED_LANE_TOKENS = 30000  # past this a model switch rewrites more cache than a harder retry is worth
+CACHED_LANE_TOKENS = 30000  # past this a failure raises effort, never the model: a switch rewrites more cache than it is worth
 BAD_SECONDS = 3600  # how long a tier stays off after the upstream refused it
 DEFAULT_WINDOW = 200000  # for a model id this file does not know
 CLASSIFY_TIMEOUT = 2  # seconds: the call delays the live request, so it must be short
@@ -306,42 +308,55 @@ class RoutingLayer:
         turn = len(turns) - 1 if kind == "main" else 0
         text = person_text(messages[turns[turn]])
         key = f"route:{ctx.lane}:{turn}:{_digest(text)}" if kind == "main" else f"route:{ctx.lane}"
-        # a sub-agent's own failures since it last worked cleanly: each count is a new decision, and a calm stretch drops it back
-        hits = strikes(settled(messages, cfg.get("calm_after", 2)), cfg["escalate_after"]) if kind == "sub" else 0
+        cached = self._cached(body, ctx)
+        hits = 0
+        if kind == "sub":  # its own failures since it last worked cleanly: each count is a new decision, a calm stretch drops it back
+            hits = strikes(settled(messages, cfg["calm_after"]), cfg["escalate_after"])
+            seen = f"route:{ctx.lane}:hits"
+            if cached:  # the model it had when it grew past CACHED_LANE_TOKENS stays, up and down
+                hits = ctx.state.get(seen) or 0
+            elif (ctx.state.get(seen) or 0) != hits:
+                ctx.state.put(seen, hits)
         key += f":s{hits}" if hits else ""
         first = False
         dec = ctx.state.get(key)
         if dec is None:
-            fresh = self._decide(ctx, body, cfg, kind, tier_now, text, turns, turn, key, hits)
+            fresh = self._decide(ctx, body, cfg, kind, tier_now, text, turns, turn, key, hits, cached)
             dec = ctx.state.frozen(key, lambda: fresh)
             first = dec is fresh
             if first:
                 self._log(ctx.state, dec)
-        if kind == "main" and cfg["mode"] != "all":
+        if not dec.get("skip"):
+            self._apply(body, ctx, cfg, dec, first)
+        if cached or (kind == "main" and cfg["mode"] != "all"):  # a lane whose model a failure must not change
             try:
-                self._hold(body, ctx, cfg, messages, turns, text)
+                self._hold(body, ctx, cfg, messages, turns[turn], text)
             except Exception:  # fail open: the request goes out as the client sent it
                 pass
-        if dec.get("skip"):
-            return
-        self._apply(body, ctx, cfg, dec, first)
 
     @staticmethod
-    def _hold(body, ctx, cfg, messages, turns, text):
-        """Main thread: after a failure, say "high" in a last message until two requests in a row come back clean.
-        The count moves once per new request length, so a replay of the same request is answered the same way."""
+    def _cached(body, ctx) -> bool:
+        """True once the lane's history has reached CACHED_LANE_TOKENS. Kept in the store, so a replay, a retry or a
+        compacted lane gets the same answer."""
+        key = f"route:{ctx.lane}:cached"
+        if ctx.state.get(key):
+            return True
+        if estimate(body, ctx, body["messages"]) < CACHED_LANE_TOKENS:
+            return False
+        ctx.state.put(key, True)
+        return True
+
+    @staticmethod
+    def _hold(body, ctx, cfg, messages, at, text):
+        """The one failure response where the model stays: say "high" in a last message from a failure (`escalate_after`
+        tool errors, or the person or task at index `at` saying it went wrong) until `calm_after` requests in a row come
+        back clean. Read from the request alone, so a replay is answered the same way."""
         sent = (body.get("output_config") or {}).get("effort")
         if sent not in EFFORTS or EFFORTS.index(sent) >= EFFORTS.index("high") or ctx.state.get(pin_key(ctx.project)) in TIERS:
             return
-        key = f"route:{ctx.lane}:hi"
-        held = ctx.state.get(key) or {"on": False, "calm": 0, "n": 0, "s": 0, "t": 0}
-        if held["n"] != len(messages):
-            hits = strikes(messages[turns[-1]:], cfg["escalate_after"])
-            bad = hits > held["s"] or (failed(text) and held["t"] != len(turns))  # a new strike, or a new turn the person called wrong
-            calm = 0 if bad else held["calm"] + 1
-            held = {"on": bad or (held["on"] and calm < 2), "calm": calm, "n": len(messages), "s": hits, "t": len(turns)}
-            ctx.state.put(key, held)
-        if held["on"]:
+        since = settled(messages, cfg["calm_after"])
+        said = failed(text) and len(messages) - len(since) <= at  # no calm run since that message
+        if said or strikes(since, cfg["escalate_after"]):
             RoutingLayer._effort(body, ctx, "high")
 
     @staticmethod
@@ -370,12 +385,12 @@ class RoutingLayer:
             log.append({k: dec.get(k) for k in ("ts", "key", "kind", "tier", "from", "why", "move", "stay", "switch", "skip", "escalated")})
             store.put("route:log", log[-LOG_KEEP:])
 
-    def _decide(self, ctx, body, cfg, kind, tier_now, text, turns, turn, key, hits=0) -> dict:
+    def _decide(self, ctx, body, cfg, kind, tier_now, text, turns, turn, key, hits=0, cached=False) -> dict:
         store, messages = ctx.state, ctx.orig["messages"]
         dec = {"kind": kind, "key": key, "from": tier_now, "ts": round(time.time(), 1), "skip": "", "move": "none", "ms": 0}
         pin = store.get(pin_key(ctx.project)) if ctx.project else None
         top = TIERS.index(cfg["ceiling"]) if cfg["ceiling"] in TIERS else len(TIERS) - 1
-        if kind == "main" and cfg["mode"] != "all":  # the model and the client's effort stay; `_hold` raises effort by message
+        if kind == "main" and cfg["mode"] != "all":  # the model and the client's effort stay; `_hold` answers a failure
             dec.update(tier=tier_now, model=body["model"], effort="", asked=tier_now, why="effort only")
             return dec
         if pin in TIERS:
@@ -399,6 +414,8 @@ class RoutingLayer:
         if tier == "inherit":
             tier = cur
         failed_text = why == FAILED_WHY
+        if failed_text and cached:  # a cached lane keeps its model; `_hold` raises its effort instead
+            tier, failed_text, why = cur, False, why + "; the history is cached, so effort rises instead"
         if kind == "sub" and pin not in TIERS:  # the model the agent starts on is a floor; `route_inherited` lifts it for one that only inherited the parent's
             if not default and (not cfg["route_inherited"] or parent and parent != body["model"]) and TIERS.index(tier) < TIERS.index(tier_now):
                 tier, why = tier_now, why + f"; kept at the {tier_now} model the agent starts on"
@@ -409,15 +426,11 @@ class RoutingLayer:
         if own:  # the agent's own `effort:` line is its starting rung; a failure still climbs from there
             effort, why = own, why + f"; effort {own} from the agent's file"
         if pin not in TIERS:  # a failure moves one rung up the ladder of the model the thread was on
-            raised = boosted(messages, turns, turn, cfg) if kind == "main" else ""
+            raised = boosted(messages, turns, turn, cfg) if kind == "main" and not cached else ""
             steps = hits + (1 if failed_text or raised else 0)
             if steps:
                 up, rung = climb(cfg, TIERS[min(TIERS.index(cur), top)] if failed_text else tier, steps, top)
                 if failed_text or (TIERS.index(up) >= TIERS.index(tier) and (up, rung) != (tier, effort)):  # said to have failed: the next rung, outright
-                    if kind == "sub" and up != tier and estimate(body, ctx, body["messages"]) >= CACHED_LANE_TOKENS:
-                        up, rung = tier, climb(cfg, tier, len(EFFORTS) * 2, top)[1]  # keep the model: only effort rises, to the top rung
-                        if "effort" in (body.get("output_config") or {}):  # a changed output_config would break the cache: say it in a last message instead
-                            up, dec["append"] = tier_now, True
                     tier, effort, dec["escalated"] = up, rung, True
                     if not failed_text:
                         why = f"raised a rung: {raised or 'its own tool calls kept failing'}"
@@ -472,13 +485,9 @@ class RoutingLayer:
     def _apply(self, body, ctx, cfg, dec, first):
         before = (body["model"], (body.get("output_config") or {}).get("effort"))
         config = body.get("output_config")
-        if dec.get("append"):  # the model stays as sent
-            self._effort(body, ctx, dec["effort"])
-            before = None
-        else:
-            body["model"] = dec["model"]
-            if isinstance(config, dict) and "effort" in config and dec["effort"]:  # only where the client already sends one
-                config["effort"] = dec["effort"]
+        body["model"] = dec["model"]
+        if isinstance(config, dict) and "effort" in config and dec["effort"]:  # only where the client already sends one
+            config["effort"] = dec["effort"]
         after = (body["model"], (body.get("output_config") or {}).get("effort"))
         note = {"tier": dec["tier"], "model": dec["model"], "move": dec["move"], "kind": dec["kind"], "key": dec["key"]}
         if dec.get("escalated"):

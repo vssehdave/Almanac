@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **One failure rule for large threads.** A thread's model is chosen when it
+  starts. Once its history reaches 30,000 tokens a failure never changes the
+  model, on the main thread and in sub-agents, in both routing modes: the one
+  answer is effort `high` in a last message (or in `output_config` when the
+  upstream refuses that message), on until `routing.calm_after` requests in a row
+  come back clean. The main thread in mode `all` used to climb to another model
+  at any size, and the main thread in mode `subagents` dropped back after a fixed
+  two clean requests. Under 30,000 tokens the model ladder is unchanged;
+  `routing.escalate_turns` now applies only there, on the main thread in mode
+  `all`.
 - **Per-conversation state has its own file.** The small decisions every request
   reads and writes (compaction prefixes, stubs, recall notes, route choices, usage
   counts, the summary budget) moved from `almanac.db` to `state.db`, with its own
