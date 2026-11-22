@@ -68,6 +68,7 @@ DEFAULTS = {
         "auto_import": True,  # while the proxy runs: import new Claude Code transcripts of stored projects, once an hour, then summarize them and make their vectors (autoimport.py)
         "auto_import_days": 14,  # transcripts older than this are not imported
         "review_gate": True,  # an Opus main thread may not end its turn while its sub-agents' work is unreviewed (a Stop hook; at most 2 holds per conversation)
+        "banner": True,  # show the person a short memory summary when a session starts (a SessionStart hook; never enters the prompt)
         "semantic": True,  # search by meaning when the optional packages and model are installed (see semantic.py)
     },
     "library": {

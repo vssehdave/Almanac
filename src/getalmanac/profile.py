@@ -91,6 +91,12 @@ def review_gate_on(cfg) -> bool:
     return bool(mem.get("enabled") and mem.get("review_gate", True) and mem.get("tools", True))
 
 
+def banner_on(cfg) -> bool:
+    """The SessionStart hook that shows the person a memory summary: it needs the memory."""
+    mem = cfg.get("memory") or {}
+    return bool(mem.get("enabled") and mem.get("banner", True))
+
+
 def curated_settings(user: dict, cfg, md_path: str = "") -> dict:
     """The user's settings with the off plugins, hooks and skills removed. Pure."""
     out = json.loads(json.dumps(user))
@@ -102,6 +108,9 @@ def curated_settings(user: dict, cfg, md_path: str = "") -> dict:
     if review_gate_on(cfg):  # Opus reviews sub-agent work before a turn ends
         gate = {"type": "command", "command": f'"{Path(sys.executable).as_posix()}" -m getalmanac review-gate', "timeout": 10}
         out["hooks"] = {**out.get("hooks", {}), "Stop": [*out.get("hooks", {}).get("Stop", []), {"hooks": [gate]}]}
+    if banner_on(cfg):  # a systemMessage is shown to the person only, so the prompt bytes are untouched
+        show = {"type": "command", "command": f'"{Path(sys.executable).as_posix()}" -m getalmanac memory banner', "timeout": 10}
+        out["hooks"] = {**out.get("hooks", {}), "SessionStart": [*out.get("hooks", {}).get("SessionStart", []), {"matcher": "startup|clear", "hooks": [show]}]}
     books = cfg.get("playbooks") or {}
     if books.get("enabled", True) and books.get("enforce", True):  # no Playbook plugin runs under Almanac, and enforce needs this hook
         deny = {"type": "command", "command": f'"{Path(sys.executable).as_posix()}" -m getplaybook hook pre-tool-use', "timeout": 10}

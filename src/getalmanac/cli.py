@@ -237,6 +237,8 @@ def _memory_handle():
 
 
 def _memory(rest):
+    if rest[:1] == ["banner"]:  # before the parser and the store: it must stay quiet and fast
+        return _banner(rest[1:])
     import os
 
     from . import mcp
@@ -698,6 +700,17 @@ def _review_gate(_rest):
         if reason:
             print(json.dumps({"decision": "block", "reason": reason}))
     except Exception:  # a broken gate must never stop Claude Code from finishing
+        pass
+    return 0
+
+
+def _banner(_rest):
+    """Claude Code's SessionStart hook: show the person a memory summary. Never fails, prints nothing when there is none."""
+    try:
+        text = _memory_handle().banner(os.getcwd()) if profile.banner_on(config.load()) else ""
+        if text:
+            print(json.dumps({"systemMessage": text}))
+    except Exception:  # a broken banner must never block a session start
         pass
     return 0
 

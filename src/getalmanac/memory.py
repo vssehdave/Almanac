@@ -26,7 +26,7 @@ from . import embed, semantic
 from .cheatsheet import family
 from . import request as rq
 from .match import STOP, tokens
-from .project import Projects, tool_paths
+from .project import Projects, describe, tool_paths
 from .store import STATE_FILE, State
 from .status import OPEN_KEEP, STATUSES, aged, combine, rule
 
@@ -921,6 +921,24 @@ class Memory:
                     open_work.append((e["id"], e["ts"], e["title"], e["summary"] or e["asked"]))
         key = lambda x: (-x[1], x[0])  # noqa: E731
         return sorted(decisions, key=key), sorted(open_work, key=key)
+
+    def banner(self, cwd) -> str:
+        """A few plain lines on what memory holds for the project at `cwd`, for the person only; "" when it holds nothing."""
+        key, _, _ = describe(cwd)
+        key = self.projects.resolve(key) if key else ""
+        if not key:
+            return ""
+        row = self.store.run("select count(*) n, coalesce(sum(turns), 0) t from convo where project = ? and parent = 0 and turns > 0", (key,))[0]
+        if not row["n"]:
+            return ""
+        day = lambda ts: time.strftime("%m-%d", time.localtime(ts))  # noqa: E731
+        one = lambda text: " ".join(text.split())[:80]  # noqa: E731
+        decisions, open_work = self._standing(key, None)
+        lines = [f"Almanac memory: {self.projects.name(key)} ({row['t']} exchanges, {row['n']} conversations)"]
+        for label, items in (("Decisions", decisions[:1]), ("Open", open_work[:1])):
+            lines += [f" {label:<10} [{i}] {day(ts)} {one(text)}" for i, ts, _, text in items]
+        lines += [f" Recent     {day(c['updated'])} {one(c['title'])} ({c['turns']} exchanges)" for c in self.recent(project=key, limit=2)]
+        return "\n".join([*lines, " Search: memory_search / memory_read <id>"])
 
     def recall(self, project, first_text, lane, limit_chars, tools_hint=True, agent_type=None) -> str:
         """The note added to a new conversation's first message, or "" when nothing is worth adding.
