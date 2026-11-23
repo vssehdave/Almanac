@@ -2,6 +2,7 @@ import copy
 import json
 import os
 import tempfile
+import time
 import unittest
 
 from helpers import Rig, sse
@@ -880,7 +881,7 @@ class LongTurnTest(LayerCase):
 
 
 class ColdTest(LayerCase):
-    """A request back after its cache expired is compacted from twice target_tokens (1500 here), not from the trigger."""
+    """A request back after its cache expired is compacted from 1.5 times target_tokens (1500 here), not from the trigger."""
     trigger = 10 ** 6
 
     def setUp(self):
@@ -914,6 +915,42 @@ class ColdTest(LayerCase):
         current = state["prefix"] + grown[state["covered"]:]
         self.assertEqual(record["cold"]["before"], compact.estimate(body(grown), None, current, None))
         self.assertLess(record["cold"]["before"], compact.estimate(body(grown), None, grown, None))
+
+    def test_a_cold_return_recompacts_a_stored_compaction_without_growth(self):
+        messages = history(14)
+        self.cold(messages)
+        self.rig.cfg["compaction"]["trigger_tokens"] = 1  # the stored prefix is over the trigger, so only the growth gate can hold it back
+        grown = messages[:-1] + turn(20) + [messages[-1]]  # under half the target
+        _, record = self.cold(grown)
+        self.assertEqual(record["compaction"]["fresh"], True)
+
+    def test_a_warm_request_with_little_growth_keeps_the_stored_compaction(self):
+        messages = history(14)
+        self.cold(messages)
+        self.rig.cfg["compaction"]["trigger_tokens"] = 1
+        self.rig.messages(body(copy.deepcopy(messages[:-1] + turn(20) + [messages[-1]])))
+        self.assertEqual(self.rig.records()[-1]["compaction"]["fresh"], False)
+
+    def test_a_restarted_proxy_still_sees_the_gap_since_the_last_request(self):
+        messages = history(14)
+        self.rig.messages(body(copy.deepcopy(messages)))
+        lane = self.rig.records()[-1]["lane"]
+        self.rig.proxy.last_seen.clear()  # what a restart does
+        self.assertAlmostEqual(self.rig.proxy.seen(lane), self.state.get(f"seen:{lane}"))
+        self.state.put(f"seen:{lane}", time.time() - 4000)
+        self.rig.messages(body(copy.deepcopy(messages)))
+        self.assertGreater(self.rig.records()[-1]["idle"], 3900)
+
+    def test_a_cold_sub_agent_is_outlined_under_its_limit(self):
+        self.rig.cfg["routing"]["windows"]["m"] = 1000000  # the warm limit is far above this history
+        self.rig.cfg["compaction"]["stub_tokens"] = 100000
+        extra = {"x-claude-code-agent-id": "a1"}
+        messages = long_turn(40)
+        sent, record = self.cold(messages, extra=extra, gap=4000)
+        self.assertIn("agent_outline", record["compaction"])
+        self.assertLess(len(sent), len(messages))
+        warm, record = self.cold(messages, extra={"x-claude-code-agent-id": "a2"}, gap=100)
+        self.assertEqual(len(warm), len(messages))
 
     def test_a_refused_cold_compaction_is_not_counted(self):
         self.rig.upstream.respond = lambda req: (

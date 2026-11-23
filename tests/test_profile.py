@@ -10,7 +10,7 @@ from unittest import mock
 from getalmanac import config, profile
 
 CFG = copy.deepcopy(config.DEFAULTS)
-CFG["memory"]["review_gate"] = False  # these tests are about the user's own hooks
+CFG["memory"].update(review_gate=False, banner=False)  # these tests are about the user's own hooks
 CFG["playbooks"]["enforce"] = False
 USER = {
     "model": "opus",
@@ -315,6 +315,17 @@ class LauncherTest(unittest.TestCase):
 
         with mock.patch.object(profile, "prepare", side_effect=RuntimeError("boom")):
             self.assertEqual(launcher.with_profile(["-p", "hi"], CFG), ["-p", "hi"])
+
+
+class BannerHookTest(unittest.TestCase):
+    def test_the_session_start_hook_follows_the_banner_flag(self):
+        cfg = copy.deepcopy(CFG)
+        cfg["memory"]["banner"] = True
+        on = profile.curated_settings({}, cfg)["hooks"]["SessionStart"]
+        self.assertEqual(on[0]["matcher"], "startup|clear")
+        self.assertIn("memory banner", on[0]["hooks"][0]["command"])
+        cfg["memory"]["banner"] = False
+        self.assertNotIn("SessionStart", profile.curated_settings({}, cfg).get("hooks", {}))
 
 
 if __name__ == "__main__":

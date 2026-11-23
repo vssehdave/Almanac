@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **A thread's model is chosen once.** Routing picks a thread's model on the
+  first request it sees of it (the rules, a sub-agent's `Difficulty:` line or its
+  model floor), stores it, and never changes it: not for a later turn that reads as
+  hard or simple, and not after a failure. A failure, on the main thread and in
+  sub-agents, in both modes, only raises effort to `high` in a last message (or in
+  `output_config` when the upstream refuses that message), until
+  `routing.calm_after` requests in a row come back clean. The failure ladder, the
+  per-turn choice on the main thread and the pricing of a move down are gone, with
+  `routing.ladders`, `margin`, `prices`, `work`, `effort_cost` and
+  `escalate_turns`; values left in `config.json` are ignored.
 - **Per-conversation state has its own file.** The small decisions every request
   reads and writes (compaction prefixes, stubs, recall notes, route choices, usage
   counts, the summary budget) moved from `almanac.db` to `state.db`, with its own

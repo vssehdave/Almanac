@@ -797,8 +797,25 @@ class StatusTest(Case):
         self.assertEqual(self.memory.statuses("lane"), {0: "done", 1: "superseded", 2: "open"})
         self.assertEqual(self.memory.status_counts(), {"open": 1, "done": 1, "decision": 0, "superseded": 1, "noise": 0})
 
+    def test_the_banner_summarizes_the_project_and_is_empty_for_an_unknown_one(self):
+        self.tag(("always use tabs", [said("Done.")]), ("add a retry helper", [said("Added it.")]), final="ok")
+        lines = self.memory.banner(self.alpha).splitlines()
+        self.assertTrue(lines[0].startswith("Almanac memory: ") and "(3 exchanges, 1 conversations)" in lines[0])
+        self.assertTrue(any(x.startswith(" Decisions") and "always use tabs" in x for x in lines))
+        self.assertTrue(any(x.startswith(" Recent") for x in lines))
+        self.assertEqual(lines[-1], " Search: memory_search / memory_read <id>")
+        self.assertEqual(self.memory.banner(tempfile.mkdtemp()), "")
+
 
 class CliTest(unittest.TestCase):
+    def test_the_banner_command_prints_nothing_and_exits_0_on_an_error(self):
+        from getalmanac import cli
+
+        out = io.StringIO()
+        with mock.patch.object(cli, "_memory_handle", side_effect=RuntimeError("no store")), redirect_stdout(out):
+            self.assertEqual(cli.main(["memory", "banner"]), 0)
+        self.assertEqual(out.getvalue(), "")
+
     def test_memory_and_projects_commands_run(self):
         from getalmanac import cli
 

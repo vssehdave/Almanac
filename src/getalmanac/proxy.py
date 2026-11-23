@@ -93,7 +93,9 @@ class Ctx:
         self.thread = None  # "main", "sub", "fork" or None, see rq.thread
         self.frozen_lane = ""  # where startup decisions are kept: a fork reads its parent's, so both send the same bytes
         self.stats = {}
+        self.beta = ""  # an anthropic-beta value a layer needs on the request, added to the client's own
         self.cold = False  # the cache this request would have read has expired (see Proxy.rewrite)
+        self.recompact = ""  # "ask": routing will rewrite the cached prefix, so compact as on a cold return; "on": doing so
         self.after = None  # the rewritten body, when a layer changed it
         self.orig = None  # the body as Claude Code sent it, for layers that decide from the whole history
 
@@ -121,7 +123,7 @@ class Proxy:
         self.ctx = upstream.context(cfg, self.env) if self.secure else None
         self.token = secrets.token_urlsafe(16)  # the first path segment every client request must carry
         self.key = secrets.token_urlsafe(32)  # proves this process to `almanac`; never sent in any request
-        self.last_seen = {}  # lane -> start time of its previous request
+        self.last_seen = {}  # lane -> start time of its previous request; state.db keeps it across a restart
         self.fused = {}  # lane -> why its rewrites were switched off
         self.tls = None  # a tls.Session when running as an HTTPS proxy
         self.keepalive = keepalive.Keepalive(self)  # opt-in cache pings for paused conversations (keepalive.py)
@@ -176,7 +178,7 @@ class Proxy:
             ctx.frozen_lane = rq.lane_key(ctx.session, ctx.parent, orig["messages"]) if ctx.thread == "fork" else ctx.lane
             ctx.cwd = rq.working_dir(orig)
             ctx.after, ctx.orig = None, orig
-            before = self.last_seen.get(ctx.lane) if ctx.lane else None  # the same gap `finish` logs as `idle`
+            before = self.seen(ctx.lane) if ctx.lane else None  # the same gap `finish` logs as `idle`
             ctx.cold = before is not None and is_cold(time.time() - before, cache_marks(orig)["ttl"])
             if not self.layers or self.is_fused(ctx.lane) or self.is_fused(ctx.frozen_lane):
                 return raw, orig
@@ -187,6 +189,10 @@ class Proxy:
         try:
             for layer in self.layers:
                 layer.transform(work, ctx)
+            if ctx.recompact == "ask":  # compaction runs before routing: run them all again, compacting this time
+                ctx.recompact, work = "on", json.loads(raw)
+                for layer in self.layers:
+                    layer.transform(work, ctx)
             if work == orig:
                 return raw, orig
             sent = rq.dumps(work)
@@ -195,6 +201,10 @@ class Proxy:
             return raw, orig
         ctx.after = work
         return sent, orig
+
+    def seen(self, lane):
+        """When the lane's previous request started, from memory or else from before the last restart."""
+        return self.last_seen.get(lane) or (self.state.get(f"seen:{lane}") if self.state is not None else None)
 
     def finish(self, ctx, orig, raw, sent, status, tee, started):
         reply = sse.parse(tee) if status == 200 and ctx.kind == "messages" and tee else None
@@ -210,9 +220,11 @@ class Proxy:
         if orig and ctx.kind == "messages":
             try:  # observation only: from the client's own body, and never allowed to fail the request
                 record["cache"] = cache_marks(orig)
-                before = self.last_seen.get(ctx.lane) if ctx.lane else None
+                before = self.seen(ctx.lane) if ctx.lane else None
                 if ctx.lane:
                     self.last_seen[ctx.lane] = started
+                    if self.state is not None:
+                        self.state.put(f"seen:{ctx.lane}", started)
                 if before is not None:
                     record["idle"] = round(max(0.0, started - before), 1)
                 if ctx.agent:  # which sub-agent this is, and (first request of its thread only) what it was asked, for `almanac report`
@@ -591,11 +603,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             sent, orig = proxy.rewrite(raw, ctx) if ctx else (raw, None)
         except Exception:  # fail open, whatever went wrong
             sent, orig = raw, None
+        self._beta0 = self.headers.get("anthropic-beta")  # what the client sent, to put back when a rewrite is refused
+        self._beta(ctx.beta if ctx else "")
         proxy.keepalive.begin(ctx.lane if ctx else "")  # a tick of the cache keepalive waits while a real request is in flight
         try:
             self._forward(proxy, ctx, raw, sent, orig, started)
         finally:
             proxy.keepalive.end(ctx.lane if ctx else "")
+
+    def _beta(self, add):
+        """Send the client's anthropic-beta value plus `add` (nothing added puts the client's own back)."""
+        value = ",".join(dict.fromkeys(v.strip() for x in (self._beta0, add) for v in (x or "").split(",") if v.strip()))
+        del self.headers["anthropic-beta"]
+        if value:
+            self.headers["anthropic-beta"] = value
 
     def _forward(self, proxy, ctx, raw, sent, orig, started):
         self.hold, self.switched = None, None
@@ -608,7 +629,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             auth, used, folder = self._account(ctx)  # a login known to be out of usage is skipped from the start
             resp = self._send(sent, identity=ctx is not None, authorization=auth)
-            if ctx and sent is not raw and (resp.status == 400 or (resp.status in ROUTE_REFUSED and "route" in ctx.stats)):
+            if ctx and sent is not raw and (resp.status == 400 or (resp.status in ROUTE_REFUSED and ("route" in ctx.stats or "beta" in ctx.stats))):
                 detail = resp.read()[:400].decode("utf-8", "replace")
                 routed = ctx.stats.get("route")  # kept: the loop below removes it from the stats
                 ctx.stats["fallback"] = detail
@@ -623,12 +644,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         pass
                 retry, resent = raw, False
                 # The changes most likely to be refused go first, one at a time, so the other savings stay.
-                for mark in ("route", "compaction"):
+                for mark in ("beta", "route", "compaction"):
                     if mark not in ctx.stats or proxy.state is None:
                         continue
                     if mark == "compaction":
                         ctx.stats.pop("cold", None)  # the compacted body is the one refused: nothing was saved
-                    if mark == "route":
+                    if mark == "beta":  # only the effort message: routing says the effort in output_config instead
+                        ctx.beta = ""
+                        self._beta("")
+                        _tell(proxy, "unbeta", ctx)
+                    elif mark == "route":
+                        ctx.beta = ""
+                        self._beta("")
                         _tell(proxy, "refused", ctx, resp.status, detail)
                     else:
                         try:
@@ -653,6 +680,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     retry = raw
                 if retry is raw:  # the rewrite was refused: send the original
                     if not resent:
+                        self._beta("")  # the original goes out with the client's own header too
                         resp = self._send(raw, identity=True, authorization=auth)
                         if resp.status < 400:
                             proxy.fuse(ctx.lane, detail)

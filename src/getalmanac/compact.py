@@ -78,7 +78,7 @@ MIN_STUB = 2000  # characters: a smaller tool result is not worth a stub
 FLOOR_KEEP = 4  # a long turn never keeps fewer than this many of its newest results
 RELIEF_TO = 0.75  # a pass frees room down to this share of the limit, so the next request needs no second pass
 MAX_MARKS = 4  # cache breakpoints the API takes in one request
-COLD_FLOOR = 2  # x target_tokens: a cold return is compacted from this size, since its prefix is rewritten anyway
+COLD_FLOOR = 1.5  # x target_tokens: a cold return is compacted from this size, since its prefix is rewritten anyway
 RELATED = 5  # most related exchanges listed
 RELATED_HEAD = "Earlier exchanges related to your new message:"
 MORE ="- ({n} more {what} not listed; find them with memory_search)"
@@ -394,8 +394,8 @@ class CompactLayer:
             tail = messages[state.get("at", state["covered"]):] if state else messages  # what came after the last outline
             current = (state["prefix"] + tail) if state else messages
             # After a compaction, wait for real growth before the next one: redoing it
-            # every turn would rewrite the prefix each time and waste the cache.
-            grown = not state or sum(len(json.dumps(m, ensure_ascii=False)) for m in tail) / CHARS_PER_TOKEN >= cfg["target_tokens"] / 2
+            # every turn would rewrite the prefix each time and waste the cache. A cold return rewrites it anyway.
+            grown = not state or self._cold(ctx, cfg) or sum(len(json.dumps(m, ensure_ascii=False)) for m in tail) / CHARS_PER_TOKEN >= cfg["target_tokens"] / 2
             if grown and self._estimate(body, ctx, current) >= self._trigger(ctx, cfg):
                 state, fresh = self._compact(ctx, body, messages, covered, cfg, state), True
         out = messages
@@ -416,7 +416,7 @@ class CompactLayer:
 
     @staticmethod
     def _cold(ctx, cfg) -> bool:
-        return bool(ctx.cold and cfg.get("on_cold", True))
+        return bool((ctx.cold or getattr(ctx, "recompact", "") == "on") and cfg.get("on_cold", True))
 
     @classmethod
     def _trigger(cls, ctx, cfg) -> int:
@@ -433,7 +433,7 @@ class CompactLayer:
 
     @classmethod
     def _note_cold(cls, body, ctx, before, after, acted):
-        if acted and cls._cold(ctx, ctx.cfg["compaction"]):
+        if acted and ctx.cold and cls._cold(ctx, ctx.cfg["compaction"]):  # a forced pass (recompact) is not a cold return
             ctx.stats["cold"] = {"before": before, "after": estimate(body, ctx, after, None)}
 
     def _relieve_agent(self, body, ctx):
@@ -459,6 +459,8 @@ class CompactLayer:
         grows past the limit again, the new steps are added as one more block after the old ones, which stay as they were."""
         messages, key = body["messages"], f"agentcompact:{ctx.lane}"
         limit = self._agent_limit(body, ctx, cfg)
+        if limit and self._cold(ctx, cfg):
+            limit = min(limit, int(COLD_FLOOR * cfg["target_tokens"]))  # the prefix is rewritten anyway
         if not (limit and cfg.get("agent_outline", True)):
             return messages
         state = ctx.state.get(key)
@@ -467,7 +469,7 @@ class CompactLayer:
             state = None
         current = (state["prefix"] + messages[state["covered"]:]) if state else messages
         tail = messages[state.get("at", state["covered"]):] if state else messages  # what came after the last outline
-        grown = not state or sum(len(json.dumps(m, ensure_ascii=False)) for m in tail) / CHARS_PER_TOKEN >= limit / 2  # not every request
+        grown = not state or self._cold(ctx, cfg) or sum(len(json.dumps(m, ensure_ascii=False)) for m in tail) / CHARS_PER_TOKEN >= limit / 2  # not every request
         if grown and estimate(body, ctx, current, None) >= limit:
             state = self._agent_prefix(ctx, messages, state, cfg, limit) or state
         if not state:
