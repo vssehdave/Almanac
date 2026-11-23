@@ -654,6 +654,15 @@ class LongTurnTest(LayerCase):
     def lane(self):
         return self.rig.records()[-1]["lane"]
 
+    def test_a_sub_agent_prefix_holds_byte_for_byte_from_one_request_to_the_next(self):
+        self.rig.cfg["compaction"].update(stub_tokens=6000, keep_results=6)
+        extra, sent = {"x-claude-code-agent-id": "a1"}, []
+        for n in (30, 31):  # the second request is the first plus one tool round
+            self.rig.messages(body(long_turn(n)), extra=extra)
+            sent.append(self.rig.sent()["messages"])
+        self.assertTrue(stubbed(sent[0]))
+        self.assertEqual(json.dumps(sent[1][:len(sent[0])]), json.dumps(sent[0]))
+
     def test_below_the_share_nothing_changes(self):
         raw = json.dumps(body(long_turn(10))).encode()
         self.rig.messages(raw)
