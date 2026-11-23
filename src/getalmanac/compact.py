@@ -561,6 +561,7 @@ class CompactLayer:
             limit = share * min(window, int(ctx.state.get(f"window:{ctx.lane}") or window))  # a size refusal taught the real one
             if self._cold(ctx, cfg):
                 limit = min(limit, COLD_FLOOR * cfg["target_tokens"])
+            hard = limit  # the window's own limit: holding the stubs never goes past it
             if cfg.get("stub_tokens"):  # a 1M window makes 85% far too late: every request re-reads the whole history
                 limit = min(limit, cfg["stub_tokens"])
             # The last reply's count may not be stored yet (it is written in the background): the count made when
@@ -569,6 +570,9 @@ class CompactLayer:
             seen = max(counts, key=lambda c: c["messages"], default=None)
             tokens = estimate(body, ctx, out, seen)
             if tokens < limit:
+                return len(same)
+            est = kept.get("est")  # stubbing more rewrites cached bytes: wait for the growth a pass frees
+            if est and tokens < min(hard, est["tokens"] + limit * (1 - RELIEF_TO)):
                 return len(same)
             keep, floor = int(kept.get("keep") or cfg["keep_results"]), min(FLOOR_KEEP, int(cfg["keep_results"]))
             while True:
