@@ -511,10 +511,9 @@ def _route(rest):
     log = store.get("route:log", [])[-10:]
     print("  last decisions:" if log else "  no decisions yet")
     for d in log:
-        cost = f", cost to stay {d['stay']:,} / to switch {d['switch']:,}" if d.get("stay") is not None else ""
-        outcome = f"NOT applied ({d['skip']})" if d.get("skip") else ("kept" if d["move"] in ("none", "declined", "held") and d.get("tier") == d.get("from", d.get("tier")) else "applied")  # a sub-agent's switch keeps move "none"
+        outcome = f"NOT applied ({d['skip']})" if d.get("skip") else ("kept" if d.get("tier") == d.get("from", d.get("tier")) else "applied")
         print(f"    {time.strftime('%H:%M:%S', time.localtime(d['ts']))} {d['kind']:<4} {d['tier']:<6} {d['move']:<8} {outcome}: "
-              f"{d['why']}{cost}")
+              f"{d['why']}")
     return 0
 
 

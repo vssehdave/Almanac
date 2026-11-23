@@ -239,8 +239,8 @@ def render_meter(records, now=None) -> list:
 
 
 def routing(records) -> dict:
-    """What model routing did in the log: requests per tier, moves made and declined, raises, tokens per model."""
-    out = {"tiers": {}, "moves": {}, "raised": 0, "models": {}, "unrouted": 0}
+    """What model routing did in the log: requests per tier, moves made, tokens per model."""
+    out = {"tiers": {}, "moves": {}, "models": {}, "unrouted": 0}
     for r in records:
         if r.get("kind") != "messages":
             continue
@@ -255,7 +255,6 @@ def routing(records) -> dict:
         out["tiers"][note["tier"]] = out["tiers"].get(note["tier"], 0) + 1
         if note.get("first"):
             out["moves"][note["move"]] = out["moves"].get(note["move"], 0) + 1
-            out["raised"] += bool(note.get("escalated"))
     return out
 
 
@@ -267,8 +266,7 @@ def render_routing(records) -> str:
     lines = ["", "Model routing, from the request log:",
              "  requests   " + ", ".join(f"{t} {r['tiers'].get(t, 0)}" for t in ("small", "medium", "large"))
              + (f" ({r['unrouted']} not routed)" if r["unrouted"] else ""),
-             "  moves      " + (", ".join(f"{k} {v}" for k, v in sorted(r["moves"].items())) or "none")
-             + f"; raised after failures: {r['raised']}",
+             "  moves      " + (", ".join(f"{k} {v}" for k, v in sorted(r["moves"].items())) or "none"),
              "  tokens     " + ", ".join(f"{m} {n:,}" for m, n in sorted(r["models"].items(), key=lambda kv: -kv[1]))]
     return "\n".join(lines)
 

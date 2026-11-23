@@ -555,62 +555,39 @@ almanac config set routing.mode all        # or: subagents
 - `subagents` routes only the sub-agents Claude Code starts. Your own model stays as you set it.
 - `all` routes the main conversation too.
 
-The rules are a short table in `routing.py`. A turn is judged from its length,
-its wording and the files it names, read from what you typed (pasted logs, stack
-traces and code blocks are not taken as a sign of a hard job or a failure). A turn with no sign of being easy or hard,
-such as a "why" question, a short follow-up or text that is not English, keeps
-the model you were on. A turn that says the last answer was wrong takes the next
-rung of the failure ladder (below). Fast-mode requests (`speed`) are never routed. Three tool errors in a row, or one call failing three times,
-raise the thread one rung of the failure ladder (below) while the conversation is under 30,000
-tokens; past that the model never changes, not even for a turn the rules call hard or simple, and a failure raises effort instead (below). With `routing.classifier` set to
+The rules are a short table in `routing.py`. A thread's model is chosen once, on
+the first request Almanac sees of it, and never changes after that: not for a later
+turn the rules call hard or simple, and not after a failure. The first request is
+judged from its length, its wording and the files it names, read from what you typed
+(pasted logs, stack traces and code blocks are not taken as a sign of a hard job or a
+failure). A request with no sign of being easy or hard, such as a "why" question, a
+short follow-up or text that is not English, keeps the model you were on, and so does
+one that says the last answer was wrong. Fast-mode requests (`speed`) are never routed. With `routing.classifier` set to
 `"model"`, the turns the rules are unsure about are settled by one small-model
 call. It adds a short wait (each network step gives up after 2 seconds) to that turn and uses a little of
 your allowance. It shares the daily cap on small-model calls with the summaries
 (`memory.summary_daily_calls`) and is not turned off by `memory.summary_model`.
 If the call fails, the rules decide.
 
-**The failure ladder.** A thread's model is chosen when it starts. While its
-history is under 30,000 tokens, a thread that goes wrong moves up one rung, a model
-and an effort level, never past the end of the ladder of the model it started on:
-
-| Started on | First rung | After a failure | After another |
-|---|---|---|---|
-| Haiku | Haiku, medium | Sonnet, low | Sonnet, medium (the top: a Haiku task never goes higher) |
-| Sonnet | Sonnet, medium | Opus, low | Opus, high |
-| Opus | Opus, low | Opus, high | stays at Opus, high |
-
-The ladders are `routing.ladders` and each tier's first rung is `routing.effort`;
-`routing.ceiling` still caps both. A failure is any of: `escalate_after` tool errors
-in a row (or one call failing that often) in the thread's own history, the person
-saying it went wrong, or a task that says an earlier attempt failed. The main thread
-and sub-agents alike drop back after `calm_after` requests in a row with clean tool
-results (on the main thread a move down is still priced, so it can be declined).
-When the person says an earlier attempt failed (or a task says so), the thread
-takes the next rung of its model's ladder at once, for example Haiku to Sonnet low,
-not straight to Opus.
-
-**Past 30,000 tokens a failure never changes the model.** Moving a large history to
-another model rewrites all of it into that model's cache, so once a thread (main or
-sub-agent, in either mode) has grown that large its model stays, and the one answer
-to a failure is effort `high`, said in a last message so the cached prefix and
-`output_config` stay as they were (an upstream that refuses that message gets the
-effort in `output_config` instead). It stays on until `calm_after` requests in a
-row come back with clean tool results; a new failure starts the count again. The
-main thread in `subagents` mode takes this path at any size, since its model is
-never changed there. Nothing is added when Claude Code already asks for `high` or
-more, or under a pin.
+**A failure raises effort, never the model.** A failure is any of: `escalate_after`
+tool errors in a row (or one call failing that often) in the thread's own history,
+the person saying it went wrong, or a task that says an earlier attempt failed. On the
+main thread and in sub-agents, in either mode, the one answer is effort `high`, said in
+a last message so the cached prefix and `output_config` stay as they were (an
+upstream that refuses that message gets the effort in `output_config` instead). It
+stays on until `calm_after` requests in a row come back with clean tool results; a
+new failure starts the count again. Nothing is added when Claude Code already asks
+for `high` or more, or under a pin.
 
 **Sub-agents.** A sub-agent prompt may start with `Difficulty: simple`, `standard`
 or `hard`; Almanac reads that line, or classifies the task by its rules when there
 is none, and picks the sub-agent's model. It no longer asks the model to write the
 line, since an agent's own file usually sets its model. An agent file may also set
 `effort:`, which is the sub-agent's starting effort.
-A sub-agent keeps its model until its own tool calls start failing: each run of
-`escalate_after` failures in its own thread moves its next requests one rung up
-its ladder, while it is under 30,000 tokens (past that it gets the effort message
-above). Routing never takes a sub-agent below the model its own definition
+A sub-agent keeps that model to the end; failures in its own thread raise its effort
+as above. Routing never takes a sub-agent below the model its own definition
 asked for, or inherited from its parent: a sub-agent that starts on Opus stays on
-Opus for a simple task, and climbs from there. Set `routing.route_inherited` to
+Opus for a simple task. Set `routing.route_inherited` to
 `true` to let a sub-agent that only inherited its parent's model (same model as the
 parent) be routed down by difficulty; one defined on another model keeps its
 floor. Almanac cannot tell an agent defined on the same model as its parent from
@@ -621,41 +598,14 @@ asks for no coding and no hard job keeps the model Claude Code chose for it,
 whatever the agent's type, except that a sub-agent which only inherited an Opus
 parent starts on Sonnet instead.
 
-**Switching models costs money.** Anthropic's prompt cache belongs to one
-model. If a conversation moves to another model, the whole history is written
-into that model's cache again, at the cache-write price, and the old cache goes
-cold. Almanac's memory does not change that. So on the main thread:
-
-- Once the history reaches 30,000 tokens the model never moves, up or down,
-  whatever the turn asks for; only effort does, after a failure.
-- Under that, a move **up** is made whenever the turn needs it. Getting it right beats cost.
-- A move **down** is made only if it is clearly cheaper (`routing.margin`, 20%).
-  Almanac counts the history's tokens, the price of writing them into the new
-  cache against reading them from the warm one, and the work the turn is
-  expected to take.
-- The prices in `routing.prices` are relative numbers for comparing models.
-  The defaults are list-price ratios as of 2026-11-03 for Haiku, Sonnet and
-  Opus 5.5 (the Haiku cache-read ratio is assumed, as it is not listed, and
-  Haiku costs 5 times as much above 100,000 tokens of history). Edit them if
-  your prices differ.
-- Almanac assumes a cache used last turn is still warm. After a long pause it
-  is not, so Almanac is a little too careful about moving down.
-- Effort changes the estimate: a reply at low effort costs less than one at high.
-  `routing.effort_cost` (low 0.6, medium 1.0, high 1.6) scales the expected reply
-  cost when a stay is compared with a move. It is a rough estimate, not a measured
-  number, and is used only where Claude Code sends an effort.
-- Compaction (above) keeps the history small, which keeps a move cheap.
-
-Each turn's choice is stored and reused for every request of that turn's tool
-loop, so the model does not change in the middle of a loop, except after a
-refused request, when the rest of the turn uses your own model. Moving between
-models mid-conversation was tested live in every direction, with thinking blocks
-and tool calls in the history, and the API accepted every case. Thinking blocks
-written by Opus 5.5 can only be read by some other models, so after a move off
-Opus they are dropped silently (and not billed) and the earlier reasoning is
-lost. When a tier cannot be used (refused, or the request does not fit its
-window), the turn stays on the previous model with that model's own effort, so
-the cache is kept.
+**Why the model never moves.** Anthropic's prompt cache belongs to one model. If a
+conversation moved to another model, the whole history would be written into that
+model's cache again, at the cache-write price, and the old cache would go cold. So
+each thread's choice is stored on its first request and reused for every request
+after it, except after a refused request, when the thread uses your own model. When
+a tier cannot be used (refused, or the request does not fit its window), the thread
+stays on the model Claude Code sent, with that model's own effort. Compaction
+(above) keeps the history small.
 
 **Your own choice wins.** If a request names a model other than the three in
 `routing.models`, Almanac leaves it alone, and `almanac route status` names
@@ -705,8 +655,8 @@ this as `prefix` on each conversation's first request: `diverge_at`, `index`,
 of the blocks and a 12-character hash of the login are kept, and nothing is changed
 in the request.
 
-`almanac report` and `almanac status` add requests per tier, moves made and
-declined, raises after failures, and tokens per model, read from the replies'
+`almanac report` and `almanac status` add requests per tier, moves made, and
+tokens per model, read from the replies'
 own `usage`. The request log also records the model that really answered.
 
 `almanac report` also lists the sub-agents of the latest conversation, so you
@@ -1527,14 +1477,10 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `routing.models` | Haiku, Sonnet, Opus 5.5 | The model for `small`, `medium` and `large` |
 | `routing.ceiling` | `"large"` | The highest tier routing may pick (a pin ignores it) |
 | `routing.classifier` | `"rules"` | `"model"` lets a small model settle turns the rules are unsure about |
-| `routing.effort` | medium, medium, low | Each tier's first-rung effort, set only where Claude Code already sends one; `""` keeps its value |
+| `routing.effort` | medium, medium, low | Each tier's starting effort, set only where Claude Code already sends one; `""` keeps its value |
 | `routing.route_inherited` | `false` | `true` lets a sub-agent that only inherited its parent's model be routed below it |
-| `routing.ladders` | see `config.py` | Rungs `[tier, effort]` a failing thread climbs, per starting tier |
-| `routing.effort_cost` | low 0.6, medium 1.0, high 1.6 | Estimated reply-cost factor per effort, for pricing a switch |
-| `routing.margin` | `0.2` | How much cheaper a move down must be than staying |
-| `routing.escalate_after` | `3` | Errors in a row, or one call failing this often, that raise the thread one rung |
-| `routing.calm_after` | `2` | Clean requests in a row before a raised effort, or a raised model under 30,000 tokens, drops back (`0`: never) |
-| `routing.prices`, `routing.work` | see `config.py` | Relative prices and expected work per turn, for pricing a switch |
+| `routing.escalate_after` | `3` | Errors in a row, or one call failing this often, that raise the thread's effort to `high` |
+| `routing.calm_after` | `2` | Clean requests in a row before a raised effort drops back (`0`: never) |
 | `routing.windows` | 1,000,000 each | Context window per model id (unknown ids count as 200,000) |
 | `playbooks.enabled` | `true` | Match requests against playbooks and give Claude the playbook tools |
 | `playbooks.inject` | `true` | Add the note about the matching playbook to a request |

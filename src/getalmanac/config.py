@@ -97,35 +97,10 @@ DEFAULTS = {
         "ceiling": "large",  # the highest tier routing may pick (a pin ignores it)
         "classifier": "rules",  # "model" lets a small model settle the turns the rules are unsure about
         "effort": {"small": "medium", "medium": "medium", "large": "low"},  # a tier's normal effort: set only where Claude Code already sends one; "" keeps its value
-        # After a failure a thread under 30,000 tokens moves one rung up the ladder of the tier it started on, never past
-        # its end or the ceiling. A larger thread keeps its model and is told effort "high" in a last message instead.
-        # A rung is [tier, effort]; the start itself is the first rung, at the tier's normal effort above.
-        "ladders": {
-            "small": [["medium", "low"], ["medium", "medium"]],  # Haiku -> Sonnet low -> Sonnet medium
-            "medium": [["large", "low"], ["large", "high"]],  # Sonnet -> Opus low -> Opus high
-            "large": [["large", "high"]],  # Opus low -> Opus high
-        },
-        # An ESTIMATE, not a measured number: what an effort level multiplies the reply (output and thinking) cost by,
-        # when comparing a stay with a move on the main thread. An effort that is not listed counts as 1.
-        "effort_cost": {"low": 0.6, "medium": 1.0, "high": 1.6},
-        "margin": 0.2,  # a move down on the main thread must be at least this much cheaper than staying
-        "escalate_after": 3,  # tool errors in a row, or one call failing this often, raise the thread one rung
-        "calm_after": 2,  # requests in a row with clean tool results before a raised effort, or a raised model, drops back (0: never)
-        # Relative prices per token, for comparing models only. They are list-price ratios as of 2026-11-03 for the
-        # 5.5 models (cache write 1.25x input, cache read 0.05x for Sonnet and Opus); the Haiku cache-read ratio
-        # (0.1x) is assumed, as it is not listed. cache_write and cache_read are what a prefix costs to write into,
-        # or read from, that model's cache.
-        "prices": {
-            "small": {"cache_write": 0.125, "cache_read": 0.01, "output": 0.5},
-            "medium": {"cache_write": 2.5, "cache_read": 0.1, "output": 10},
-            "large": {"cache_write": 5, "cache_read": 0.2, "output": 20},
-        },
-        # What one turn of each size is expected to cost: requests in its tool loop, new tokens and reply tokens per request.
-        "work": {
-            "small": {"steps": 1, "new_tokens": 300, "out_tokens": 300},
-            "medium": {"steps": 6, "new_tokens": 1500, "out_tokens": 800},
-            "large": {"steps": 12, "new_tokens": 2500, "out_tokens": 1500},
-        },
+        # A thread's model is chosen on its first request and never changes. A failure raises effort to "high" in a
+        # last message instead, until calm_after clean requests in a row.
+        "escalate_after": 3,  # tool errors in a row, or one call failing this often, raise the thread's effort
+        "calm_after": 2,  # requests in a row with clean tool results before a raised effort drops back (0: never)
         "windows": {"claude-haiku-5-5": 1000000, "claude-sonnet-5-5": 1000000, "claude-opus-5-5": 1000000},  # tokens; unknown ids count as 200000
     },
     # "on" appends the working rules for the answering model (Opus, Sonnet or Haiku) to each thread's system prompt
@@ -232,17 +207,9 @@ def _routing_ok(cfg) -> dict:
     if not isinstance(route, dict):
         cfg["routing"] = copy.deepcopy(DEFAULTS["routing"])
         return cfg
-    ladders, effort, cost = route.get("ladders"), route.get("effort"), route.get("effort_cost")
-    good = {
-        "ladders": isinstance(ladders, dict) and all(
-            k in tiers and isinstance(v, list) and all(isinstance(r, list) and len(r) == 2 and r[0] in tiers and r[1] in levels for r in v)
-            for k, v in ladders.items()),
-        "effort": isinstance(effort, dict) and all(k in tiers and v in ("", *levels) for k, v in effort.items()),
-        "effort_cost": isinstance(cost, dict) and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in cost.values()),
-    }
-    for key, ok in good.items():
-        if not ok:
-            route[key] = copy.deepcopy(DEFAULTS["routing"][key])
+    effort = route.get("effort")
+    if not (isinstance(effort, dict) and all(k in tiers and v in ("", *levels) for k, v in effort.items())):
+        route["effort"] = copy.deepcopy(DEFAULTS["routing"]["effort"])
     return cfg
 
 

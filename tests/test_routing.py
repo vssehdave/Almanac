@@ -220,7 +220,7 @@ class DecisionTest(Case):
         self.assertEqual(sent[0], sent[2])
         self.assertEqual(len(self.decisions()), 1)
 
-    def test_a_new_turn_is_decided_again(self):
+    def test_a_lane_first_seen_mid_conversation_is_decided_from_its_latest_turn(self):
         messages = convo([{"text": "list the files in src"}, {"text": "design a plugin system"}])
         self.assertEqual(self.send(messages, model=SMALL)["model"], LARGE)
 
@@ -291,12 +291,6 @@ class DecisionTest(Case):
         self.state.put(routing.pin_key("proj1"), "small")
         self.assertEqual(self.send(convo([{"text": "design a plugin system"}]), model=LARGE)["model"], SMALL)
 
-    def test_a_pin_to_a_lower_tier_holds_on_a_warm_cache(self):
-        self.send(convo([{"text": "write a parser in utils.py"}]))
-        self.state.put(routing.pin_key("proj1"), "small")
-        sent = self.send(convo([{"text": "write a parser in utils.py", "pad": 800000}, {"text": "design a plugin system"}]))
-        self.assertEqual(sent["model"], SMALL)
-
     def test_a_request_that_does_not_fit_a_window_moves_up(self):
         self.start(**{"routing.windows": {SMALL: 1000, MEDIUM: 1000000, LARGE: 1000000}})
         sent = self.send(convo([{"text": "list the files in src"}]), system="You are Claude Code. " + "pad " * 5000)
@@ -310,125 +304,63 @@ class DecisionTest(Case):
         self.assertIn("window", self.decisions()[-1]["why"])
 
 
-class SwitchPriceTest(Case):
-    def test_a_move_down_is_declined_when_it_is_not_cheap_enough(self):
-        self.start(**{"routing.margin": 0.99})
-        self.send(convo([{"text": "write a parser in utils.py"}]))
-        messages = convo([{"text": "write a parser in utils.py"}, {"text": "list the files in src"}])
-        sent = self.send(messages)
-        self.assertEqual(sent["model"], MEDIUM)
-        last = self.decisions()[-1]
-        self.assertEqual(last["move"], "declined")
-        self.assertGreater(last["switch"], last["stay"] * 0.01)
-
-    def test_a_move_down_is_made_when_it_is_cheap(self):
-        self.send(convo([{"text": "write a parser in utils.py"}]))
-        sent = self.send(convo([{"text": "write a parser in utils.py"}, {"text": "list the files in src"}]))
-        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (SMALL, "medium"))
-        last = self.decisions()[-1]
-        self.assertEqual(last["move"], "down")
-        self.assertLess(last["switch"], last["stay"])
-
-    def test_sonnet_to_haiku_is_cheaper_at_40k_tokens_and_not_at_80k(self):
-        cfg = self.rig.proxy.cfg["routing"]
-        cheaper = [routing.price(cfg, "small", n, False, "small") < routing.price(cfg, "medium", n, True, "small") * (1 - cfg["margin"])
-                   for n in (40000, 80000)]
-        self.assertEqual(cheaper, [True, False])
-
-    def test_a_rewound_turn_is_priced_warm_against_the_turn_before_it(self):
-        first = {"text": "write a parser in utils.py"}
-        self.send(convo([first]))
-        self.send(convo([first, {"text": "design a plugin system"}]))
-        self.send(convo([first, {"text": "design a plugin system"}, {"text": "fix cli.py"}]))
-        self.send(convo([first, {"text": "list the files in src"}]))
-        last = self.decisions()[-1]
-        dec = self.state.get(last["key"])
-        warm = routing.price(self.rig.proxy.cfg["routing"], "medium", dec["prefix"], True, "small")
-        self.assertEqual((last["from"], last["stay"]), ("medium", round(warm)))
-
-    def test_a_rewound_turn_inherits_the_tier_the_turn_before_it_ran_on(self):
-        first = {"text": "list the files in src"}
-        self.send(convo([first]))
-        self.send(convo([first, {"text": "design a plugin system"}]))
-        self.send(convo([first, {"text": "design a plugin system"}, {"text": "fix cli.py"}]))
-        self.assertEqual(self.send(convo([first, {"text": "how many tests are there?"}]))["model"], SMALL)
-
-    def test_a_move_up_is_always_made(self):
-        self.send(convo([{"text": "list the files in src"}]), model=SMALL)
-        messages = convo([{"text": "list the files in src"}, {"text": "design a plugin system"}])
-        sent = self.send(messages, model=SMALL)
-        self.assertEqual(sent["model"], LARGE)
-        self.assertEqual(self.decisions()[-1]["move"], "up")
-
-    def test_the_first_turn_has_no_warm_cache_to_lose(self):
-        sent = self.send(convo([{"text": "list the files in src"}]), model=MEDIUM)
-        self.assertEqual(sent["model"], SMALL)
-
-    def test_a_declined_move_stays_declined_for_the_whole_tool_loop(self):
-        self.start(**{"routing.margin": 0.99})
-        self.send(convo([{"text": "write a parser in utils.py"}]))
-        messages = convo([{"text": "write a parser in utils.py"}, {"text": "list the files in src"}])
-        self.send(messages)
-        self.send(messages + [{"role": "assistant", "content": [{"type": "tool_use", "id": "z", "name": "Bash", "input": {}}]},
-                              {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "z", "content": "ok"}]}])
-        self.assertEqual([json.loads(r["body"])["model"] for r in self.rig.upstream.requests[1:]], [MEDIUM, MEDIUM])
+def tool(i, err, command=None):
+    """One tool call and its result."""
+    return [{"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": "Bash", "input": {"command": command or f"try {i}"}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "x", **({"is_error": True} if err else {})}]}]
 
 
-class EscalationTest(Case):
-    def test_repeated_tool_errors_raise_the_thread_one_rung_until_calm_after_clean_requests(self):
-        turns = [{"text": "fix the bug in cli.py", "errors": 3}, {"text": "ok, try the other file b.py", "pad": 100}]
-        self.assertEqual(self.send(convo(turns))["model"], LARGE)
-        sent = self.send(convo(turns + [{"text": "continue", "pad": 100}]))  # one clean result: still raised, one rung, not two
-        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (LARGE, "low"))
-        sent = self.send(convo(turns + [{"text": "continue", "pad": 100}, {"text": "continue"}]))  # two clean: back to the start
-        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (MEDIUM, "medium"))
+def said(sent):
+    """The effort a trailing system message asks for, or None."""
+    last = sent["messages"][-1]
+    return last["output_config"]["effort"] if last["role"] == "system" else None
+
+
+class OneModelPerLaneTest(Case):
+    def step(self, messages, **kw):
+        sent = self.send(messages, **kw)
+        return sent["model"], sent["output_config"]["effort"], said(sent)
+
+    def test_the_first_request_picks_the_model_and_only_effort_answers_a_failure(self):
+        turns = [{"text": "list the files in src"}]
+        self.assertEqual(self.step(convo(turns)), (SMALL, "medium", None))  # the lane's first request picks Haiku
+        turns.append({"text": "design a plugin system for the proxy"})
+        self.assertEqual(self.step(convo(turns)), (SMALL, "medium", None))  # a hard turn later does not move it
+        turns.append({"text": "that's wrong, try again"})
+        self.assertEqual(self.step(convo(turns)), (SMALL, "medium", "high"))  # a failure raises effort, not the model
+        loop = convo(turns[:2] + [{"text": "fix cli.py"}])
+        for i in range(3):
+            loop += tool(i, True)
+        self.assertEqual(self.step(loop), (SMALL, "medium", "high"))  # three tool errors: the same
+        loop += tool(3, False)
+        self.assertEqual(self.step(loop), (SMALL, "medium", "high"))  # one clean request is not enough
+        loop += tool(4, False)
+        self.assertEqual(self.step(loop), (SMALL, "medium", None))  # calm_after (2) clean requests: back to the start
+        self.assertEqual(len(self.decisions()), 1)
+
+    def test_a_first_request_that_says_it_failed_keeps_the_model(self):
+        self.assertEqual(self.step(convo([{"text": "list the files in src"}, {"text": "that's not right, explain again"}]), model=SMALL),
+                         (SMALL, "medium", "high"))
+        self.assertIn("effort rises instead", self.decisions()[-1]["why"])
 
     def test_two_errors_are_not_enough(self):
         turns = [{"text": "fix the bug in cli.py", "errors": 2}, {"text": "ok, try the other file b.py"}]
-        self.assertEqual(self.send(convo(turns))["model"], MEDIUM)
-
-    def test_a_person_saying_it_is_still_broken_raises_the_turn(self):
-        turns = [{"text": "list the files in src"}, {"text": "that's not right, explain again"}]
-        sent = self.send(convo(turns), model=SMALL)
-        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (MEDIUM, "low"))  # said to have failed: one rung up Haiku's ladder
-        self.assertIn("failed", self.decisions()[-1]["why"])
-
-    def test_a_cached_main_thread_keeps_its_model_and_gets_the_effort_message(self):
-        for turns in ([{"text": "fix the bug in cli.py", "pad": 120000}, {"text": "that's wrong, try again"}],
-                      [{"text": "fix the bug in cli.py", "pad": 120000, "errors": 3}, {"text": "ok, try the other file b.py"}]):
-            self.start()
-            raw = body(convo(turns), MEDIUM)
-            raw["output_config"]["effort"] = "low"
-            self.rig.messages(raw, extra=MAIN)
-            sent = self.rig.sent()
-            self.assertEqual(sent["model"], MEDIUM)  # the old ladder sent this to Opus
-            self.assertEqual(sent["messages"][-1]["role"], "system")
-            self.assertEqual(sent["messages"][-1]["output_config"]["effort"], "high")
-            self.assertTrue(self.rig.upstream.requests[-1]["headers"]["anthropic-beta"].endswith(routing.EFFORT_BETA))
-
-    def test_a_cached_main_thread_keeps_its_model_whatever_a_new_turn_asks_for(self):
-        for model, first, then in ((MEDIUM, "write a parser in utils.py", "design a plugin system"),
-                                   (LARGE, "design a plugin system", "list the files in src")):
-            self.start()
-            before = self.send(convo([{"text": first}]), model=model)
-            sent = self.send(convo([{"text": first, "pad": 120000}, {"text": then}]), model=model)
-            self.assertEqual((sent["model"], sent["output_config"]["effort"]), (before["model"], before["output_config"]["effort"]))
-            self.assertEqual(sent["model"], model)
-            self.assertEqual(self.decisions()[-1]["why"], "the history is cached")
-
-    def test_the_raise_stops_at_the_top_tier(self):
-        turns = [{"text": "design a plugin system", "errors": 3}, {"text": "design a cache"}]
-        self.assertEqual(self.send(convo(turns))["model"], LARGE)
+        self.assertEqual(self.step(convo(turns)), (MEDIUM, "medium", None))
 
     def test_the_same_call_failing_over_and_over_counts(self):
         messages = convo([{"text": "fix the bug in cli.py"}])
         for i in range(3):
-            messages += [{"role": "assistant", "content": [{"type": "tool_use", "id": f"r{i}", "name": "Bash", "input": {"command": "pytest"}}]},
-                         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"r{i}", "content": "FAILED", "is_error": True}]},
-                         {"role": "assistant", "content": [{"type": "tool_use", "id": f"o{i}", "name": "Bash", "input": {"command": "ls"}}]},
-                         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"o{i}", "content": "fine"}]}]
+            messages += tool(f"r{i}", True, "pytest") + tool(f"o{i}", False, "ls")
         messages += [{"role": "assistant", "content": [{"type": "text", "text": "I could not fix it."}]}, human("try once more on b.py")]
-        self.assertEqual(self.send(messages)["model"], LARGE)
+        self.assertEqual(self.step(messages), (MEDIUM, "medium", "high"))
+
+    def test_a_large_main_thread_gets_the_effort_message_under_the_beta(self):
+        raw = body(convo([{"text": "fix the bug in cli.py", "pad": 120000}, {"text": "that's wrong, try again"}]), MEDIUM)
+        raw["output_config"]["effort"] = "low"
+        self.rig.messages(raw, extra=MAIN)
+        sent = self.rig.sent()
+        self.assertEqual((sent["model"], said(sent)), (MEDIUM, "high"))
+        self.assertTrue(self.rig.upstream.requests[-1]["headers"]["anthropic-beta"].endswith(routing.EFFORT_BETA))
 
 
 class SubagentTest(Case):
@@ -457,21 +389,17 @@ class SubagentTest(Case):
         self.assertEqual([json.loads(r["body"])["model"] for r in self.rig.upstream.requests], [SMALL, LARGE])
 
 
-    def test_a_raised_subagent_drops_back_after_two_clean_requests(self):
-        def step(i, err):
-            return [{"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": "Bash", "input": {"command": "pytest"}}]},
-                    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "x", **({"is_error": True} if err else {})}]}]
+    def test_a_failing_subagent_keeps_its_model_and_its_raised_effort_drops_back(self):
         loop = [human("Difficulty: standard\nfix the failing test")]
         for i in range(3):
-            loop += step(i, True)
-        self.rig.messages(body(loop, MEDIUM), extra=sub_headers("c"))
-        self.assertEqual(self.rig.sent()["model"], LARGE)  # three errors in a row: raised
-        loop += step(3, False)
-        self.rig.messages(body(loop, MEDIUM), extra=sub_headers("c"))
-        self.assertEqual(self.rig.sent()["model"], LARGE)  # one clean request is not enough
-        loop += step(4, False)
-        self.rig.messages(body(loop, MEDIUM), extra=sub_headers("c"))
-        self.assertEqual(self.rig.sent()["model"], MEDIUM)  # two clean: back down
+            loop += tool(i, True)
+        got = []
+        for clean in range(3):
+            self.rig.messages(body(loop, MEDIUM), extra=sub_headers("c"))
+            sent = self.rig.sent()
+            got.append((sent["model"], said(sent)))
+            loop += tool(3 + clean, False)
+        self.assertEqual(got, [(MEDIUM, "high"), (MEDIUM, "high"), (MEDIUM, None)])
 
     def test_a_large_cached_subagent_keeps_its_model_and_only_raises_effort(self):
         loop = [human("Difficulty: standard\nfix the failing test " + "x" * 120000)]
@@ -661,37 +589,36 @@ class CommandTest(unittest.TestCase):
         with mock.patch.object(cli, "_memory_handle", return_value=memory), mock.patch("builtins.print") as shown:
             self.assertEqual(cli._route(["pin", "large"]), 0)
             self.assertEqual(memory.state.get(routing.pin_key(key)), "large")
-            memory.state.put("route:log", [{"ts": 1.0, "key": "k", "kind": "main", "tier": "large", "from": "medium", "why": "w", "move": "up",
-                                     "stay": 10, "switch": 20, "skip": "", "escalated": None}])
+            memory.state.put("route:log", [{"ts": 1.0, "key": "k", "kind": "main", "tier": "large", "from": "medium", "why": "w", "move": "none", "skip": ""}])
             self.assertEqual(cli._route([]), 0)
             text = "\n".join(str(c.args[0]) for c in shown.call_args_list)
             self.assertIn("pin        large", text)
             self.assertIn(f"project    {key}", text)
-            self.assertIn("cost to stay 10 / to switch 20", text)
+            self.assertIn("large  none     applied: w", text)
             self.assertEqual(cli._route(["pin", "off"]), 0)
             self.assertIsNone(memory.state.get(routing.pin_key(key)))
             self.assertEqual(cli._route(["pin", "huge"]), 2)
 
 
 class ReportTest(unittest.TestCase):
-    def test_the_report_counts_tiers_moves_raises_and_tokens_per_model(self):
+    def test_the_report_counts_tiers_moves_and_tokens_per_model(self):
         usage = {"input_tokens": 10, "cache_creation_input_tokens": 20, "cache_read_input_tokens": 70, "output_tokens": 5}
         records = [
             {"kind": "messages", "model": MEDIUM, "answered": SMALL, "usage": usage,
              "route": {"tier": "small", "model": SMALL, "move": "down", "first": True}},
             {"kind": "messages", "model": MEDIUM, "answered": SMALL, "usage": usage, "route": {"tier": "small", "model": SMALL, "move": "down"}},
             {"kind": "messages", "model": MEDIUM, "answered": MEDIUM, "usage": usage,
-             "route_kept": {"tier": "medium", "model": MEDIUM, "move": "declined", "first": True}},
+             "route_kept": {"tier": "medium", "model": MEDIUM, "move": "held", "first": True}},
             {"kind": "messages", "model": MEDIUM, "answered": LARGE, "usage": usage,
-             "route": {"tier": "large", "model": LARGE, "move": "up", "first": True, "escalated": True}},
+             "route": {"tier": "large", "model": LARGE, "move": "up", "first": True}},
             {"kind": "messages", "model": "x", "usage": usage},
         ]
         got = report.routing(records)
         self.assertEqual(got["tiers"], {"small": 2, "medium": 1, "large": 1})
-        self.assertEqual(got["moves"], {"down": 1, "declined": 1, "up": 1})
-        self.assertEqual((got["raised"], got["unrouted"]), (1, 1))
+        self.assertEqual(got["moves"], {"down": 1, "held": 1, "up": 1})
+        self.assertEqual(got["unrouted"], 1)
         self.assertEqual(got["models"][SMALL], 210)
-        self.assertIn("raised after failures: 1", report.render_routing(records))
+        self.assertIn("moves      down 1, held 1, up 1", report.render_routing(records))
         self.assertEqual(report.render_routing([]), "")
 
     def test_the_log_carries_the_route_and_the_model_that_answered(self):
@@ -713,60 +640,33 @@ def thread(task, errors=0):
     return out
 
 
-class LadderTest(Case):
+class SubagentFailureTest(Case):
     def sub(self, task, model, errors, agent="agent-1", kind="custom"):
         self.rig.messages(body(thread(task, errors), model), extra=sub_headers(agent, kind))
         sent = self.rig.sent()
-        return sent["model"], sent["output_config"]["effort"]
+        return sent["model"], sent["output_config"]["effort"], said(sent)
 
-    def climb(self, task, model, expected, **kw):
-        got = [self.sub(task, model, n, **kw) for n in (0, 3, 6, 9)]
-        self.assertEqual(got, expected)
+    def test_failures_never_move_a_subagent_off_its_first_model(self):
+        for n, (task, model) in enumerate((("Difficulty: simple\nRead README.md.", SMALL), ("Difficulty: standard\nAdd a retry in net.py.", MEDIUM),
+                            ("Difficulty: hard\nFind why the cache returns stale rows.", LARGE))):
+            effort = self.rig.proxy.cfg["routing"]["effort"][routing._tier_of(self.rig.proxy.cfg["routing"], model)]
+            self.assertEqual([self.sub(task, MEDIUM, e, agent=f"s{n}") for e in (0, 3, 6)],
+                             [(model, effort, None), (model, effort, "high"), (model, effort, "high")])
 
-    def test_a_sonnet_subagent_climbs_to_opus_low_then_opus_high_and_stays(self):
-        self.climb("Difficulty: standard\nAdd a retry to fetch() in net.py.", MEDIUM,
-                   [(MEDIUM, "medium"), (LARGE, "low"), (LARGE, "high"), (LARGE, "high")])
-
-    def test_a_haiku_subagent_never_goes_above_sonnet_medium(self):
-        self.climb("Difficulty: simple\nRead README.md and report its first line.", SMALL,
-                   [(SMALL, "medium"), (MEDIUM, "low"), (MEDIUM, "medium"), (MEDIUM, "medium")])
-
-    def test_an_opus_subagent_runs_low_then_high_and_stays(self):
-        self.climb("Difficulty: hard\nFind why the cache returns stale rows.", LARGE,
-                   [(LARGE, "low"), (LARGE, "high"), (LARGE, "high"), (LARGE, "high")])
-
-    def test_an_agent_files_effort_is_its_start_and_a_failure_still_climbs(self):
-        from getalmanac import routing
-        routing._agent_efforts["deep-reviewer"] = ("high", "")
+    def test_an_agent_files_effort_is_its_start(self):
+        routing._agent_efforts["deep-reviewer"] = ("medium", "")
         try:
-            self.climb("Difficulty: standard\nReview net.py.", MEDIUM,
-                       [(MEDIUM, "high"), (LARGE, "low"), (LARGE, "high"), (LARGE, "high")], kind="deep-reviewer")
+            self.assertEqual(self.sub("Difficulty: standard\nReview net.py.", MEDIUM, 0, kind="deep-reviewer"), (MEDIUM, "medium", None))
+            self.start(**{"routing.effort": {"small": "low", "medium": "low", "large": "low"}})
+            self.assertEqual(self.sub("Difficulty: standard\nReview net.py.", MEDIUM, 3, agent="b", kind="deep-reviewer"), (MEDIUM, "medium", "high"))
         finally:
             routing._agent_efforts.pop("deep-reviewer", None)
 
-    def test_a_task_that_says_it_failed_takes_the_next_rung_not_the_large_tier(self):
-        self.climb("that didn't work, try again\nread README.md and report its first line.", SMALL,
-                   [(MEDIUM, "low"), (MEDIUM, "medium"), (MEDIUM, "medium"), (MEDIUM, "medium")])
-
-    def test_a_person_saying_it_failed_takes_the_next_rung_on_the_main_thread(self):
-        sent = self.send(convo([{"text": "list the files in src"}, {"text": "that didn't work, try again"}]), model=SMALL)
-        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (MEDIUM, "low"))
+    def test_a_task_that_says_it_failed_keeps_its_model_and_raises_effort(self):
+        self.assertEqual(self.sub("that didn't work, try again\nread README.md and report its first line.", SMALL, 0), (SMALL, "medium", "high"))
 
     def test_a_fork_never_moves(self):
-        self.assertEqual(self.sub("Add a retry to fetch() in net.py.", SMALL, 6, kind="fork"), (SMALL, "high"))
-
-    def test_the_main_thread_climbs_the_same_ladder(self):
-        turns = [{"text": "design a plugin system", "errors": 3}, {"text": "design a cache"}]
-        sent = self.send(convo(turns), model=LARGE)
-        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (LARGE, "high"))
-        turns = [{"text": "fix the bug in cli.py", "errors": 3}, {"text": "ok, try b.py"}]
-        sent = self.send(convo(turns))
-        self.assertEqual((sent["model"], sent["output_config"]["effort"]), (LARGE, "low"))
-
-    def test_the_ceiling_caps_the_ladder(self):
-        self.start(**{"routing.ceiling": "medium"})
-        self.climb("Difficulty: simple\nRead README.md.", SMALL, [(SMALL, "medium"), (MEDIUM, "low"), (MEDIUM, "medium"), (MEDIUM, "medium")])
-        self.assertEqual(self.sub("Difficulty: standard\nAdd a retry in net.py.", MEDIUM, 6, agent="b"), (MEDIUM, "medium"))
+        self.assertEqual(self.sub("Add a retry to fetch() in net.py.", SMALL, 6, kind="fork")[:2], (SMALL, "high"))
 
 
 def routing_default_route_inherited():
@@ -940,41 +840,16 @@ class ConfigCheckTest(unittest.TestCase):
         with mock.patch.object(config, "_file", return_value={"routing": routing}):
             return config.load()["routing"], config.DEFAULTS["routing"]
 
-    def test_a_malformed_ladder_falls_back_to_the_default(self):
-        for bad in ({"small": [["huge", "low"]]}, {"small": ["medium"]}, ["x"], {"small": [["medium"]]},
-                    {"small": [["medium", "ultra"]]}, {"huge": [["medium", "low"]]}, {"small": "medium"}):
-            got, default = self.load(ladders=bad)
-            self.assertEqual(got["ladders"], default["ladders"], bad)
+    def test_removed_keys_left_in_a_config_load_and_are_ignored(self):
+        got, default = self.load(ladders={"small": [["medium", "low"]]}, margin=0.5, prices={"small": {}}, work={}, effort_cost={"low": 1})
+        self.assertEqual(got["effort"], default["effort"])
 
-    def test_a_valid_ladder_is_kept(self):
-        got, _ = self.load(ladders={"small": [["medium", "high"]]})
-        self.assertEqual(got["ladders"]["small"], [["medium", "high"]])
-
-    def test_a_malformed_effort_or_effort_cost_falls_back_to_the_default(self):
-        got, default = self.load(effort={"large": "ultra"}, effort_cost={"low": "x"})
-        self.assertEqual((got["effort"], got["effort_cost"]), (default["effort"], default["effort_cost"]))
-        got, default = self.load(effort=["low"], effort_cost=[1])
-        self.assertEqual((got["effort"], got["effort_cost"]), (default["effort"], default["effort_cost"]))
+    def test_a_malformed_effort_falls_back_to_the_default(self):
+        for bad in ({"large": "ultra"}, ["low"]):
+            got, default = self.load(effort=bad)
+            self.assertEqual(got["effort"], default["effort"])
         got, _ = self.load(effort={"large": ""})
         self.assertEqual(got["effort"]["large"], "")
-
-
-class EffortPriceTest(Case):
-    def test_effort_scales_the_reply_cost(self):
-        cfg = self.rig.proxy.cfg["routing"]
-        low, high = (routing.price(cfg, "large", 1000, True, "medium", e) for e in ("low", "high"))
-        self.assertLess(low, high)
-        self.assertEqual(routing.price(cfg, "large", 1000, True, "medium"), routing.price(cfg, "large", 1000, True, "medium", "medium"))
-
-    def test_effort_changes_a_borderline_move_down(self):
-        def move(**overrides):
-            self.setUp()
-            self.start(**overrides)
-            self.send(convo([{"text": "design a plugin system"}]), model=LARGE)
-            sent = self.send(convo([{"text": "design a plugin system", "pad": 40000}, {"text": "fix the bug in cli.py"}]), model=LARGE)
-            return sent["model"]
-        self.assertEqual(move(**{"routing.effort_cost": {"low": 1.0, "medium": 1.0, "high": 1.0}}), MEDIUM)
-        self.assertEqual(move(), LARGE)  # Opus at low effort is estimated cheaper, so staying wins
 
 
 if __name__ == "__main__":
