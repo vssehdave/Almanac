@@ -10,7 +10,7 @@ from contextlib import redirect_stdout
 from helpers import Rig, SESSION, sse
 
 from getalmanac import cheatsheet, config, embed, mcp, project
-from getalmanac.memory import Memory, MemoryLayer, ProjectLayer, exchange, redact
+from getalmanac.memory import clean, Memory, MemoryLayer, ProjectLayer, exchange, redact
 from getalmanac.store import State, Store
 
 
@@ -805,6 +805,14 @@ class StatusTest(Case):
         self.assertTrue(any(x.startswith(" Recent") for x in lines))
         self.assertEqual(lines[-1], " Search: memory_search / memory_read <id>")
         self.assertEqual(self.memory.banner(tempfile.mkdtemp()), "")
+
+    def test_a_pasted_content_title_is_shown_without_its_tag(self):
+        self.tag(("<pasted_content id=\"1fb9\"> fix the retry loop", [said("Done.")]), final="ok")
+        self.store.run("update convo set title = ?", ('<pasted_content id="1fb9">',))
+        banner = self.memory.banner(self.alpha)
+        self.assertNotIn("pasted_content", banner)
+        self.assertRegex(banner, r"Recent +\d\d-\d\d \S")  # an empty title falls back to the first exchange
+        self.assertEqual(clean('<pasted_content id="1fb9"> hi'), "hi")
 
 
 class CliTest(unittest.TestCase):
