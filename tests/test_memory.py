@@ -380,16 +380,66 @@ class TimelineTest(Case):
         old = self.add("a", "Keep the cache small", "decision", "2026-01-01 10:00")
         self.add("d", "Early cleanup", "done", "2026-01-01 10:00")
         new = self.add("b", "Keep   the cache SMALL", "decision", "2026-01-02 09:10")
-        self.add("c", "Ship the parser", "open", "2026-01-02 09:10")
+        self.add("c", "Ship the parser", "open", "2026-01-02 09:30")
         note = self.memory.recall(self.key, "zzz", "elsewhere", 2400)
         lines = note.splitlines()
         self.assertEqual(sum("cache small" in line.lower() for line in lines), 1)
-        self.assertTrue(any(line.startswith(f"{new} 09:10 ⚖") for line in lines))
-        self.assertFalse(any(line.startswith(f"{old} ") for line in lines))
+        self.assertTrue(any(line.startswith(f"  {new} 09:10 ⚖") for line in lines))
+        self.assertFalse(any(f"{old} " in line for line in lines))
         self.assertEqual([line for line in lines if line.startswith("###")], ["### 2026-01-01", "### 2026-01-02"])
-        self.assertTrue(any(line.endswith("○ Ship the parser") and line[len(str(new)):].lstrip(" 0123456789").startswith('"') for line in lines))
+        self.assertTrue(any(line.endswith("○ Ship the parser") and line.startswith("  ") for line in lines))
         self.assertEqual(self.memory.recall(self.key, "zzz", "elsewhere", 2400), note)
         self.assertLessEqual(len(self.memory.recall(self.key, "zzz", "elsewhere", 500)), 500 + len("<system-reminder></system-reminder>") + 2)
+
+    def test_one_line_per_conversation_lists_only_its_decisions_and_open_work(self):
+        self.memory.index("g", "g", self.key, [human("first ask")], reply("ok"))
+        self.memory.index("g", "g", self.key, [human("first ask"), reply("ok"), human("second ask")], reply("ok"))
+        nodes = [r["id"] for r in self.store.run("select n.id from node n join convo c on c.id = n.convo where c.lane = 'g' and n.kind = 'leaf' order by n.seq")]
+        for node, title, status, hm in zip(nodes, ("Wire the cache", "Check the cache wiring"), ("done", "open"), ("08:00", "08:05")):
+            self.memory.set_summary(node, title, "", status)
+            self.store.run("update node set ts = ? where id = ?", (time.mktime(time.strptime("2026-01-02 " + hm, "%Y-%m-%d %H:%M")), node))
+        lines = self.memory.recall(self.key, "zzz", "elsewhere", 2400).splitlines()
+        i = next(i for i, line in enumerate(lines) if "(2 exchanges, 1 done)" in line)
+        self.assertEqual(lines[i + 1], f"  {nodes[1]} 08:05 ○ Check the cache wiring")
+        self.assertNotIn("Wire the cache", chr(10).join(lines[i + 1:]))  # the done exchange is only counted
+
+    def test_a_conversation_line_uses_its_summary_cut_at_a_word_and_counts_one_exchange(self):
+        self.memory.index("w", "w", self.key, [human("The user asked why a scanner warns about a tool after running")], reply("ok"))
+        node = self.store.run("select n.id from node n join convo c on c.id = n.convo where c.lane = 'w' and n.kind = 'leaf'")[0]["id"]
+        self.memory.set_summary(node, "Scanner warning", "", "done")
+        self.store.run("update convo set summary = ?, sumturns = 1 where lane = 'w'", ("Explained the cache cost of long conversations " * 4,))
+        line = next(x for x in self.memory.recall(self.key, "zzz", "elsewhere", 2400).splitlines() if "(1 exchange," in x)
+        self.assertIn("Explained the cache cost of long conversations", line)
+        self.assertNotIn("The user asked", line)
+        self.assertTrue(line.split(" -> ")[0].endswith("…") and len(line) < 140)
+        self.assertNotIn("1 exchanges", line)
+
+    def test_an_open_item_a_later_finished_exchange_repeats_is_not_shown_open(self):
+        self.add("a", "Fix the retry delay in the fetch module", "open", "2026-01-01 10:00")
+        self.add("b", "Fix the cache eviction order", "open", "2026-01-01 10:20")
+        self.add("c", "Merged the retry delay fix in the fetch module", "done", "2026-01-02 09:00")
+        note = self.memory.recall(self.key, "zzz", "elsewhere", 2400)
+        self.assertNotIn("○ Fix the retry delay", note)
+        self.assertIn("○ Fix the cache eviction order", note)  # nothing later finished it
+
+    def test_a_later_finished_exchange_of_the_same_conversation_closes_its_earlier_open_ones(self):
+        asks = ["first ask", "second ask", "third ask"]
+        for n in range(3):
+            self.memory.index("h", "h", self.key, [x for k in range(n) for x in (human(asks[k]), reply("ok"))] + [human(asks[n])], reply("ok"))
+        nodes = [r["id"] for r in self.store.run("select n.id from node n join convo c on c.id = n.convo where c.lane = 'h' and n.kind = 'leaf' order by n.seq")]
+        for node, title, status, hm in zip(nodes, ("Strip tags from titles", "Check the blank fallback", "Merged the title fixes"), ("open", "open", "done"), ("08:00", "08:05", "08:10")):
+            self.memory.set_summary(node, title, "", status)
+            self.store.run("update node set ts = ? where id = ?", (time.mktime(time.strptime("2026-01-02 " + hm, "%Y-%m-%d %H:%M")), node))
+        note = self.memory.recall(self.key, "zzz", "elsewhere", 2400)
+        self.assertNotIn("○", note.split("(number = memory_read id)")[1])
+        self.assertIn("(3 exchanges, 3 done)", note)
+
+    def test_rows_with_nearly_the_same_title_within_ten_minutes_count_as_one(self):
+        self.add("a", "Fix the retry delay in the fetch module", "open", "2026-01-02 10:00")
+        self.add("b", "Fix the retry delay in fetch module again", "open", "2026-01-02 10:05")
+        self.add("c", "Fix the retry delay in the fetch module now", "open", "2026-01-02 11:00")
+        note = self.memory.recall(self.key, "zzz", "elsewhere", 2400)
+        self.assertEqual(sum("○ Fix the retry delay" in line for line in note.splitlines()), 2)  # 10:00 and 10:05 are one
 
     def test_main_and_sub_agent_notes_each_hold_only_their_own_kind_of_work(self):
         self.add("m", "Main thread decision", "decision", "2026-01-02 09:00")
@@ -859,6 +909,20 @@ class StatusTest(Case):
         self.assertNotIn("pasted_content", banner)
         self.assertRegex(banner, r"Recent +\d\d-\d\d \S")  # an empty title falls back to the first exchange
         self.assertEqual(clean('<pasted_content id="1fb9"> hi'), "hi")
+
+    def test_a_title_skips_a_routing_line_and_junk_titles_are_repaired(self):
+        key = self.memory.projects.see(self.alpha)
+        brief = [human("Difficulty: standard\n\n  \nFix the retry loop in fetch"), said("Done.")]
+        self.memory.index("sub", "s", key, brief, reply("Done."))
+        self.assertEqual(self.store.run("select title from convo where lane = 'sub'")[0]["title"], "Fix the retry loop in fetch")
+        self.store.run("update convo set title = 'Difficulty: standard' where lane = 'sub'")
+        self.memory.index("empty", "s2", key, [human("add a cache"), said("Added.")], reply("Added."))
+        self.store.run("update convo set title = '  ' where lane = 'empty'")
+        Memory(self.store, self.memory.state)
+        titles = {r["lane"]: r["title"] for r in self.store.run("select lane, title from convo")}
+        self.assertEqual(titles, {"sub": "Fix the retry loop in fetch", "empty": "add a cache"})
+        Memory(self.store, self.memory.state)  # a second pass changes nothing
+        self.assertEqual({r["lane"]: r["title"] for r in self.store.run("select lane, title from convo")}, titles)
 
 
 class CliTest(unittest.TestCase):
