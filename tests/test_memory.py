@@ -403,6 +403,17 @@ class TimelineTest(Case):
         self.assertEqual(lines[i + 1], f"  {nodes[1]} 08:05 ○ Check the cache wiring")
         self.assertNotIn("Wire the cache", chr(10).join(lines[i + 1:]))  # the done exchange is only counted
 
+    def test_a_conversation_line_uses_its_summary_cut_at_a_word_and_counts_one_exchange(self):
+        self.memory.index("w", "w", self.key, [human("The user asked why a scanner warns about a tool after running")], reply("ok"))
+        node = self.store.run("select n.id from node n join convo c on c.id = n.convo where c.lane = 'w' and n.kind = 'leaf'")[0]["id"]
+        self.memory.set_summary(node, "Scanner warning", "", "done")
+        self.store.run("update convo set summary = ?, sumturns = 1 where lane = 'w'", ("Explained the cache cost of long conversations " * 4,))
+        line = next(x for x in self.memory.recall(self.key, "zzz", "elsewhere", 2400).splitlines() if "(1 exchange," in x)
+        self.assertIn("Explained the cache cost of long conversations", line)
+        self.assertNotIn("The user asked", line)
+        self.assertTrue(line.split(" -> ")[0].endswith("…") and len(line) < 140)
+        self.assertNotIn("1 exchanges", line)
+
     def test_an_open_item_a_later_finished_exchange_repeats_is_not_shown_open(self):
         self.add("a", "Fix the retry delay in the fetch module", "open", "2026-01-01 10:00")
         self.add("b", "Fix the cache eviction order", "open", "2026-01-01 10:20")

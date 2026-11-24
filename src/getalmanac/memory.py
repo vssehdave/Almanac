@@ -1021,6 +1021,12 @@ class Memory:
                 "this machine. It can be out of date: check it against the code before relying on it. " + QUOTED)
         hint = ("To read one in full or search further, load the almanac memory tools with ToolSearch "
                 "(memory_read takes the number at the start of a line).") if tools_hint else ""
+
+        def brief(text, n):
+            """One line of at most n characters, cut at a word boundary with an ellipsis."""
+            text = " ".join(text.split())
+            return text if len(text) <= n else text[:n - 1].rsplit(" ", 1)[0].rstrip(" ,;:-") + "…"
+
         lines, room = [head], limit_chars - len(head) - 1 - (len(hint) + 1 if hint else 0)
 
         seen = set()
@@ -1059,9 +1065,9 @@ class Memory:
                 if not mine or (only_open and not show):
                     continue
                 last = mine[0]
-                name = one(clean(c["title"]) or c["summary"] or last[3], 90)
+                name = brief((c["summary"] if c["sumturns"] else "") or clean(c["title"]) or last[3], 90)  # the title is the first prompt: only a fallback; a rule-made summary just joins exchange titles
                 outcome = f" -> {last[3]}" if last[2] not in ("open", "decision") and last[3] != name else ""
-                counts = f" ({len(mine)} exchanges, {sum(r[2] not in ('open', 'decision') for r in mine)} done)" if not only_open else ""
+                counts = f" ({len(mine)} exchange{'s' * (len(mine) != 1)}, {sum(r[2] not in ('open', 'decision') for r in mine)} done)" if not only_open else ""
                 icon = ""
                 for r in show:  # a row that repeats the title is shown on the conversation's line, not under it
                     if r[3].lower()[:80] == name.lower()[:80]:
