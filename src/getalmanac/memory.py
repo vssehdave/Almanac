@@ -267,6 +267,7 @@ class Memory:
         self.projects = Projects(store)
         self.kept = 0  # open conversations the last forget() left alone
         self.stamps = None  # while importing: the time of each exchange, so stored dates are the transcript's
+        self.drop_import_dupes()  # a store written before the importer skipped exchanges the proxy already kept
 
     # ---- writing -------------------------------------------------------------
 
@@ -288,6 +289,34 @@ class Memory:
             self.store.run("delete from detail_fts where rowid = ?", (node_id,))
             self._drop_facts(node_id)
             self.store.run("delete from node where id = ?", (node_id,))
+
+    def drop_import_dupes(self, session=None) -> tuple:
+        """Delete the exchanges an import stored (lane `import:...`) that the proxy had already stored for the same
+        session on another lane (same mark), then the imported conversations left empty. A live conversation is never
+        touched. Returns (exchanges removed, conversations removed)."""
+        with self.store.lock:
+            sql = ("select n.id, n.convo, n.parent, n.seq from node n join convo c on c.id = n.convo "
+                   "where n.kind = 'leaf' and n.mark not in ('', 'partial') and c.lane like 'import:%' and exists "
+                   "(select 1 from node m where m.kind = 'leaf' and m.mark = n.mark and m.convo in "
+                   "(select d.id from convo d where d.session = c.session and d.lane not like 'import:%'))")
+            rows = self.store.run(sql + (" and c.session = ?" if session else ""), (session,) if session else ())
+            if not rows:
+                return 0, 0
+            from . import library
+            self._drop_nodes([r["id"] for r in rows])
+            for r in rows:
+                library.drop_from_seq(self.store, r["convo"], r["seq"])
+            for topic in {r["parent"] for r in rows} - {None}:
+                self._refresh_topic(topic)
+            gone = 0
+            for convo in {r["convo"] for r in rows}:
+                left = self.store.run("select count(*) n from node where convo = ? and kind = 'leaf'", (convo,))[0]["n"]
+                if left:
+                    self.store.run("update convo set turns = ? where id = ?", (left, convo))
+                else:
+                    self._remove(self.store.run("select id, lane from convo where id = ?", (convo,))[0])
+                    gone += 1
+            return len(rows), gone
 
     def _drop_facts(self, node_id):
         self.store.run("delete from fact_fts where rowid in (select id from fact where node = ?)", (node_id,))

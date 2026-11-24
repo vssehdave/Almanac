@@ -302,6 +302,11 @@ def drop_from(store, convo_id, seq):
     _delete(store, [r["id"] for r in store.run("select id from library where convo = ? and seq >= ?", (convo_id, seq))])
 
 
+def drop_from_seq(store, convo_id, seq):
+    """Delete the entry of one exchange."""
+    _delete(store, [r["id"] for r in store.run("select id from library where convo = ? and seq = ?", (convo_id, seq))])
+
+
 # ---- finding and showing ---------------------------------------------------------------------------------
 
 # what a search or a list shows: enough tool calls, not a usage-only row, and not a sub-agent's exchange

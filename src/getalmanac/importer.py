@@ -326,6 +326,7 @@ def _import(memory, files, days, idle, now, only=None) -> dict:
             new = not memory.store.run("select 1 from convo where lane = ?", (lane,))
             key = memory.projects.see(root, touch=False) if root else ""
             written = _store_run(memory, lane, session, key, msgs, stamps)
+            written -= memory.drop_import_dupes(session)[0]  # exchanges the proxy already kept of this session
             following = rq.human_text(pieces[n + 1][2][0]) if n + 1 < len(pieces) else None
             _restatus_last(memory, lane, msgs, following, newest=n + 1 == len(pieces))
             if written:

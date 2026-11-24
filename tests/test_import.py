@@ -310,6 +310,44 @@ class Safety(ImportBase):
         self.assertEqual(report["skipped"]["already stored"], 0)
         self.assertEqual(len(self.leaves()), 4)
 
+    def _live_copies(self, path, lanes=("live1", "live2")):
+        patch = mock.patch.object(Memory, "_resumed")  # else the second copy (and the import) would take the first one's place
+        patch.start()
+        self.addCleanup(patch.stop)
+        part = importer.load(path)["messages"][:4]  # the first two exchanges, kept by the proxy on each lane
+        for lane in lanes:
+            self.memory.index(lane, SID, self.key(self.a), part, finished=True)
+
+    def _four(self):
+        t = self.session()
+        for i in range(4):
+            t.turn(stamp(2, i), f"question {i}", f"answer {i}")
+        return t.write()
+
+    def test_exchanges_the_proxy_kept_are_not_imported_again(self):
+        path = self._four()
+        self._live_copies(path, ("live1",))
+        self.run_import(path)
+        imported = [l for l in self.leaves() if l["lane"].startswith("import:")]
+        self.assertEqual([l["seq"] for l in imported], [2, 3])
+        marks = [r["mark"] for r in self.store.run("select mark from node where kind = 'leaf'")]
+        self.assertEqual((len(marks), len(set(marks))), (4, 4))
+
+    def test_migration_removes_imported_copies_of_live_exchanges_only(self):
+        path = self._four()
+        self._live_copies(path)
+        self.memory.index("import:" + SID + ":0", SID, self.key(self.a), importer.load(path)["messages"], finished=True)
+        self.assertEqual(len(self.leaves()), 8)
+        self.assertEqual(self.memory.drop_import_dupes(), (2, 0))
+        self.assertEqual(self.memory.drop_import_dupes(), (0, 0))  # again: nothing to do
+        rows = self.leaves()
+        self.assertEqual([(l["lane"], l["seq"]) for l in rows if l["lane"].startswith("import:")], [("import:" + SID + ":0", 2), ("import:" + SID + ":0", 3)])
+        self.assertEqual(len([l for l in rows if l["lane"].startswith("live")]), 4)
+        self.assertEqual(self.store.run("select turns from convo where lane like 'import:%'")[0]["turns"], 2)
+        self.memory.index("import:" + SID + ":1", SID, self.key(self.a), importer.load(path)["messages"][:4], finished=True)
+        self.memory.drop_import_dupes()  # a copy with nothing of its own left goes whole
+        self.assertEqual(self.store.run("select count(*) n from convo where lane = ?", ("import:" + SID + ":1",))[0]["n"], 0)
+
     def test_a_session_still_being_written_is_left_alone(self):
         path = self.session().turn(stamp(0), "typing now", "ok").write()
         os.utime(path, None)
