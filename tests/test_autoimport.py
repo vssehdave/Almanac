@@ -135,7 +135,7 @@ class Round(Base):
             self.assertTrue(autoimport._own_home())
 
     def test_a_test_proxy_never_imports_the_real_transcripts(self):
-        with mock.patch.dict(os.environ, {"ALMANAC_HOME": self.tmp}):  # a home with no config: the defaults say auto_import is on
+        with mock.patch.dict(os.environ, {"ALMANAC_HOME": self.tmp}):  # a scratch home never imports, whatever the setting
             rig = Rig(store=self.store, state=self.state)
         self.assertIsNone(rig.proxy.importing)
 

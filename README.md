@@ -1457,7 +1457,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `memory.keep_days` | `365` | Delete conversations untouched this long (`0` keeps all) |
 | `memory.summary_model` | `claude-haiku-5-5` | Model that writes exchange summaries in the background (`""` turns it off) |
 | `memory.summary_daily_calls` | `300` | Most summary calls per day |
-| `memory.auto_import` | `true` | While the proxy runs, import new Claude Code transcripts (from the login Almanac runs with: `$CLAUDE_CONFIG_DIR`, else `~/.claude`) of projects already stored, once an hour; then summarize them and make their vectors |
+| `memory.auto_import` | `false` | Off: run `almanac import` after using plain Claude Code. On: while the proxy runs, import new Claude Code transcripts (from the login Almanac runs with: `$CLAUDE_CONFIG_DIR`, else `~/.claude`) of projects already stored, once an hour; then summarize them and make their vectors |
 | `memory.auto_import_days` | `14` | Transcripts older than this many days are not imported |
 | `memory.always_load` | `false` | List the memory tools in every session start (adds their schemas) instead of loading them through ToolSearch |
 | `memory.semantic` | `true` | Search by meaning when the packages and the model are installed |
