@@ -65,7 +65,7 @@ DEFAULTS = {
         "summary_model": "claude-haiku-5-5",  # writes each exchange's title and summary in the background; "" keeps rule-written text
         "summary_daily_calls": 300,  # most summary calls per day
         "always_load": False,  # list the memory tools in every session start instead of behind ToolSearch (adds their schemas, about 1,000 tokens)
-        "auto_import": True,  # while the proxy runs: import new Claude Code transcripts of stored projects, once an hour, then summarize them and make their vectors (autoimport.py)
+        "auto_import": False,  # off: importing is manual (`almanac import`); on: while the proxy runs, import new Claude Code transcripts of stored projects, once an hour, then summarize them and make their vectors (autoimport.py)
         "auto_import_days": 14,  # transcripts older than this are not imported
         "review_gate": True,  # an Opus main thread may not end its turn while its sub-agents' work is unreviewed (a Stop hook; at most 2 holds per conversation)
         "banner": True,  # show the person a short memory summary when a session starts (a SessionStart hook; never enters the prompt)
