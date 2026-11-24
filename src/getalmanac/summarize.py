@@ -52,7 +52,8 @@ RECHECK_INSTRUCTION = ("You write notes for a project memory. The user message l
                        '{"closed": [3]}: the numbers of exchanges marked open that a later exchange finished (use [] when '
                        "none were). An open exchange is finished when a later one did what it waited on: the change was "
                        "committed or merged, the question was answered, the check or run it proposed was done, or the person "
-                       "chose against it. List it only when a later exchange shows that; never one that is still unfinished.")
+                       "chose against it. A later exchange is evidence whatever its own status: one marked open can still report that "
+                       "an earlier item was merged or done. List an item only when a later exchange shows that; never one that is still unfinished.")
 SYNTH_TIMEOUT = 25  # seconds a compaction waits for the joined notes before it goes on without them
 SYNTH_INPUT = 12000
 SYNTH_LINES = 12
