@@ -888,10 +888,11 @@ class Memory:
                                "and status = 'open' and seq < (select max(seq) from node where convo = ? and kind = 'leaf')",
                                (convo_id, number - 1, convo_id))
 
-    def digest(self, lane: str) -> str:
-        """One line per stored exchange of a conversation, for the model that summarizes it: number, status, title, summary."""
+    def digest(self, lane: str, brief: bool = False) -> str:
+        """One line per stored exchange of a conversation, for the model that summarizes it: number, status, title, summary.
+        `brief` keeps the summary only on open exchanges, so a long conversation fits whole in the re-check's input."""
         return "\n".join(
-            f"{r['seq'] + 1}. [{r['status']}] {r['title']}" + (f": {r['summary']}" if r["summary"] else "")
+            f"{r['seq'] + 1}. [{r['status']}] {r['title']}" + (f": {r['summary']}" if r["summary"] and (not brief or r["status"] == "open") else "")
             for r in self.store.run("select n.seq, n.status, n.title, n.summary from node n join convo c on c.id = n.convo "
                                     "where c.lane = ? and n.kind = 'leaf' order by n.seq", (lane,)))
 

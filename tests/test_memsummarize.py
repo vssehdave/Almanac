@@ -146,6 +146,13 @@ class Refine(ti.ImportBase):
         self.assertEqual(self.store.run("select summary from convo")[0]["summary"], "Kept as is.")
         self.assertEqual([r["status"] for r in self.store.run("select status from node where kind = 'leaf' order by seq")], ["done", "done", "open"])
 
+    def test_the_recheck_input_keeps_summaries_only_on_open_exchanges(self):
+        self.stored(n=2)
+        self.store.run("update node set summary = 'S' || seq, status = case seq when 0 then 'open' else 'done' end")
+        lane = self.store.run("select lane from convo")[0]["lane"]
+        lines = self.memory.digest(lane, brief=True).splitlines()
+        self.assertTrue(lines[0].endswith(": S0") and not lines[1].endswith(": S1"), lines)
+
     def test_the_summary_goes_through_set_summary(self):
         self.stored(n=1)
         report, out = self.refine()
