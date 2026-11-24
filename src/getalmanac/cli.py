@@ -22,7 +22,7 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac memory search WORDS  search stored conversations (--project NAME, --all)
   almanac memory show ID       read one stored exchange or topic in full
   almanac memory recent        the latest conversations, by project
-  almanac memory summarize     model summaries for imported exchanges (--project NAME, --limit N, --dry-run, --facts)
+  almanac memory summarize     model summaries for imported exchanges (--project NAME, --limit N, --dry-run, --facts, --backfill)
   almanac memory import PATH... store past Claude Code transcripts (a ~/.claude/projects folder name, folder or .jsonl; --days N, --dry-run)
   almanac memory forget        delete stored conversations (--project NAME | --conversation ID | --all; --force for open ones)
   almanac cloud packet         print the hand-off packet for a Claude Code cloud session (--conversation ID)
@@ -261,6 +261,7 @@ def _memory(rest):
     refine.add_argument("--limit", type=int, help="most calls (default: what is left of memory.summary_daily_calls today)")
     refine.add_argument("--dry-run", action="store_true", help="make no calls; print how many exchanges would be summarized")
     refine.add_argument("--facts", action="store_true", help="instead, add searchable facts to exchanges that were summarized before facts existed")
+    refine.add_argument("--backfill", action="store_true", help="instead, summarize conversations that have no model summary and close the open work later exchanges finished")
     forget = sub.add_parser("forget")
     group = forget.add_mutually_exclusive_group(required=True)
     group.add_argument("--project")
@@ -296,8 +297,9 @@ def _memory(rest):
             print("vectors: no embedding model installed (almanac semantic install)" if left is None
                   else f"vectors: {left} exchange(s) and fact(s) still wait for one" if left else "vectors: every exchange and fact has one")
     elif args.cmd == "summarize":
-        summarize.refine(memory, config.load(), project=project_key(args.project) if args.project else None,
-                         limit=args.limit, dry_run=args.dry_run, facts=args.facts)
+        (summarize.backfill if args.backfill else summarize.refine)(
+            memory, config.load(), project=project_key(args.project) if args.project else None, limit=args.limit,
+            dry_run=args.dry_run, **({} if args.backfill else {"facts": args.facts}))
     elif args.cmd == "recent":
         _print(mcp.render_projects(memory))
         print(f"exchanges by status: {_status_counts(memory)}")
