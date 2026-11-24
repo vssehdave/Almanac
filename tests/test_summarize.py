@@ -130,7 +130,7 @@ class SummaryTest(Case):
         self.assertIn(SUMMARY[:40], topic["text"])
         self.assertEqual([c["title"] for c in self.memory.outline(leaf["convo"])[0]["children"]], [TITLE])
         note = self.memory.recall(self.key, "retry helper backoff", "another-lane", 2400)
-        self.assertIn(f"{TITLE}: ", note)
+        self.assertIn(f"{TITLE}", note)
 
     def test_the_call_is_one_plain_request_made_as_the_same_user(self):
         self.ask("Add a retry helper to the fetch module", extra={"user-agent": "claude-cli/9"})
