@@ -24,6 +24,12 @@ OPEN_KEEP = 15  # an exchange this far behind the newest is no longer listed as 
 DECISION = re.compile(
     r"\b(from now on|going forward|always|never|remember that|no longer|instead of|i only need|keep it at"
     r"|don[’']?t\b[^.!?\n]{0,60}\bagain|we(?:[’']re| are) not)\b")
+# Words that say work ended. Memory reads them in a later `done` exchange to close an earlier one still marked open.
+FINISHED = re.compile(r"\b(merged|fixed|verified|committed|shipped|resolved|landed|passes|passing|completed?)\b", re.I)
+
+
+def finished(text: str) -> bool:
+    return bool(FINISHED.search(text))
 
 
 def _tools(group) -> bool:
