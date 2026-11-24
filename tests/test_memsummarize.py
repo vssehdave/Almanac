@@ -129,6 +129,23 @@ class Refine(ti.ImportBase):
         with contextlib.redirect_stdout(io.StringIO()):  # now summarized: nothing left to do
             self.assertEqual(summarize.backfill(self.memory, self.cfg)["pending"], 0)
 
+    def test_backfill_rechecks_a_summarized_conversation_once_and_dry_run_makes_no_call(self):
+        self.stored(n=3)
+        self.store.run("update node set status = 'open' where seq in (0, 2)")  # the last one is never closed by a verdict
+        self.store.run("update convo set summary = 'Kept as is.', sumturns = turns")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            dry = summarize.backfill(self.memory, self.cfg, dry_run=True)
+        self.assertEqual((dry["pending"], FakeConn.sent), (1, []))
+        self.assertIn("0 conversation(s) to summarize, 1 to re-check", out.getvalue())
+        with mock.patch.dict(ANSWER, {"closed": [1, 3]}), contextlib.redirect_stdout(io.StringIO()):
+            report = summarize.backfill(self.memory, self.cfg)
+            again = summarize.backfill(self.memory, self.cfg)
+        self.assertEqual((report["rechecked"], again["pending"], len(FakeConn.sent)), (1, 0, 1))
+        self.assertIn(summarize.RECHECK_INSTRUCTION, [b["text"] for b in FakeConn.sent[0]["body"]["system"]])
+        self.assertEqual(self.store.run("select summary from convo")[0]["summary"], "Kept as is.")
+        self.assertEqual([r["status"] for r in self.store.run("select status from node where kind = 'leaf' order by seq")], ["done", "done", "open"])
+
     def test_the_summary_goes_through_set_summary(self):
         self.stored(n=1)
         report, out = self.refine()

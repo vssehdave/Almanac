@@ -261,7 +261,8 @@ class Memory:
                                 ("parent", "integer not null default 0"),  # parent: the conversation a sub-agent's work is filed under
                                 ("agent_type", "text not null default ''"),
                                 ("review", "text not null default ''"),  # '' main thread; 'pending' sub-agent work; 'reviewed' once an Opus model signed it off
-                                ("review_note", "text not null default ''")):
+                                ("review_note", "text not null default ''"),
+                                ("closecheck", "integer not null default 0")):  # closecheck: exchanges the model last judged for closed open work
                 if column not in have:  # a database written before conversation summaries
                     store.run(f"alter table convo add column {column} {ddl}")
                     if column == "review":  # sub-agent work stored before reviews existed is unreviewed too
@@ -878,8 +879,10 @@ class Memory:
 
     def close_open(self, convo_id, numbers):
         """Store a model's verdict that these exchanges (numbers from 1) were finished by later work. Only an exchange that is
-        still open and has a later one changes: the verdict goes in `mstatus`, which status.combine keeps."""
+        still open and has a later one changes: the verdict goes in `mstatus`, which status.combine keeps.
+        `closecheck` records that the conversation was judged at its current length, so it is not asked again."""
         with self.store.lock:
+            self.store.run("update convo set closecheck = turns where id = ?", (convo_id,))
             for number in numbers:
                 self.store.run("update node set status = 'done', mstatus = 'done' where convo = ? and kind = 'leaf' and seq = ? "
                                "and status = 'open' and seq < (select max(seq) from node where convo = ? and kind = 'leaf')",
