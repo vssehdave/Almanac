@@ -100,10 +100,13 @@ def _quote(text: str) -> str:
     return _BREAK.sub("\n  | ", text)
 
 
+_ROUTING = re.compile(r"difficulty:\s*\w+$", re.I)  # a sub-agent brief starts with its routing line
+
+
 def _first_line(text: str, limit=100) -> str:
     for line in text.splitlines():
         line = " ".join(line.split())
-        if len(line) > 2:
+        if len(line) > 2 and not _ROUTING.match(line):
             return line[:limit].rstrip() + ("…" if len(line) > limit else "")
     return ""
 
@@ -268,6 +271,7 @@ class Memory:
         self.kept = 0  # open conversations the last forget() left alone
         self.stamps = None  # while importing: the time of each exchange, so stored dates are the transcript's
         self.drop_import_dupes()  # a store written before the importer skipped exchanges the proxy already kept
+        self._retitle()
 
     # ---- writing -------------------------------------------------------------
 
@@ -621,9 +625,11 @@ class Memory:
                 "select title from node where convo = ? and kind = 'leaf' and status != 'noise' "
                 "order by status = 'decision' desc, seq limit 4", (convo["id"],))]
             self.store.run("update convo set turns = ?, updated = ?, project = ?, last_user = ?, last_reply = ?, "
-                           "summary = case when sumturns = 0 then ? else summary end where id = ?",
+                           "summary = case when sumturns = 0 then ? else summary end, "
+                           "title = case when title = '' then ? else title end where id = ?",
                            (len(turns) if finished else len(turns) - 1, self._at(len(turns) - 1),
-                            main[0]["project"] if main else project, last[0], last[1], "; ".join(titles)[:300], convo["id"]))
+                            main[0]["project"] if main else project, last[0], last[1], "; ".join(titles)[:300],
+                            self._first_exchange(convo["id"]), convo["id"]))
             return written
 
     # ---- reading -------------------------------------------------------------
@@ -844,9 +850,25 @@ class Memory:
         return rows
 
     def _first_exchange(self, convo_id) -> str:
-        """A title for a conversation whose own title was only a tag: its first exchange's summary, else its text."""
+        """A title for a conversation whose own title is empty or a routing line: its first exchange's summary,
+        else what was asked, else the answer."""
         rows = self.store.run("select summary, text from node where convo = ? and kind = 'leaf' order by seq limit 1", (convo_id,))
-        return _first_line(rows[0]["summary"] or rows[0]["text"]) if rows else ""
+        if not rows:
+            return ""
+        asked, _, answer = rows[0]["text"].partition("\n\nAnswer: ")
+        for part in (rows[0]["summary"], asked.removeprefix("Asked: "), answer):
+            if _first_line(part):
+                return _first_line(part)
+        return ""
+
+    def _retitle(self):
+        """Give the conversations stored with a junk title (blank, or only a routing line) one from their first exchange."""
+        with self.store.lock:
+            for row in self.store.run("select id, title from convo"):
+                if not _first_line(row["title"]):
+                    found = self._first_exchange(row["id"])
+                    if found:
+                        self.store.run("update convo set title = ? where id = ?", (found, row["id"]))
 
     def set_convo_summary(self, convo_id, summary, turns):
         """Give a conversation a model-written summary, covering its first `turns` exchanges."""
