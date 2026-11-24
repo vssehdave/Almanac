@@ -860,6 +860,20 @@ class StatusTest(Case):
         self.assertRegex(banner, r"Recent +\d\d-\d\d \S")  # an empty title falls back to the first exchange
         self.assertEqual(clean('<pasted_content id="1fb9"> hi'), "hi")
 
+    def test_a_title_skips_a_routing_line_and_junk_titles_are_repaired(self):
+        key = self.memory.projects.see(self.alpha)
+        brief = [human("Difficulty: standard\n\n  \nFix the retry loop in fetch"), said("Done.")]
+        self.memory.index("sub", "s", key, brief, reply("Done."))
+        self.assertEqual(self.store.run("select title from convo where lane = 'sub'")[0]["title"], "Fix the retry loop in fetch")
+        self.store.run("update convo set title = 'Difficulty: standard' where lane = 'sub'")
+        self.memory.index("empty", "s2", key, [human("add a cache"), said("Added.")], reply("Added."))
+        self.store.run("update convo set title = '  ' where lane = 'empty'")
+        Memory(self.store, self.memory.state)
+        titles = {r["lane"]: r["title"] for r in self.store.run("select lane, title from convo")}
+        self.assertEqual(titles, {"sub": "Fix the retry loop in fetch", "empty": "add a cache"})
+        Memory(self.store, self.memory.state)  # a second pass changes nothing
+        self.assertEqual({r["lane"]: r["title"] for r in self.store.run("select lane, title from convo")}, titles)
+
 
 class CliTest(unittest.TestCase):
     def test_the_banner_command_prints_nothing_and_exits_0_on_an_error(self):
