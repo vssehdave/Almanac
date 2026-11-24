@@ -479,13 +479,15 @@ class CompactLayer:
 
     @staticmethod
     def _agent_limit(body, ctx, cfg) -> int:
-        """Tokens past which a sub-agent is outlined: stub_tokens, or the window share when that is smaller; 0 is off."""
+        """Tokens past which a sub-agent is outlined: agent_stub_tokens (stub_tokens when unset), or the window share
+        when that is smaller; 0 is off."""
         from . import routing  # routing imports this module
         if not cfg.get("stub_tokens"):
             return 0
+        cut = int(cfg.get("agent_stub_tokens") or cfg["stub_tokens"])
         window = routing.window(ctx.cfg["routing"], str(body.get("model") or ""))
         share = float(cfg.get("window_share") or 0) * min(window, int(ctx.state.get(f"window:{ctx.lane}") or window))
-        return int(min(cfg["stub_tokens"], share) if share > 0 else cfg["stub_tokens"])
+        return int(min(cut, share) if share > 0 else cut)
 
     def _agent_prefix(self, ctx, messages, state, cfg, limit):
         cut = len(messages) - 2 * int(cfg["keep_results"])  # the newest steps stay whole

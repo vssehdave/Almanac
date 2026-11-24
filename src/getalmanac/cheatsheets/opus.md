@@ -57,6 +57,11 @@ are the method, in the order a task runs.
   sets its model and effort, and Almanac moves it up a level when it keeps
   failing. At most four agents at once. You keep the decisions, the briefs,
   the review and the report; small edits you do yourself.
+- One agent per commit-sized task. Split a long job into several short
+  agents in sequence rather than one long run: a long run re-reads its whole
+  history on every step and gets its cache rewritten when it is cut. Each new
+  agent of the same type finds the earlier ones' work in memory; name the
+  files it must read in the brief so it does not search for them.
 - When an agent finishes, check its claims against the code or output, then
   call memory_review with a one-line verdict.
 - An agent starts knowing nothing. Its brief holds everything it needs: the

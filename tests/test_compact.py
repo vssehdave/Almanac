@@ -865,7 +865,7 @@ class LongTurnTest(LayerCase):
 
     def test_a_long_sub_agent_gets_an_outline_and_keeps_it(self):
         self.rig.cfg["routing"]["windows"]["m"] = 1000000
-        self.rig.cfg["compaction"]["stub_tokens"] = 6000
+        self.rig.cfg["compaction"].update(stub_tokens=6000, agent_stub_tokens=6000)
         extra = {"x-claude-code-agent-id": "a1"}
         self.rig.messages(body(copy.deepcopy(long_turn(40))), extra=extra)
         first = json.loads(self.rig.upstream.requests[-1]["body"])["messages"]
@@ -949,6 +949,17 @@ class ColdTest(LayerCase):
         self.state.put(f"seen:{lane}", time.time() - 4000)
         self.rig.messages(body(copy.deepcopy(messages)))
         self.assertGreater(self.rig.records()[-1]["idle"], 3900)
+
+    def test_a_sub_agent_cut_has_its_own_threshold(self):
+        cfg = self.rig.cfg["compaction"]
+        cfg.update(stub_tokens=120000, agent_stub_tokens=100000, window_share=0)
+        ctx = type("C", (), {"cfg": self.rig.cfg, "lane": "x", "state": {}})()
+        limit = lambda: CompactLayer._agent_limit({"model": "m"}, ctx, cfg)  # noqa: E731
+        self.assertEqual(limit(), 100000)
+        cfg["agent_stub_tokens"] = 0
+        self.assertEqual(limit(), 120000)
+        cfg["stub_tokens"] = 0
+        self.assertEqual(limit(), 0)
 
     def test_a_cold_sub_agent_is_outlined_under_its_limit(self):
         self.rig.cfg["routing"]["windows"]["m"] = 1000000  # the warm limit is far above this history
