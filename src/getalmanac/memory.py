@@ -28,7 +28,7 @@ from . import request as rq
 from .match import STOP, tokens
 from .project import Projects, describe, tool_paths
 from .store import STATE_FILE, State
-from .status import OPEN_KEEP, STATUSES, aged, combine, finished, rule
+from .status import OPEN_KEEP, STALE_DAYS, STATUSES, aged, combine, finished, rule
 
 SCHEMA = """
 create table if not exists convo (
@@ -876,6 +876,15 @@ class Memory:
         """Give a conversation a model-written summary, covering its first `turns` exchanges."""
         self.store.run("update convo set summary = ?, sumturns = ? where id = ? and sumturns <= ?", (summary, turns, convo_id, turns))
 
+    def close_open(self, convo_id, numbers):
+        """Store a model's verdict that these exchanges (numbers from 1) were finished by later work. Only an exchange that is
+        still open and has a later one changes: the verdict goes in `mstatus`, which status.combine keeps."""
+        with self.store.lock:
+            for number in numbers:
+                self.store.run("update node set status = 'done', mstatus = 'done' where convo = ? and kind = 'leaf' and seq = ? "
+                               "and status = 'open' and seq < (select max(seq) from node where convo = ? and kind = 'leaf')",
+                               (convo_id, number - 1, convo_id))
+
     def digest(self, lane: str) -> str:
         """One line per stored exchange of a conversation, for the model that summarizes it: number, status, title, summary."""
         return "\n".join(
@@ -1039,13 +1048,18 @@ class Memory:
             items = [[e["id"], e["ts"], e["status"], one(e["title"] or e["summary"] or e["asked"], 90), c["id"]]
                      for c in convos for e in self.exchanges(c["id"]) if e["status"] != "noise"]
             items = sorted((r for r in items if r[3]), key=lambda r: (-r[1], -r[0]))  # newest first
-            for r in items:  # a row whose own title says the work ended is done whatever was stored
-                if r[2] == "open" and finished(r[3]):
+            summarized = {c["id"] for c in convos if c["sumturns"]}  # a model's verdicts are stored; only the others get the word match
+            for i, r in enumerate(items):
+                if r[2] != "open":
+                    continue
+                newer = items[:i]
+                if r[4] not in summarized and finished(r[3]):  # its own title says the work ended
                     r[2] = "done"
-            for i, r in enumerate(items):  # an open row is done once a later finished row of its conversation, or one that repeats its words, says so
-                if r[2] == "open" and any(later[2] == "done" and finished(later[3]) and later[1] > r[1] and
-                                          (later[4] == r[4] or len(words(r[3]) & words(later[3])) >= CLOSE_OVERLAP * len(words(r[3])))
-                                          for later in items[:i]):
+                elif r[4] not in summarized and any(  # a later finished row of its conversation, or one that repeats its words
+                        x[2] == "done" and finished(x[3]) and x[1] > r[1] and
+                        (x[4] == r[4] or len(words(r[3]) & words(x[3])) >= CLOSE_OVERLAP * len(words(r[3]))) for x in newer):
+                    r[2] = "done"
+                elif aged(r[2], r[1], STALE_DAYS) == "done" and any(x[4] == r[4] and x[2] == "done" and x[1] > r[1] for x in newer):
                     r[2] = "done"
             kept = []
             for r in items:  # one row per text, and per near-same title within minutes (the newest keeps it)
@@ -1065,7 +1079,8 @@ class Memory:
                 if not mine or (only_open and not show):
                     continue
                 last = mine[0]
-                name = brief((c["summary"] if c["sumturns"] else "") or clean(c["title"]) or last[3], 90)  # the title is the first prompt: only a fallback; a rule-made summary just joins exchange titles
+                settled = next((r[3] for r in mine if r[2] == "done"), "")  # no model summary: the newest finished exchange says where it got to (a decision is listed under the line)
+                name = brief((c["summary"] if c["sumturns"] else settled) or clean(c["title"]) or last[3], 90)  # the title is the first prompt: a late fallback
                 outcome = f" -> {last[3]}" if last[2] not in ("open", "decision") and last[3] != name else ""
                 counts = f" ({len(mine)} exchange{'s' * (len(mine) != 1)}, {sum(r[2] not in ('open', 'decision') for r in mine)} done)" if not only_open else ""
                 icon = ""

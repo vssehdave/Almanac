@@ -25,11 +25,16 @@ DECISION = re.compile(
     r"\b(from now on|going forward|always|never|remember that|no longer|instead of|i only need|keep it at"
     r"|don[’']?t\b[^.!?\n]{0,60}\bagain|we(?:[’']re| are) not)\b")
 # Words that say work ended. Memory reads them in a later `done` exchange to close an earlier one still marked open.
-FINISHED = re.compile(r"\b(merged|fixed|verified|committed|shipped|resolved|landed|passes|passing|completed?)\b", re.I)
+_DONE = r"(?:merged|fixed|verified|committed|shipped|resolved|landed|passes|passing|completed?)"
+FINISHED = re.compile(rf"\b{_DONE}\b", re.I)
+# A finished word that is negated ("not passing", "aren't fixed"), or a word that says work stands open, cancels the match.
+UNFINISHED = re.compile(rf"\b(?:not|no|never|\w+n[’']t)\W+(?:\w+\W+){{0,2}}?{_DONE}\b"
+                        r"|\b(?:unmerged|unfixed|unverified|unresolved|uncommitted|failing|failed|pending)\b", re.I)
+STALE_DAYS = 3  # open work this old, in a conversation that went on to finish other work, is shown as done
 
 
 def finished(text: str) -> bool:
-    return bool(FINISHED.search(text))
+    return bool(FINISHED.search(text)) and not UNFINISHED.search(text)
 
 
 def _tools(group) -> bool:
@@ -68,6 +73,6 @@ def combine(by_rule: str, by_model: str = "") -> str:
     return by_model
 
 
-def aged(status: str, ts: float) -> str:
-    """`open` becomes `done` for an exchange older than OLD_DAYS. A transcript imported late must not read as live work."""
-    return "done" if status == "open" and time.time() - ts > OLD_DAYS * 86400 else status
+def aged(status: str, ts: float, days: float = OLD_DAYS) -> str:
+    """`open` becomes `done` for an exchange older than `days`. A transcript imported late must not read as live work."""
+    return "done" if status == "open" and time.time() - ts > days * 86400 else status

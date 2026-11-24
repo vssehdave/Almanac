@@ -434,6 +434,49 @@ class TimelineTest(Case):
         self.assertNotIn("○", note.split("(number = memory_read id)")[1])
         self.assertIn("(3 exchanges, 3 done)", note)
 
+    def two(self, lane, titles, statuses, when, summary=""):
+        """A conversation of two exchanges with the given titles and statuses; `when` is [day, day]."""
+        self.memory.index(lane, lane, self.key, [human("opening ask")], reply("ok"))
+        self.memory.index(lane, lane, self.key, [human("opening ask"), reply("ok"), human("closing ask")], reply("ok"))
+        nodes = [r["id"] for r in self.store.run("select n.id from node n join convo c on c.id = n.convo where c.lane = ? and n.kind = 'leaf' order by n.seq", (lane,))]
+        for node, title, status, day in zip(nodes, titles, statuses, when):
+            self.memory.set_summary(node, title, "", status)
+            self.store.run("update node set ts = ? where id = ?", (time.mktime(time.strptime(day, "%Y-%m-%d %H:%M")), node))
+        if summary:
+            self.store.run("update convo set summary = ?, sumturns = 2 where lane = ?", (summary, lane))
+        return nodes
+
+    def test_without_a_model_summary_the_line_names_the_newest_finished_exchange(self):
+        self.two("t", ("Wired the cache", "Check the wiring"), ("done", "open"), ("2026-01-02 08:00", "2026-01-02 08:05"))
+        note = self.memory.recall(self.key, "zzz", "elsewhere", 2400)
+        self.assertIn("Wired the cache (2 exchanges, 1 done)", note)
+        self.assertNotIn("opening ask (", note)
+
+    def test_a_negated_phrase_does_not_close_an_open_item(self):
+        from getalmanac.status import finished
+        self.assertTrue(finished("Merged the fix") and finished("tests passing"))
+        for text in ("tests not passing", "the fixes aren't fixed", "unmerged branch", "still failing", "merge pending"):
+            self.assertFalse(finished(text), text)
+
+    def test_an_open_item_older_than_three_days_is_done_when_later_work_is_done(self):
+        now = time.time()
+        stamp = lambda days: time.strftime("%Y-%m-%d %H:%M", time.localtime(now - days * 86400))  # noqa: E731
+        self.two("old", ("Look into the flaky test", "Rename the helper"), ("open", "done"), (stamp(5), stamp(4)))
+        self.two("new", ("Look into the slow query", "Rename the module"), ("open", "done"), (stamp(2), stamp(1)))
+        note = self.memory.recall(self.key, "zzz", "elsewhere", 2400)
+        self.assertNotIn("○ Look into the flaky test", note)
+        self.assertIn("○ Look into the slow query", note)  # too young to age out
+
+    def test_a_stored_model_verdict_closes_an_item_and_a_summarized_conversation_skips_the_word_match(self):
+        nodes = self.two("v", ("Fix the parser crash", "Merged the parser fix"), ("open", "done"),
+                         (time.strftime("%Y-%m-%d %H:%M", time.localtime(time.time() - 7200)), time.strftime("%Y-%m-%d %H:%M", time.localtime(time.time() - 3600))), summary="Parser work.")  # recent, so age does not close it
+        self.store.run("update node set status = 'open', mstatus = '' where id = ?", (nodes[0],))  # as the rules stored it, before any verdict
+        self.assertIn("○ Fix the parser crash", self.memory.recall(self.key, "zzz", "elsewhere", 2400))  # the word match is not used here
+        self.memory.close_open(self.store.run("select convo from node where id = ?", (nodes[0],))[0]["convo"], [1, 2])
+        self.assertNotIn("○ Fix the parser crash", self.memory.recall(self.key, "zzz", "elsewhere", 2400))
+        row = self.store.run("select status, mstatus from node where id = ?", (nodes[0],))[0]
+        self.assertEqual((row["status"], row["mstatus"]), ("done", "done"))
+
     def test_rows_with_nearly_the_same_title_within_ten_minutes_count_as_one(self):
         self.add("a", "Fix the retry delay in the fetch module", "open", "2026-01-02 10:00")
         self.add("b", "Fix the retry delay in fetch module again", "open", "2026-01-02 10:05")
