@@ -54,7 +54,7 @@ class OnlyAnswersAreRecalledTest(unittest.TestCase):
 
     def test_an_answer_match_is_still_recalled(self):
         note = self.memory.recall("proj", "importer bad row", "lane-2", 2400)
-        self.assertIn("importer fails on a bad row", note)
+        self.assertIn("Why does the importer fail on the nightly file?", note)  # now a timeline row, so not repeated as a hit
 
 
 def skill_turn(body_text):

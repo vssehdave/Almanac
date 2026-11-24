@@ -128,9 +128,8 @@ class Recall(Base):
         t.turn(ti.stamp(0, 0), "Finish the parser rewrite, then check the exporter", "Partly done, what next?")
         self.run_import(t.write())
         note = self.memory.recall(self.key(self.a), "parser rewrite", "new-lane", 2400)
-        self.assertIn("Standing decisions", note)
-        self.assertIn("never touch the legacy exporter", note)
-        self.assertLess(note.index("Standing decisions"), note.index("Open work:") if "Open work:" in note else len(note))
+        self.assertIn("\u2696 From now on never touch the legacy exporter", note)  # an old decision stays beyond the newest rows
+        self.assertIn("○ Finish the parser rewrite", note)
         self.assertLessEqual(len(note), 2400 + len("<system-reminder>\n\n</system-reminder>"))
         for limit in (600, 1200):
             small = self.memory.recall(self.key(self.a), "parser rewrite", "new-lane", limit)
@@ -141,8 +140,8 @@ class Recall(Base):
         t.turn(ti.stamp(0, 5), "Start the zebra refactor now", "I began; shall I go on?")
         self.run_import(t.write())
         note = self.memory.recall(self.key(self.a), "zebra", "other", 2400)
-        self.assertIn("Open work:", note)
-        self.assertEqual(len([line for line in note.splitlines() if line.startswith("- [") and "zebra cache small" in line]), 1)
+        self.assertIn("○ Start the zebra refactor now", note)
+        self.assertEqual(len([line for line in note.splitlines() if "zebra cache small" in line]), 1)
 
 if __name__ == "__main__":
     unittest.main()

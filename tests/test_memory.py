@@ -3,6 +3,7 @@ import json
 import os
 import sqlite3
 import tempfile
+import time
 import unittest
 from unittest import mock
 from contextlib import redirect_stdout
@@ -298,8 +299,8 @@ class RecallTest(Case):
         self.assertEqual(content[-1]["text"], "the proxy cache drops again after loading a tool")
         note = content[-2]["text"]
         self.assertTrue(note.startswith("<system-reminder>\nAlmanac memory for this project (alpha)"))
-        self.assertIn("rewrote the tools array", note)
-        self.assertIn("Most recent conversations:", note)
+        self.assertIn("Why does the proxy drop the cache", note)  # a timeline row; a hit already there is not repeated
+        self.assertIn("Legend: ", note)
         self.assertEqual(self.rig.records()[-1]["memory"]["recall_chars"], len(note))
 
     def test_the_main_thread_leaves_its_lane_and_answering_model_under_one_key(self):
@@ -332,7 +333,7 @@ class RecallTest(Case):
     def test_naming_the_project_from_another_folder_recalls_it(self):
         self.memory.projects.see(self.beta)
         self.rig.messages(self.body("In the alpha repo the proxy cache drops again after a tool loads", cwd=self.beta))
-        self.assertIn("rewrote the tools array", self.rig.sent()["messages"][0]["content"][-2]["text"])
+        self.assertIn("Why does the proxy drop the cache", self.rig.sent()["messages"][0]["content"][-2]["text"])
 
     def test_the_conversation_is_indexed_after_the_reply(self):
         self.rig.upstream.respond = lambda req: (200, {"content-type": "text/event-stream"}, sse("Use a sticky tool set."))
@@ -360,6 +361,51 @@ class RecallTest(Case):
         raw = json.dumps(body).encode()
         self.rig.messages(raw)
         self.assertEqual(self.rig.upstream.requests[-1]["body"], raw)
+
+
+class TimelineTest(Case):
+    def setUp(self):
+        super().setUp()
+        self.key = self.memory.projects.see(self.alpha)
+
+    def add(self, lane, title, status, when, parent=0, agent_type=""):
+        said = "From now on never touch the legacy exporter" if status == "decision" else f"asked {lane}"  # only the person's words make a decision
+        self.memory.index(lane, lane, self.key, [human(said)], reply("ok"), parent=parent, agent_type=agent_type)
+        node = self.store.run("select n.id from node n join convo c on c.id = n.convo where c.lane = ? and n.kind = 'leaf'", (lane,))[0]["id"]
+        self.memory.set_summary(node, title, "", "" if status == "decision" else status)
+        self.store.run("update node set ts = ? where id = ?", (time.mktime(time.strptime(when, "%Y-%m-%d %H:%M")), node))
+        return node
+
+    def test_the_note_is_a_day_grouped_timeline_that_shows_a_repeated_decision_once(self):
+        old = self.add("a", "Keep the cache small", "decision", "2026-01-01 10:00")
+        self.add("d", "Early cleanup", "done", "2026-01-01 10:00")
+        new = self.add("b", "Keep   the cache SMALL", "decision", "2026-01-02 09:10")
+        self.add("c", "Ship the parser", "open", "2026-01-02 09:10")
+        note = self.memory.recall(self.key, "zzz", "elsewhere", 2400)
+        lines = note.splitlines()
+        self.assertEqual(sum("cache small" in line.lower() for line in lines), 1)
+        self.assertTrue(any(line.startswith(f"{new} 09:10 ⚖") for line in lines))
+        self.assertFalse(any(line.startswith(f"{old} ") for line in lines))
+        self.assertEqual([line for line in lines if line.startswith("###")], ["### 2026-01-01", "### 2026-01-02"])
+        self.assertTrue(any(line.endswith("○ Ship the parser") and line[len(str(new)):].lstrip(" 0123456789").startswith('"') for line in lines))
+        self.assertEqual(self.memory.recall(self.key, "zzz", "elsewhere", 2400), note)
+        self.assertLessEqual(len(self.memory.recall(self.key, "zzz", "elsewhere", 500)), 500 + len("<system-reminder></system-reminder>") + 2)
+
+    def test_main_and_sub_agent_notes_each_hold_only_their_own_kind_of_work(self):
+        self.add("m", "Main thread decision", "decision", "2026-01-02 09:00")
+        parent = self.store.run("select id from convo where lane = 'm'")[0]["id"]
+        self.add("s1", "Builder shipped the parser", "done", "2026-01-02 10:00", parent, "builder")
+        self.add("s2", "Explorer mapped the cache", "done", "2026-01-02 11:00", parent, "explorer")
+        main = self.memory.recall(self.key, "zzz", "elsewhere", 2400)
+        self.assertIn("Main thread decision", main)
+        self.assertNotIn("Builder shipped", main)
+        self.assertNotIn("Explorer mapped", main)
+        note = self.memory.recall(self.key, "zzz", "sub-lane", 2400, agent_type="builder")
+        self.assertIn("Earlier builder work in this project:", note)
+        self.assertIn("Builder shipped the parser", note)
+        self.assertNotIn("Explorer mapped", note)
+        self.assertIn("Main thread, latest:", note)
+        self.assertIn("Main thread decision", note)
 
 
 class SubagentTest(Case):
@@ -579,7 +625,7 @@ class SubagentTest(Case):
         text = self.note_of(first)[0]
         self.assertIn(f"You are a subagent of conversation {self.parent}", text)
         self.assertIn("Almanac memory for this project", text)
-        self.assertIn(f"[{earlier}]", text)
+        self.assertIn(f"\n{earlier} ", text)
         own = self.store.run("select id from convo where lane = 'old-sub'")[0]["id"]
         self.assertIn(f"(unreviewed: memory_review conversation {own})", text)  # the number a reviewer must pass
         self.assertEqual(len(self.note_of(first)), 1)
@@ -593,13 +639,13 @@ class SubagentTest(Case):
         mine = self.seed("sub-b", "Explore", "Find the retry helper", "It is in net.py.")
         def order(kind):
             note = self.memory.recall(self.key, "Find the retry helper and the retry delay", "new-lane", 4000, agent_type=kind)
-            return [i for _, i in sorted((note.find(f"[{i}]"), i) for i in (other, mine) if f"[{i}]" in note)]
+            return [i for _, i in sorted((note.find(f"\n{i} "), i) for i in (other, mine) if f"\n{i} " in note)]
 
         self.assertEqual(order("Explore")[0], mine)
         self.assertEqual(order("general-purpose")[0], other)
         self.assertEqual(sorted(order("Explore")), sorted([other, mine]))  # a boost, not a filter
         main = self.memory.recall(self.key, "Find the retry helper and the retry delay", "new-lane", 4000)
-        self.assertNotIn(f"[{other}]", main)  # the main thread's note still leaves sub-agent work out
+        self.assertNotIn(f"\n{other} ", main)  # the main thread's note still leaves sub-agent work out
 
     def test_a_stored_subagent_is_pending_with_its_type_and_only_an_opus_review_of_it_counts(self):
         self.sub(self.body())
