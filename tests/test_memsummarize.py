@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 import os
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -10,6 +11,7 @@ from unittest import mock
 import test_import as ti
 
 from getalmanac import accounts, cli, config, summarize
+from getalmanac.store import State
 
 MODEL = "claude-haiku-5-5"
 ANSWER = {"title": "Fixed the parser", "summary": "Fixed a bug in parser.py.", "status": "open"}
@@ -215,6 +217,34 @@ class Refine(ti.ImportBase):
         self.assertEqual(report["summarized"], 1)  # the default stops at the cap
         report, _ = self.refine(limit=5)
         self.assertEqual(report["summarized"], 2)
+
+    def test_the_default_refine_and_backfill_stop_when_another_connection_took_the_last_slot(self):
+        self.cfg["memory"]["summary_daily_calls"] = 1
+        self.stored(n=3)
+        real = summarize.today
+
+        def racing(state):  # the batch is picked while a slot is free, then another process fills it
+            found = real(state)
+            summarize.reserve(State(self.state.path), 1)
+            return found
+        with mock.patch.object(summarize, "today", racing):
+            report, _ = self.refine()
+        self.assertEqual((FakeConn.sent, report["summarized"]), ([], 0))
+        self.assertEqual(real(self.state)["calls"], 1)
+        with mock.patch.object(summarize, "today", lambda s: {"calls": 0}), contextlib.redirect_stdout(io.StringIO()):
+            report = summarize.backfill(self.memory, self.cfg)
+        self.assertEqual((FakeConn.sent, report["summarized"]), ([], 0))
+        self.assertEqual(real(self.state)["calls"], 1)
+
+    def test_two_connections_racing_for_the_last_slot_get_one(self):
+        State(self.state.path).put("summary:day", {"day": time.strftime("%Y-%m-%d"), "calls": 4, "in": 0, "out": 0})
+        won, others = [], [State(self.state.path) for _ in range(8)]
+        threads = [threading.Thread(target=lambda s=s: won.append(summarize.reserve(s, 5))) for s in others]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual((sum(won), summarize.today(self.state)["calls"]), (1, 5))
 
     def test_a_429_stops_cleanly_and_keeps_the_try(self):
         self.stored(n=3)
