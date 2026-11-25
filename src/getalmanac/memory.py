@@ -877,24 +877,30 @@ class Memory:
         """Give a conversation a model-written summary, covering its first `turns` exchanges."""
         self.store.run("update convo set summary = ?, sumturns = ? where id = ? and sumturns <= ?", (summary, turns, convo_id, turns))
 
-    def close_open(self, convo_id, numbers):
+    def close_open(self, convo_id, numbers, checked=None):
         """Store a model's verdict that these exchanges (numbers from 1) were finished by later work. Only an exchange that is
         still open and has a later one changes: the verdict goes in `mstatus`, which status.combine keeps.
-        `closecheck` records that the conversation was judged at its current length, so it is not asked again."""
+        `closecheck` records how many exchanges were judged (`checked`, default all), so they are not asked again."""
         with self.store.lock:
-            self.store.run("update convo set closecheck = turns where id = ?", (convo_id,))
+            self.store.run("update convo set closecheck = coalesce(?, turns) where id = ?", (checked, convo_id))
             for number in numbers:
                 self.store.run("update node set status = 'done', mstatus = 'done' where convo = ? and kind = 'leaf' and seq = ? "
                                "and status = 'open' and seq < (select max(seq) from node where convo = ? and kind = 'leaf')",
                                (convo_id, number - 1, convo_id))
 
-    def digest(self, lane: str, brief: bool = False) -> str:
+    def digest(self, lane: str, brief: bool = False, upto=None) -> str:
         """One line per stored exchange of a conversation, for the model that summarizes it: number, status, title, summary.
-        `brief` keeps the summary only on open exchanges, so a long conversation fits whole in the re-check's input."""
-        return "\n".join(
-            f"{r['seq'] + 1}. [{r['status']}] {r['title']}" + (f": {r['summary']}" if r["summary"] and (not brief or r["status"] == "open") else "")
-            for r in self.store.run("select n.seq, n.status, n.title, n.summary from node n join convo c on c.id = n.convo "
-                                    "where c.lane = ? and n.kind = 'leaf' order by n.seq", (lane,)))
+        `brief` keeps the summary only on open exchanges, so a long conversation fits whole in the re-check's input.
+        `upto` stops before that exchange number, so a later one indexed meanwhile is not shown."""
+        return "\n".join(line for _, line in self.digest_lines(lane, brief, upto))
+
+    def digest_lines(self, lane: str, brief: bool = False, upto=None) -> list:
+        """The digest as (exchange index from 0, line) pairs."""
+        return [(r["seq"], f"{r['seq'] + 1}. [{r['status']}] {r['title']}"
+                 + (f": {r['summary']}" if r["summary"] and (not brief or r["status"] == "open") else ""))
+                for r in self.store.run("select n.seq, n.status, n.title, n.summary from node n join convo c on c.id = n.convo "
+                                        "where c.lane = ? and n.kind = 'leaf' and n.seq < ? order by n.seq",
+                                        (lane, 1 << 62 if upto is None else upto))]
 
     def exchanges(self, convo_id: int) -> list:
         """A conversation's stored exchanges in order: id, number (from 1), time, status, what the person asked, summary."""

@@ -148,6 +148,18 @@ class Refine(ti.ImportBase):
         self.assertEqual(self.store.run("select summary from convo")[0]["summary"], "Kept as is.")
         self.assertEqual([r["status"] for r in self.store.run("select status from node where kind = 'leaf' order by seq")], ["done", "done", "open"])
 
+    def test_an_exchange_indexed_during_the_recheck_is_not_marked_judged(self):
+        self.stored(n=3)
+        self.store.run("update node set status = 'open' where seq = 0")
+        self.store.run("update convo set summary = 'Kept.', sumturns = turns")
+        def late(*args, **kw):  # a new exchange is indexed while the call is in flight
+            self.store.run("update convo set turns = turns + 1")
+            return {"content": [{"type": "text", "text": '{"closed": []}'}]}
+        with mock.patch.object(summarize, "call", late), contextlib.redirect_stdout(io.StringIO()):
+            summarize.backfill(self.memory, self.cfg)
+        row = self.store.run("select closecheck, turns from convo")[0]
+        self.assertEqual((row["closecheck"], row["turns"]), (3, 4))
+
     def test_the_recheck_input_keeps_summaries_only_on_open_exchanges(self):
         self.stored(n=2)
         self.store.run("update node set summary = 'S' || seq, status = case seq when 0 then 'open' else 'done' end")
