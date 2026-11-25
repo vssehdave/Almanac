@@ -3,7 +3,7 @@
 A cache entry lives for its ttl (5 minutes or 1 hour) counted from its last read. While a conversation
 is paused, a request that repeats the last body with `stream` off and almost no output reads the prefix
 and starts the ttl again, for about a tenth of the prefix's price, instead of a 1.25 to 2 times rewrite
-when the person comes back. Only the main thread and sub-agents are kept alive, never titles or classifiers.
+when the person comes back. Only the main thread is kept alive, never sub-agents, forks, titles or classifiers.
 
 What is kept: the exact body sent upstream and the headers it went out with, per lane, in memory only.
 They are never written to disk or to the log, and are gone when the proxy exits.
@@ -83,7 +83,7 @@ class Keepalive:
         """After a real request answered: remember its body and schedule the ping. Never raises."""
         try:
             on, _, limit = self.settings()
-            if not on or not ctx.lane or ctx.kind != "messages" or ctx.thread not in ("main", "sub", "fork"):
+            if not on or not ctx.lane or ctx.kind != "messages" or ctx.thread != "main":
                 return
             if status == 429:  # a usage limit: do not ping into it
                 return self.drop(ctx.lane)

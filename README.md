@@ -1694,7 +1694,7 @@ of its price and starts the clock again. A pause of a few hours then costs a
 few reads instead of one rewrite. A very long pause can cost more than the
 rewrite, which is why `keepalive.max_idle_minutes` (default 240) stops it.
 
-- Only the main thread and sub-agents are kept alive, never titles or
+- Only the main thread is kept alive, never sub-agents, forks, titles or
   classifiers, and only requests that carry cache marks. A new real request on
   the same thread resets the timer. A tick is skipped while a real request on
   that thread is running. At most `keepalive.max_lanes` threads are kept (4).
