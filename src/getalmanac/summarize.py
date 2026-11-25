@@ -23,7 +23,7 @@ FORWARD = ("authorization", "x-api-key")  # plus every anthropic-* header; a log
 PER_JOB = 4  # exchanges summarized per finished exchange
 MAX_TRIES = 3  # attempts per exchange
 INPUT_CHARS = 6000
-RECHECK_CHARS = 20000  # the re-check sends titles plus open-work summaries only, and must see the whole conversation
+RECHECK_CHARS = 20000  # the re-check sends titles plus open-work summaries only; a longer conversation is taken in batches
 PAUSE_SECONDS = 3600
 PAUSE_ON = (401, 403, 429, 529)  # logged out, forbidden, out of allowance, overloaded
 TIMEOUT = 60
@@ -310,7 +310,7 @@ class SummaryLayer:
             return
         if not reserve(store, cfg["summary_daily_calls"] if cap else None):
             return False  # the daily cap is full (None for every other early return)
-        text = self.memory.digest(ctx.lane)
+        text = self.memory.digest(ctx.lane, upto=rows[0]["turns"])
         if len(text) > INPUT_CHARS:
             text = text[: INPUT_CHARS // 3] + "\n... (middle not shown) ...\n" + text[-(2 * INPUT_CHARS // 3):]
         body = {"model": cfg["summary_model"], "max_tokens": 1000,
@@ -321,7 +321,7 @@ class SummaryLayer:
         found, closed = _parse_convo(message) if message else ("", [])
         if found:
             self.memory.set_convo_summary(rows[0]["id"], found, rows[0]["turns"])
-            self.memory.close_open(rows[0]["id"], closed)
+            self.memory.close_open(rows[0]["id"], closed, rows[0]["turns"])
         else:  # status or parse: never the prompt or the headers
             ctx.proxy.log.write({"ts": round(time.time(), 3), "kind": "summary", "what": "conversation",
                                  "status": seen.get("status", 0), "why": "status" if seen.get("status", 200) != 200 else "parse"})
@@ -330,9 +330,18 @@ class SummaryLayer:
         """One call for a conversation that already has a summary: which of its open exchanges did later work finish?
         The summary is left as it is. True when a usable verdict came back and was stored."""
         cfg = ctx.cfg["memory"]
-        text = self.memory.digest(ctx.lane, brief=True)
-        if len(text) > RECHECK_CHARS:
-            text = text[: RECHECK_CHARS // 3] + "\n... (middle not shown) ...\n" + text[-(2 * RECHECK_CHARS // 3):]
+        row = self.memory.store.run("select turns, closecheck from convo where id = ?", (convo_id,))[0]
+        turns, start = row["turns"], row["closecheck"]
+        lines = self.memory.digest_lines(ctx.lane, brief=True, upto=turns)  # exchanges indexed while the call runs are not judged
+        if sum(len(line) + 1 for _, line in lines) > RECHECK_CHARS:  # too long for one call: take it in order, resuming where the last stopped
+            lines, size = [x for x in lines if x[0] >= start] or lines, 0
+            for count, (_, line) in enumerate(lines):
+                size += len(line) + 1
+                if size > RECHECK_CHARS and count:
+                    lines = lines[:count]
+                    break
+            turns = lines[-1][0] + 1
+        text = "\n".join(line for _, line in lines)
         body = {"model": cfg["summary_model"], "max_tokens": 300, "thinking": {"type": "disabled"},
                 "system": ctx.system + [{"type": "text", "text": RECHECK_INSTRUCTION}],
                 "messages": [{"role": "user", "content": text}]}
@@ -340,7 +349,7 @@ class SummaryLayer:
         closed = _parse_closed(message) if message else None
         if closed is None:
             return False
-        self.memory.close_open(convo_id, closed)
+        self.memory.close_open(convo_id, closed, turns)
         return True
 
     def observe(self, ctx, orig, reply):
