@@ -939,10 +939,10 @@ class StatusTest(Case):
     def test_the_banner_summarizes_the_project_and_is_empty_for_an_unknown_one(self):
         self.tag(("always use tabs", [said("Done.")]), ("add a retry helper", [said("Added it.")]), final="ok")
         lines = self.memory.banner(self.alpha).splitlines()
-        self.assertTrue(lines[0].startswith("Almanac memory: ") and "(3 exchanges, 1 conversations)" in lines[0])
-        self.assertTrue(any(x.startswith(" Decisions") and "always use tabs" in x for x in lines))
-        self.assertTrue(any(x.startswith(" Recent") for x in lines))
-        self.assertEqual(lines[-1], " Search: memory_search / memory_read <id>")
+        self.assertTrue(lines[0].startswith("Almanac memory: ") and "3 exchanges · 1 conversations" in lines[0])
+        self.assertTrue(lines[1].startswith("Legend: ") and lines[2].startswith("### "))
+        self.assertTrue(any(x.startswith("  ") and "⚖ always use tabs" in x for x in lines))
+        self.assertEqual(lines[-1], "Search: memory_search · memory_read <id>")
         self.assertEqual(self.memory.banner(tempfile.mkdtemp()), "")
 
     def test_a_pasted_content_title_is_shown_without_its_tag(self):
@@ -950,7 +950,7 @@ class StatusTest(Case):
         self.store.run("update convo set title = ?", ('<pasted_content id="1fb9">',))
         banner = self.memory.banner(self.alpha)
         self.assertNotIn("pasted_content", banner)
-        self.assertRegex(banner, r"Recent +\d\d-\d\d \S")  # an empty title falls back to the first exchange
+        self.assertRegex(banner, r"\n\d+ \d\d:\d\d \S")  # an empty title falls back to the first exchange
         self.assertEqual(clean('<pasted_content id="1fb9"> hi'), "hi")
 
     def test_a_title_skips_a_routing_line_and_junk_titles_are_repaired(self):
