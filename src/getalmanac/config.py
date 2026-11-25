@@ -108,6 +108,9 @@ DEFAULTS = {
     "bundle": {
         "enabled": True,  # load the package's own plugin and the plugins in <almanac home>/bundle into every session
     },
+    "guard": {
+        "enabled": True,  # load the guard plugin: block edits to lint and test configs, and commands that skip git hooks or signing
+    },
     "cheatsheet": {"mode": "on"},
     "playbooks": {
         "enabled": True,
@@ -153,6 +156,7 @@ _OFF = {
     "library": [("library", "enabled", False)],
     "profile": [("profile", "enabled", False)],
     "bundle": [("bundle", "enabled", False)],
+    "guard": [("guard", "enabled", False)],
     "routing": [("routing", "mode", "off")],
     "cheatsheet": [("cheatsheet", "mode", "off")],
     "cloud": [("cloud", "auto", False)],
