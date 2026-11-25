@@ -95,6 +95,14 @@ class PrefixTest(unittest.TestCase):
         self.assertNotIn("cache_control", json.dumps(prefix))
         self.assertNotIn("thinking", json.dumps(prefix))
 
+    def test_the_header_names_the_memory_tools_only_when_they_are_registered(self):
+        messages = history(6)
+        with_tools = summary(compact.build_prefix(messages, len(messages) - 1, {0: 41}, budget_chars=6000))
+        without = summary(compact.build_prefix(messages, len(messages) - 1, {0: 41}, budget_chars=6000, tools=False))
+        self.assertIn("memory_read", with_tools)
+        self.assertNotIn("memory_read", without)
+        self.assertIn("Almanac compacted this conversation", without)
+
     def test_a_small_budget_still_keeps_the_last_exchange_and_says_what_is_missing(self):
         messages = history(30)
         text = summary(compact.build_prefix(messages, len(messages) - 1, {}, budget_chars=3000))
@@ -880,6 +888,15 @@ class LongTurnTest(LayerCase):
         self.rig.messages(body(copy.deepcopy(long_turn(41))), extra=extra)
         second = json.loads(self.rig.upstream.requests[-1]["body"])["messages"]
         self.assertEqual(json.dumps(second[0]), json.dumps(first[0]))  # the outline is sent byte for byte
+
+    def test_a_sub_agent_outline_names_memory_read_only_with_the_memory_tools(self):
+        self.rig.cfg["routing"]["windows"]["m"] = 1000000
+        self.rig.cfg["compaction"].update(stub_tokens=6000, agent_stub_tokens=6000)
+        self.rig.cfg["memory"]["tools"] = False
+        self.rig.messages(body(copy.deepcopy(long_turn(40))), extra={"x-claude-code-agent-id": "a1"})
+        outline = json.loads(self.rig.upstream.requests[-1]["body"])["messages"][0]["content"][-1]["text"]
+        self.assertTrue(outline.startswith(compact.AGENT_HEADER_NO_TOOLS))
+        self.assertNotIn("memory_read", outline)
 
     def test_the_outline_is_off_with_agent_outline_false(self):
         self.rig.cfg["routing"]["windows"]["m"] = 1000000
