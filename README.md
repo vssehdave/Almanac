@@ -777,6 +777,26 @@ in that row.
 keeping any already there. `almanac config set bundle.enabled false` turns the
 whole bundle off, the package plugin too.
 
+### Guard
+
+A second package plugin, `guard`, is loaded the same way and adds two
+PreToolUse hooks (for `Bash` and `PowerShell` as well as the edit tools). Each
+hook blocks with exit code 2 and says why; if a hook itself fails, the call goes
+ahead.
+
+- `config_guard` blocks edits to lint, format, type-check and test config files
+  (`.eslintrc*`, `eslint.config.*`, `.prettierrc*`, `ruff.toml`, `mypy.ini`,
+  `.flake8`, `tox.ini`, `pytest.ini`, `setup.cfg`, `tsconfig*.json`,
+  `.coveragerc`, and the `[tool.ruff|mypy|pytest|coverage]` sections of
+  `pyproject.toml`), including shell commands that write to them. The list is
+  `NAMES` in `bundle/guard/scripts/config_guard.py`.
+- `no_verify_guard` blocks git commands with `--no-verify`, `-n` on `commit`,
+  `--no-gpg-sign`, `-c commit.gpgsign=false`, or a `core.hooksPath` override.
+
+`almanac config set guard.enabled false` stops loading it (`bundle.enabled
+false` turns it off too). The check is a pattern match on the command text, so
+it stops the usual forms, not a determined workaround.
+
 ## Playbooks
 
 Playbooks are the [Playbook](https://github.com/vssehdave/Playbook) package (`getplaybook`), which Almanac depends on, so
@@ -1529,7 +1549,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `upstream_ca` | `""` | Extra certificate file to trust for the upstream |
 
 For one run, `ALMANAC_DISABLE=skills,agents,tools,memory,compaction` turns those
-layers off. The other names are `playbooks`, `library`, `profile`, `bundle`,
+layers off. The other names are `playbooks`, `library`, `profile`, `bundle`, `guard`,
 `routing`, `cheatsheet`, `cloud`, `accounts` and `startup`; `all` is every one
 of them, so the request goes through unchanged. `ALMANAC_HOME` moves the files.
 

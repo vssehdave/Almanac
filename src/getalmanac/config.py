@@ -108,6 +108,9 @@ DEFAULTS = {
     "bundle": {
         "enabled": True,  # load the package's own plugin and the plugins in <almanac home>/bundle into every session
     },
+    "guard": {
+        "enabled": True,  # load the guard plugin: block edits to lint and test configs, and commands that skip git hooks or signing
+    },
     "cheatsheet": {"mode": "on"},
     # lessons per sub-agent type, distilled from memory_review verdicts by memory.summary_model, added to that type's threads
     "lessons": {"enabled": True},
@@ -155,6 +158,7 @@ _OFF = {
     "library": [("library", "enabled", False)],
     "profile": [("profile", "enabled", False)],
     "bundle": [("bundle", "enabled", False)],
+    "guard": [("guard", "enabled", False)],
     "routing": [("routing", "mode", "off")],
     "cheatsheet": [("cheatsheet", "mode", "off")],
     "lessons": [("lessons", "enabled", False)],

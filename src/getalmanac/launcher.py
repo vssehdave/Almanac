@@ -44,6 +44,7 @@ def child_env(url: str, parent=None, cfg=None) -> dict:
     # A custom base URL makes Claude Code hide model features it cannot verify through
     # a gateway. This relay changes none of them, so say it is the first-party API.
     env["_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL"] = "1"
+    env["ALMANAC_PYTHON"] = Path(sys.executable).as_posix()  # the guard plugin's hooks run with this interpreter
     env["ALMANAC_PROXY"] = url  # also tells the Playbook plugin's hooks to stay silent: the proxy places the offers
     env["PLAYBOOK_HOME"], env["PLAYBOOK_CONFIG"] = str(config.home()), str(config.config_path())  # its server shares the playbooks
     # Behind a corporate proxy Claude Code would send its requests for this loopback address to that proxy.
@@ -71,11 +72,12 @@ def with_bundle(args, cfg):
     """Add Almanac's own plugin and every plugin in the user's bundle (`<almanac home>/bundle/`) to Claude Code's arguments."""
     if not cfg["bundle"]["enabled"]:
         return args
-    own = Path(__file__).parent / "bundle" / "almanac"
+    here = Path(__file__).parent / "bundle"
+    own = [here / "almanac"] + ([here / "guard"] if cfg.get("guard", {}).get("enabled", True) else [])
     mine = config.home() / "bundle"
-    folders = [own] if own.is_dir() else []
+    folders = [p for p in own if p.is_dir()]
     if mine.is_dir():
-        folders += sorted(p for p in mine.iterdir() if p.name != "almanac" and (p / ".claude-plugin" / "plugin.json").is_file())
+        folders += sorted(p for p in mine.iterdir() if p.name not in ("almanac", "guard") and (p / ".claude-plugin" / "plugin.json").is_file())
     return [arg for folder in folders for arg in ("--plugin-dir", str(folder))] + list(args)
 
 
@@ -127,6 +129,7 @@ def https_env(session, port: int, parent=None, cfg=None) -> dict:
     current = (os.environ if parent is None else parent).get("NO_PROXY") or ""
     keep = [h for h in current.replace(" ", "").split(",") if h and h != "*" and not session.host.endswith(h.lstrip("*."))]
     env["NO_PROXY"] = ",".join(dict.fromkeys(keep + ["localhost", "127.0.0.1", "::1"]))
+    env["ALMANAC_PYTHON"] = Path(sys.executable).as_posix()
     env["ALMANAC_PROXY"] = f"http://127.0.0.1:{port}"
     env["PLAYBOOK_HOME"], env["PLAYBOOK_CONFIG"] = str(config.home()), str(config.config_path())
     return env

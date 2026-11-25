@@ -1,0 +1,110 @@
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+
+SCRIPTS = os.path.join(os.path.dirname(__file__), "..", "src", "getalmanac", "bundle", "guard", "scripts")
+
+
+def run(script, tool, **tool_input):
+    return run_raw(script, json.dumps({"tool_name": tool, "tool_input": tool_input}))
+
+
+def run_raw(script, text):
+    done = subprocess.run([sys.executable, os.path.join(SCRIPTS, script)], input=text, capture_output=True, text=True)
+    return done.returncode, done.stderr
+
+
+class ConfigGuard(unittest.TestCase):
+    def blocked(self, tool, **args):
+        code, err = run("config_guard.py", tool, **args)
+        self.assertEqual(code, 2, args)
+        self.assertIn("ask the user", err)
+
+    def allowed(self, tool, **args):
+        self.assertEqual(run("config_guard.py", tool, **args)[0], 0, args)
+
+    def test_edit_tools_on_config_files_are_blocked(self):
+        for name in (".eslintrc.json", "a/eslint.config.mjs", ".prettierrc", "C:/p/tsconfig.build.json", "ruff.toml",
+                     "mypy.ini", ".flake8", "tox.ini", "pytest.ini", "setup.cfg", ".coveragerc"):
+            self.blocked("Edit", file_path=name, old_string="a", new_string="b")
+        self.blocked("Write", file_path="tsconfig.json", content="{}")
+        self.blocked("MultiEdit", file_path="x/.flake8", edits=[{"old_string": "a", "new_string": "b"}])
+
+    def test_other_files_are_allowed(self):
+        self.allowed("Edit", file_path="src/app.py", old_string="a", new_string="b")
+        self.allowed("Write", file_path="package.json", content="{}")
+        self.allowed("Read", file_path="ruff.toml")
+
+    def test_pyproject_is_guarded_only_in_its_tool_sections(self):
+        path = os.path.join(tempfile.mkdtemp(), "pyproject.toml")
+        with open(path, "w") as handle:
+            handle.write('[project]\nname = "x"\n\n[tool.ruff]\nline-length = 88\n\n[tool.other]\na = 1\n')
+        self.blocked("Edit", file_path=path, old_string="line-length = 88", new_string="line-length = 200")
+        self.allowed("Edit", file_path=path, old_string='name = "x"', new_string='name = "y"')
+        self.allowed("Edit", file_path=path, old_string="a = 1", new_string="a = 2")
+        self.blocked("Write", file_path=path, content='[project]\nname = "x"\n\n[tool.other]\na = 1\n')
+        self.allowed("Write", file_path=path, content='[project]\nname = "z"\n\n[tool.ruff]\nline-length = 88\n\n[tool.other]\na = 1\n')
+
+    def test_commands_that_write_to_configs_are_blocked_on_both_shells(self):
+        for tool in ("Bash", "PowerShell"):
+            self.blocked(tool, command="echo 'ignore' >> .eslintrc.json")
+            self.blocked(tool, command="sed -i 's/on/off/' tox.ini")
+            self.blocked(tool, command=r"Set-Content -Path .\mypy.ini -Value x")
+            self.allowed(tool, command="cat .eslintrc.json")
+            self.allowed(tool, command="python -m flake8 src")
+            self.allowed(tool, command="sed -i 's/a/b/' pyproject.toml")
+            self.blocked(tool, command="sed -i 's/a/b/' pyproject.toml  # [tool.ruff]")
+
+    def test_bad_input_or_a_crash_allows(self):
+        self.assertEqual(run_raw("config_guard.py", "not json")[0], 0)
+        self.assertEqual(run_raw("config_guard.py", "{}")[0], 0)
+        self.assertEqual(run_raw("config_guard.py", json.dumps({"tool_name": "Edit", "tool_input": {}}))[0], 0)
+
+    def test_segments_and_targets(self):
+        for command in ("grep -n write tox.ini", "cp tsconfig.json /tmp/b.json", "cat setup.cfg && rm -rf build"):
+            self.allowed("Bash", command=command)
+        for command in ("echo x >> 'C:/p q/mypy.ini'", "cp /tmp/a tsconfig.json", "echo x > .ESLINTRC.json"):
+            self.blocked("Bash", command=command)
+
+    def test_utf8_payload_and_toml_array_sections(self):
+        path = os.path.join(tempfile.mkdtemp(), "pyproject.toml")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("[project]\ndescription = \"a \u2014 b\"\n\n[[tool.mypy.overrides]]\nx = 1\n")
+        payload = json.dumps({"tool_name": "Edit", "tool_input": {
+            "file_path": path, "old_string": "x = 1", "new_string": "x = 2"}}, ensure_ascii=False)
+        done = subprocess.run([sys.executable, os.path.join(SCRIPTS, "config_guard.py")],
+                              input=payload.encode("utf-8"), capture_output=True)
+        self.assertEqual(done.returncode, 2)
+
+
+class NoVerifyGuard(unittest.TestCase):
+    def code(self, command, tool="Bash"):
+        return run("no_verify_guard.py", tool, command=command)[0]
+
+    def test_skipping_hooks_or_signing_is_blocked_on_both_shells(self):
+        for tool in ("Bash", "PowerShell"):
+            for command in ("git commit --no-verify -m x", "git commit -n -m x", "git commit -an", "git push --no-verify",
+                            "git commit --no-gpg-sign -m x", "git -c commit.gpgsign=false commit -m x",
+                            "git -c core.hooksPath=/dev/null commit -m x", "git config core.hooksPath /tmp",
+                            "npm test && git commit -m x --no-verify"):
+                self.assertEqual(self.code(command, tool), 2, command)
+
+    def test_normal_git_use_is_allowed(self):
+        for command in ("git commit -m 'fix --no-verify docs'", 'git commit -am "use -n here"', "git push -n",
+                        "git status", "ls --no-verify", "git commit -m x", "git log -n 5 -- src/commit.py",
+                        "git commit -uno -m x", "git commit -minit", "git config --get core.hooksPath",
+                        'git commit -m "set core.hooksPath"'):
+            self.assertEqual(self.code(command), 0, command)
+        self.assertEqual(run("no_verify_guard.py", "Edit", file_path="a", old_string="git commit -n", new_string="")[0], 0)
+
+    def test_bad_input_allows_and_the_reason_is_printed(self):
+        self.assertEqual(run_raw("no_verify_guard.py", "")[0], 0)
+        self.assertEqual(run_raw("no_verify_guard.py", '{"tool_name": "Bash", "tool_input": []}')[0], 0)
+        self.assertIn("skips git hooks", run("no_verify_guard.py", "Bash", command="git commit -n")[1])
+
+
+if __name__ == "__main__":
+    unittest.main()

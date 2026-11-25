@@ -1,0 +1,1 @@
+{"name": "guard", "description": "Blocks edits that loosen lint, format, type and test checks, and commands that skip git hooks or signing.", "version": "0.1.0"}
