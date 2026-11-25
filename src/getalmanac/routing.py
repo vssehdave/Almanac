@@ -9,8 +9,9 @@ model writes its whole prefix into that model's cache again, at the cache-write
 price, and the old model's cache goes cold. So a thread's model is chosen once, on
 the first request Almanac sees of it, stored, and never changed afterwards. A sub-agent
 whose own definition names a model keeps exactly that model; others are routed by their
-task, though never below the model they start on, and one that names no model and carries no difficulty line, so would only inherit the main
-thread's large model, starts on medium instead. The main thread is routed only in mode
+task, though never below the model they start on, and one that names no model and
+carries no difficulty line, so would only inherit the main thread's large model,
+starts on medium instead. The main thread is routed only in mode
 "all", from the prompt in hand when it is first seen. The one response to a failure, on
 any thread, is effort "high" said in a last message (see `_hold`), until `calm_after`
 requests in a row come back clean.
