@@ -12,7 +12,7 @@ NAMES = [
     r"tsconfig(?:\.[\w-]+)?\.json", r"\.coveragerc",
 ]
 # pyproject.toml is guarded only inside these sections, because it also holds the package's own metadata.
-SECTION = re.compile(r"^\[tool\.(?:ruff|mypy|pytest|coverage)\b[^\]]*\]", re.M)
+SECTION = re.compile(r"^\[\[?tool\.(?:ruff|mypy|pytest|coverage)\b[^\]]*\]", re.M)
 
 REASON = ("Blocked: {what} is a lint, format, type-check or test config. Fix the code so the check passes "
           "instead of loosening the check. If the config really must change, ask the user first.")
@@ -20,8 +20,11 @@ REASON = ("Blocked: {what} is a lint, format, type-check or test config. Fix the
 _name = "|".join(NAMES)
 _in_command = rf"(?<![\w.-])(?:{_name}|pyproject\.toml)(?![\w-])"
 _writes = re.compile(
-    r"\b(?:tee|sed\s+-\w*i|perl\s+-\w*i|mv|cp|rm|del|truncate|Set-Content|Add-Content|Out-File|Remove-Item|"
-    r"Move-Item|Copy-Item|Rename-Item|New-Item|write_text|write)\b", re.I)
+    r"\b(?:tee|sed\s+-\w*i|perl\s+-\w*i|rm|del|truncate|Set-Content|Add-Content|Out-File|Remove-Item|"
+    r"Rename-Item|New-Item|write_text)\b", re.I)
+_copies = re.compile(r"\b(?:cp|mv|Copy-Item|Move-Item)\b", re.I)
+_redirect = re.compile(r"""\d?>>?\s*("[^"]*"|'[^']*'|[^\s;|&]+)""")
+_split = re.compile(r"&&|\|\||[;|\n]")
 
 
 def tool_sections(text):
@@ -44,7 +47,7 @@ def read(path):
 def file_edit(path, edits):
     """The reason to block a file edit, or "". edits: (old, new) pairs, or None for a whole-file write."""
     base = os.path.basename(path.replace("\\", "/"))
-    if any(re.fullmatch(n, base) for n in NAMES):
+    if any(re.fullmatch(n, base, re.I) for n in NAMES):
         return REASON.format(what=base)
     if base == "pyproject.toml":
         before = read(path)
@@ -56,15 +59,22 @@ def file_edit(path, edits):
     return ""
 
 
+def _is_config(path):
+    base = os.path.basename(path.strip("\"'").replace("\\", "/"))
+    return base.lower() == "pyproject.toml" or any(re.fullmatch(n, base, re.I) for n in NAMES)
+
+
 def command_edit(command):
-    names = re.findall(_in_command, command)
-    if not names:
-        return ""
-    target = rf">>?\s*[\"']?[^\s;|&\"']*{_in_command}"
-    if re.search(target, command) or _writes.search(command):
-        if all(n == "pyproject.toml" for n in names) and "[tool." not in command:
-            return ""  # pyproject.toml is guarded only for its tool sections
-        return REASON.format(what=names[0])
+    for part in _split.split(command):  # each piece of a compound command on its own
+        names = re.findall(_in_command, part, re.I)
+        if not names:
+            continue
+        writes = (_writes.search(part) or any(_is_config(t) for t in _redirect.findall(part))
+                  or (_copies.search(part) and _is_config(part.split()[-1])))  # only the last argument is written
+        if writes:
+            if all(n.lower() == "pyproject.toml" for n in names) and "[tool." not in part:
+                continue  # pyproject.toml is guarded only for its tool sections
+            return REASON.format(what=names[0])
     return ""
 
 

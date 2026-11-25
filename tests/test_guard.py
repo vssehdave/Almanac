@@ -63,6 +63,22 @@ class ConfigGuard(unittest.TestCase):
         self.assertEqual(run_raw("config_guard.py", "{}")[0], 0)
         self.assertEqual(run_raw("config_guard.py", json.dumps({"tool_name": "Edit", "tool_input": {}}))[0], 0)
 
+    def test_segments_and_targets(self):
+        for command in ("grep -n write tox.ini", "cp tsconfig.json /tmp/b.json", "cat setup.cfg && rm -rf build"):
+            self.allowed("Bash", command=command)
+        for command in ("echo x >> 'C:/p q/mypy.ini'", "cp /tmp/a tsconfig.json", "echo x > .ESLINTRC.json"):
+            self.blocked("Bash", command=command)
+
+    def test_utf8_payload_and_toml_array_sections(self):
+        path = os.path.join(tempfile.mkdtemp(), "pyproject.toml")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("[project]\ndescription = \"a \u2014 b\"\n\n[[tool.mypy.overrides]]\nx = 1\n")
+        payload = json.dumps({"tool_name": "Edit", "tool_input": {
+            "file_path": path, "old_string": "x = 1", "new_string": "x = 2"}}, ensure_ascii=False)
+        done = subprocess.run([sys.executable, os.path.join(SCRIPTS, "config_guard.py")],
+                              input=payload.encode("utf-8"), capture_output=True)
+        self.assertEqual(done.returncode, 2)
+
 
 class NoVerifyGuard(unittest.TestCase):
     def code(self, command, tool="Bash"):
@@ -78,7 +94,9 @@ class NoVerifyGuard(unittest.TestCase):
 
     def test_normal_git_use_is_allowed(self):
         for command in ("git commit -m 'fix --no-verify docs'", 'git commit -am "use -n here"', "git push -n",
-                        "git status", "ls --no-verify", "git commit -m x"):
+                        "git status", "ls --no-verify", "git commit -m x", "git log -n 5 -- src/commit.py",
+                        "git commit -uno -m x", "git commit -minit", "git config --get core.hooksPath",
+                        'git commit -m "set core.hooksPath"'):
             self.assertEqual(self.code(command), 0, command)
         self.assertEqual(run("no_verify_guard.py", "Edit", file_path="a", old_string="git commit -n", new_string="")[0], 0)
 

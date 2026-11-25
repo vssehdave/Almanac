@@ -6,7 +6,7 @@ import sys
 def run(check):
     """Call check(tool_name, tool_input) -> reason or "". Exit 2 on a reason; exit 0 on no reason, bad input or any error."""
     try:
-        payload = json.load(sys.stdin)
+        payload = json.loads(sys.stdin.buffer.read().decode("utf-8"))
         reason = check(payload["tool_name"], payload["tool_input"])
     except Exception:  # a broken guard must never stop Claude Code
         return 0
