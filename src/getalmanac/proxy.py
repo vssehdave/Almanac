@@ -227,6 +227,10 @@ class Proxy:
             record["usage"] = {k: v for k, v in reply["usage"].items() if isinstance(v, int)}
             if reply.get("model"):
                 record["answered"] = reply["model"]  # the model that really replied
+            uses = [b.get("name") for b in reply["content"] if b.get("type") == "tool_use"]
+            if uses:  # for `almanac eval`
+                record["tool_calls"] = len(uses)
+                record["spawns"] = sum(name in ("Agent", "Task") for name in uses)
         if orig and ctx.kind == "messages":
             try:  # observation only: from the client's own body, and never allowed to fail the request
                 record["cache"] = cache_marks(orig)

@@ -36,6 +36,7 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac route pin TIER       keep this project on small, medium or large (`pin off` lifts it)
   almanac cheatsheet show [opus|sonnet|haiku|fable|agent]   the rules added for that model (agent: for a sub-agent), and their size
   almanac cheatsheet path      where your own copies go (opus.md, sonnet.md, haiku.md, fable.md, common.md, skills.md, agent.md, lean.md)
+  almanac eval [--yes]         measure whether the cheatsheet changes behaviour: off, current and local variants on sample tasks (spends allowance; prints the plan first)
   almanac skill scan PATH|URL  scan a skill or plugin with SkillSpector (exit 0 SAFE, 1 CAUTION, 2 DO_NOT_INSTALL, 3 error)
   almanac skill add URL|PATH   fetch, scan, and install its skills only if SAFE (--skill NAME, --ref SHA)
   almanac skill add --bundle URL|PATH   the same, installed as a plugin in your Almanac bundle (the adopt skill continues)
@@ -742,13 +743,19 @@ def _banner(_rest):
     return 0
 
 
+def _eval(rest):
+    from . import evaluate
+
+    return evaluate.main(rest)
+
+
 def _version(_rest):
     print(f"almanac {__version__}")
     return 0
 
 
 COMMANDS = {"sandbox": _sandbox, "serve": _serve, "report": _report, "status": _status, "doctor": _doctor, "config": _config,
-            "version": _version, "memory": _memory, "projects": _projects, "route": _route, "cheatsheet": _cheatsheet, "mcp": _mcp,
+            "version": _version, "memory": _memory, "projects": _projects, "route": _route, "cheatsheet": _cheatsheet, "eval": _eval, "mcp": _mcp,
             "semantic": _semantic, "cloud": _cloud, "skill": _skill, "pack": _pack,
             "playbook": _playbook, "library": _library, "lessons": _lessons, "review-gate": _review_gate}
 
