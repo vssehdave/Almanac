@@ -388,6 +388,24 @@ class Launch(Base):
         self.assertEqual((todo, len(unhashed)), ([], 1))
 
 
+class ScanCache(Base):
+    def calls(self):
+        return len(self.log.read_text().splitlines()) if self.log.exists() else 0
+
+    def test_a_matching_hash_skips_the_scan_and_a_change_or_failure_does_not(self):
+        folder = make_skill(self.src, "a", "CAUTION 30")
+        self.assertEqual(skills.scan(folder)["verdict"], "CAUTION")
+        self.assertEqual(skills.scan(folder)["verdict"], "CAUTION")
+        self.assertEqual(self.calls(), 1)
+        (folder / "verdict.txt").write_text("DO_NOT_INSTALL 90")  # changed content: scanned again
+        self.assertEqual(skills.code(skills.scan(folder)), 2)
+        self.assertEqual(self.calls(), 2)
+        bad = make_skill(self.src, "b", "ERROR")
+        skills.scan(bad)
+        skills.scan(bad)
+        self.assertEqual(self.calls(), 4)  # a failed scan is never cached
+
+
 class Bundle(Base):
     def plugin(self, verdict=None):
         """A source with a skill that blocks the model, an agent, a hook, two MCP servers and a licence."""

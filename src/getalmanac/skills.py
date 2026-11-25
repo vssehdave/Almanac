@@ -119,6 +119,10 @@ def scan(path) -> dict:
         return result("ERROR", error="missing")
     # the scanner refuses a junction, and ~/.claude/skills entries often are one
     target = os.path.realpath(path)
+    digest = tree_hash(target)
+    cache = load_json(_cache_path(), {})
+    if digest and cache.get(digest, {}).get("verdict") in VERDICTS:
+        return cache[digest]
     env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
     try:
         proc = subprocess.run([*cmd, "scan", target, "--no-llm", "-f", "json"], capture_output=True,
@@ -129,7 +133,15 @@ def scan(path) -> dict:
         return result("ERROR", error=f"the scan took longer than {SCAN_SECONDS // 60} minutes")
     except OSError as exc:
         return result("ERROR", error=str(exc))
-    return parse(proc.returncode, proc.stdout, proc.stderr)
+    res = parse(proc.returncode, proc.stdout, proc.stderr)
+    if digest and res["verdict"] != "ERROR":  # a failed scan is never remembered
+        cache[digest] = res
+        save_json(_cache_path(), cache)
+    return res
+
+
+def _cache_path():
+    return config.home() / "scan-cache.json"
 
 
 def code(res) -> int:
