@@ -549,7 +549,7 @@ def _skill(rest):
     add.add_argument("--ref", help="a full commit SHA to fetch instead of the default branch")
     add.add_argument("--accept-caution", action="store_true", help="install even when the verdict is CAUTION")
     add.add_argument("--accept-danger", action="store_true",
-                     help="owner override: after the findings, offer to install a DO_NOT_INSTALL item (type yes); implies --accept-caution. A failed scan is still refused")
+                     help="owner override: after the findings, offer to install a DO_NOT_INSTALL item (type yes); implies --accept-caution. A failed scan is still refused. Exit code stays 2 after a successful override")
     add.add_argument("--replace", action="store_true", help="overwrite a skill with the same name")
     add.add_argument("--bundle", action="store_true", help="install as a plugin in your Almanac bundle (folder, manifest, SOURCES.md row)")
     add.add_argument("--hooks", action="store_true", help="with --bundle: keep the plugin's hooks (they run code in every session)")
@@ -575,7 +575,7 @@ def _skill(rest):
         skills.offer_scanner(ask, out=_print)
         return skills.add(args.source, args.skill, args.ref, args.accept_caution or args.accept_danger, args.replace,
                           out=_print, bundle=args.bundle, name=args.name, ask=ask, hooks=args.hooks,
-                          accept_danger=args.accept_danger)
+                          confirm=_typed_yes if args.accept_danger and ask else None)
     if os.path.exists(args.target):
         res = skills.scan(args.target)
     else:
@@ -715,7 +715,15 @@ def _sandbox(rest):
 def _yes(question) -> bool:
     """A yes typed at the terminal. No answer is a no: on Windows an empty input such as NUL still says it is a terminal."""
     try:
-        return input(question).strip().lower() in (("yes",) if "Type yes" in question else ("y", "yes"))
+        return input(question).strip().lower() in ("y", "yes")
+    except EOFError:
+        return False
+
+
+def _typed_yes(question) -> bool:
+    """The strict form for DO_NOT_INSTALL: exactly "yes", in lower case, and nothing else."""
+    try:
+        return input(question).strip() == "yes"
     except EOFError:
         return False
 

@@ -393,11 +393,11 @@ def save_json(path, data):
 OVERRIDE_NOTE = "installed over DO_NOT_INSTALL by owner"
 
 
-def _check(targets, accept_caution, ask, out, accept_danger=False):
+def _check(targets, accept_caution, ask, out, confirm=None):
     """Scan each (label, folder) and show it. Returns (results, stop): the exit code to stop with, or None to go on.
 
-    `ask` is an optional yes/no question to the user, for a CAUTION verdict. With `accept_danger`, a DO_NOT_INSTALL verdict
-    can be installed after the owner types yes; a failed scan never can.
+    `ask` is an optional yes/no question to the user, for a CAUTION verdict. With `confirm` (a strict typed-yes question,
+    given only by the owner's flag), a DO_NOT_INSTALL verdict can be installed; a failed scan never can.
     """
     results = []
     for label, folder in targets:
@@ -408,8 +408,7 @@ def _check(targets, accept_caution, ask, out, accept_danger=False):
         results.append(res)
     worst = max(code(r) for r in results)
     failed = any(r["error"] for r in results) or worst > VERDICTS["DO_NOT_INSTALL"]
-    if worst >= VERDICTS["DO_NOT_INSTALL"] and (failed or not (accept_danger and ask
-                                                                and ask("Install a DO_NOT_INSTALL item anyway? Type yes: "))):
+    if worst >= VERDICTS["DO_NOT_INSTALL"] and (failed or not (confirm and confirm("Install a DO_NOT_INSTALL item anyway? Type yes: "))):
         out("almanac: refused. Nothing was installed. A failed scan cannot be overridden; "
             "for a DO_NOT_INSTALL verdict only the owner can, with --accept-danger.")
         return results, worst
@@ -420,7 +419,7 @@ def _check(targets, accept_caution, ask, out, accept_danger=False):
 
 
 def add(source, wanted=None, ref=None, accept_caution=False, replace=False, plugin=False, out=print, bundle=False,
-        name=None, ask=None, hooks=False, accept_danger=False) -> int:
+        name=None, ask=None, hooks=False, confirm=None) -> int:
     """Fetch, scan and install skill folders. Returns the worst verdict's exit code (3 on any failure).
 
     `bundle` installs them as a plugin in the Almanac bundle instead (see `_bundle`).
@@ -433,7 +432,7 @@ def add(source, wanted=None, ref=None, accept_caution=False, replace=False, plug
             out(f"almanac: could not fetch {source}: {exc}")
             return ERROR
         if bundle:
-            return _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, box, out, hooks, accept_danger)
+            return _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, box, out, hooks, confirm)
         parts = plugin_parts(tree)
         if plugin or (parts and (parts["hooks"] or parts["mcp"]) and not wanted):
             return _plugin(tree, source, parts, out)
@@ -454,7 +453,7 @@ def add(source, wanted=None, ref=None, accept_caution=False, replace=False, plug
             if dest.exists() and not replace:
                 out(f"almanac: a skill called {name} is already installed at {dest}; add --replace to overwrite it")
                 return ERROR
-        results, stop = _check(skills, accept_caution, ask, out, accept_danger)
+        results, stop = _check(skills, accept_caution, ask, out, confirm)
         if stop is not None:
             return stop
         dest_root.mkdir(parents=True, exist_ok=True)
@@ -514,7 +513,7 @@ def drop_flag(path: Path) -> bool:
     return True
 
 
-def _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, box, out, hooks=False, accept_danger=False) -> int:
+def _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, box, out, hooks=False, confirm=None) -> int:
     """Install the skills and agents in `tree` as a plugin folder in the Almanac bundle, after the scan.
 
     Copied as plain text: no links, no scripts run, no hooks unless `hooks` is set. MCP servers are kept only when pinned to an exact version.
@@ -543,7 +542,7 @@ def _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, bo
         kept_hooks = stage_hooks(tree, hook_dir)
         if kept_hooks and wanted:
             targets = targets + [("hooks", hook_dir)]  # a picked skill's scan does not reach the hooks
-    results, stop = _check(targets, accept_caution, ask, out, accept_danger)
+    results, stop = _check(targets, accept_caution, ask, out, confirm)
     if stop is not None:
         return stop
     res = max(results, key=code)
