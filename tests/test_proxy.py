@@ -11,6 +11,7 @@ from helpers import SESSION, Rig, sse
 from getalmanac import launcher, report
 from getalmanac import request as rq
 from getalmanac import sse as sse_mod
+from getalmanac.proxy import FUSE_FOR
 
 BODY = {"model": "claude-test", "system": [{"type": "text", "text": "You are Claude Code"}],
         "tools": [{"name": "Bash", "description": "run", "input_schema": {"type": "object"}}],
@@ -136,6 +137,28 @@ class RewriteTest(unittest.TestCase):
         rig.messages(raw)  # the lane is fused: the next request goes out untouched, once
         self.assertEqual(len(rig.upstream.requests), 3)
         self.assertEqual(rig.upstream.requests[-1]["body"], raw)
+
+    def test_a_fused_lane_is_rewritten_again_after_it_grows(self):
+        refuse = [True]
+
+        def respond(req):
+            if refuse[0] and b"HELLO THERE" in req["body"]:
+                return 400, {"content-type": "application/json"}, b'{"type":"error","error":{"type":"invalid_request_error"}}'
+            return 200, {"content-type": "text/event-stream"}, sse()
+
+        rig = Rig(respond=respond, layers=[Upper()])
+        self.addCleanup(rig.close)
+        rig.messages(json.dumps(BODY).encode())  # refused once: the lane is fused
+        refuse[0] = False
+
+        def grown(n):
+            more = [{"role": "assistant" if i % 2 == 0 else "user", "content": "x"} for i in range(n)]
+            return json.dumps(dict(BODY, messages=BODY["messages"] + more)).encode()
+
+        rig.messages(grown(FUSE_FOR - 2))
+        self.assertNotIn(b"HELLO THERE", rig.upstream.requests[-1]["body"])  # still fused
+        rig.messages(grown(FUSE_FOR))
+        self.assertIn(b"HELLO THERE", rig.upstream.requests[-1]["body"])  # the layers run again
 
     def test_count_tokens_is_rewritten_the_same_way(self):
         rig = Rig(respond=lambda req: (200, {"content-type": "application/json"}, b'{"input_tokens":5}'), layers=[Upper()])

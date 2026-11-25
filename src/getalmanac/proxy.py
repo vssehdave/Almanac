@@ -44,6 +44,7 @@ PING_EVERY = 15  # seconds between pings (and connect retries) while a stream wa
 SILENT_LIMIT = 540  # a waiting non-stream request answers before the client's 600 s header wait ends
 PING = b'event: ping\ndata: {"type": "ping"}\n\n'
 ROUTE_REFUSED = (400, 403, 404)  # what an unknown, unavailable or unsupported model comes back as
+FUSE_FOR = 40  # messages: a refused rewrite switches the layers off for this much growth, then they are tried again
 
 
 def _tell(proxy, method, *args):
@@ -147,19 +148,27 @@ class Proxy:
         conn.set_tunnel(self.host, self.port, self.hop.headers)
         return conn
 
-    def is_fused(self, lane: str) -> bool:
+    def is_fused(self, lane: str, size: int = 0) -> bool:
+        """True while a refusal of this conversation's rewritten form holds. It lapses after FUSE_FOR more messages
+        (an old mark without a count lapses at once), so Almanac, which turned Claude Code's own compaction off, can compact."""
         if lane not in self.fused and self.state is not None:
             kept = self.state.get(f"fused:{lane}")
             if kept:
                 self.fused[lane] = kept
+        mark = self.fused.get(lane)
+        at = mark.get("at") if isinstance(mark, dict) else None
+        if mark and not (isinstance(at, int) and size < at + FUSE_FOR):
+            self.fused.pop(lane, None)  # the stored mark stays until a new refusal replaces it
+            return False
         return lane in self.fused
 
-    def fuse(self, lane: str, why: str):
-        """Stop rewriting one conversation, for good: the upstream refused its rewritten form."""
-        self.fused[lane] = why
+    def fuse(self, lane: str, why: str, size: int = 0):
+        """Stop rewriting one conversation for FUSE_FOR messages: the upstream refused its rewritten form."""
+        mark = {"why": why, "at": size}
+        self.fused[lane] = mark
         if self.state is not None:
             try:
-                self.state.put(f"fused:{lane}", why)
+                self.state.put(f"fused:{lane}", mark)
             except Exception:  # the mark only outlasts this run; a store error must not drop this reply
                 pass
 
@@ -180,7 +189,8 @@ class Proxy:
             ctx.after, ctx.orig = None, orig
             before = self.seen(ctx.lane) if ctx.lane else None  # the same gap `finish` logs as `idle`
             ctx.cold = before is not None and is_cold(time.time() - before, cache_marks(orig)["ttl"])
-            if not self.layers or self.is_fused(ctx.lane) or self.is_fused(ctx.frozen_lane):
+            size = len(orig["messages"])
+            if not self.layers or self.is_fused(ctx.lane, size) or self.is_fused(ctx.frozen_lane, size):
                 return raw, orig
             work = json.loads(raw)
         except Exception as exc:  # fail open before any layer runs; nothing is indexed under a half-known lane
@@ -683,7 +693,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         self._beta("")  # the original goes out with the client's own header too
                         resp = self._send(raw, identity=True, authorization=auth)
                         if resp.status < 400:
-                            proxy.fuse(ctx.lane, detail)
+                            proxy.fuse(ctx.lane, detail, len((ctx.orig or {}).get("messages") or []))
                     ctx.after = None
                 if resp.status in ROUTE_REFUSED + (400,) and routed:  # the original fails too, so the model was not the cause
                     _tell(proxy, "forgive", ctx, routed)
