@@ -350,6 +350,10 @@ def stage_hooks(tree: Path, dest: Path) -> list:
         return []
     root = os.path.realpath(tree)
     for rel in sorted(set(HOOK_PATH.findall(file.read_text(encoding="utf-8", errors="replace")))):
+        parts = rel.split("/")
+        if ".." in parts or SKIP & set(parts):  # the scan hash ignores these, so they would go in unscanned
+            print(f"  hook file not kept: {rel} (outside the plugin or in a folder the scan skips)")
+            continue
         src = tree / rel
         if os.path.realpath(src).startswith(root + os.sep) and src.is_file() and not linked(src):
             (dest / rel).parent.mkdir(parents=True, exist_ok=True)

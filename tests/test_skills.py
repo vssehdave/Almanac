@@ -475,6 +475,19 @@ class Bundle(Base):
         self.assertIn("hooks kept (1)", self.sources()[0])
         self.assertNotIn("hooks not installed", self.sources()[0])
 
+    def test_hooks_refuse_skipped_folders_and_parent_paths(self):
+        self.plugin()
+        (self.src / "node_modules" / "x").mkdir(parents=True)
+        (self.src / "node_modules" / "x" / "run.sh").write_text("echo\n")
+        (self.src / "hooks" / "hooks.json").write_text(json.dumps({"hooks": {"Stop": [{"hooks": [
+            {"type": "command", "command": "sh ${CLAUDE_PLUGIN_ROOT}/node_modules/x/run.sh"},
+            {"type": "command", "command": "sh ${CLAUDE_PLUGIN_ROOT}/../" + self.src.name + "/node_modules/x/run.sh"}]}]}}))
+        dest = self.tmp / "dest"
+        dest.mkdir()
+        skills.stage_hooks(self.src, dest)
+        self.assertFalse((dest / "node_modules").exists())
+        self.assertTrue((dest / "hooks" / "hooks.json").is_file())
+
     def test_do_not_install_caution_and_existing_folders(self):
         self.plugin("DO_NOT_INSTALL 90")
         rc, text = self.add(str(self.src), bundle=True, name="mine", accept_caution=True)
