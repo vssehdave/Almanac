@@ -148,6 +148,21 @@ class Refine(ti.ImportBase):
         self.assertEqual(self.store.run("select summary from convo")[0]["summary"], "Kept as is.")
         self.assertEqual([r["status"] for r in self.store.run("select status from node where kind = 'leaf' order by seq")], ["done", "done", "open"])
 
+    def test_a_long_conversation_is_rechecked_in_batches_not_skipped(self):
+        self.stored(n=6)
+        self.store.run("update node set status = 'open' where seq < 5")
+        self.store.run("update convo set summary = 'Kept.', sumturns = turns")
+        with mock.patch.object(summarize, "RECHECK_CHARS", 70), mock.patch.dict(ANSWER, {"closed": []}), contextlib.redirect_stdout(io.StringIO()):
+            summarize.backfill(self.memory, self.cfg)
+            first = self.store.run("select closecheck, turns from convo")[0]
+            self.assertTrue(0 < first["closecheck"] < first["turns"], dict(first))
+            for _ in range(6):
+                summarize.backfill(self.memory, self.cfg)
+        self.assertEqual(self.store.run("select closecheck = turns ok from convo")[0]["ok"], 1)
+        sent = "".join(m["body"]["messages"][0]["content"] for m in FakeConn.sent)
+        for number in range(1, 6):  # every open exchange was in some request
+            self.assertIn(f"{number}. [open]", sent)
+
     def test_an_exchange_indexed_during_the_recheck_is_not_marked_judged(self):
         self.stored(n=3)
         self.store.run("update node set status = 'open' where seq = 0")
