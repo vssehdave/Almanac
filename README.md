@@ -716,6 +716,21 @@ To change the text, put a file with the same name (`opus.md`, `sonnet.md`,
 `haiku.md`, `common.md` or `agent.md`) in the folder `almanac cheatsheet path` prints. It
 replaces the packaged one from the next run.
 
+**Lessons per agent type** (`lessons.enabled`, on by default). When the main model files a
+`memory_review` verdict that reports a problem with a sub-agent's work, the summary model
+(`memory.summary_model`, through the same upstream and login) turns it into a lesson for that
+agent type: the cause, and the sign that it is happening again. Each type keeps at most five; a
+repeat sharpens the lesson it matches instead of adding one. With `memory.summary_model` set to
+`""` nothing is distilled. A sub-agent thread gets its type's lessons after its working rules.
+The text is fixed at the thread's first request and sent the same for the rest of the thread, so
+its cache keeps hitting; a new lesson reaches only threads started after it.
+
+```bash
+almanac lessons                  # every agent type's lessons
+almanac lessons clear Explore    # drop one type's lessons
+almanac config set lessons.enabled off
+```
+
 ## Adopting skills and plugins
 
 Almanac ships no third-party skills. It carries one plugin of its own (`almanac`:
@@ -1412,6 +1427,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac route [status]` | Routing mode, pin, unavailable tiers and the last 10 decisions |
 | `almanac route pin small\|medium\|large\|off` | Keep this project on one tier, or lift the pin |
 | `almanac cheatsheet show [opus\|sonnet\|haiku\|fable\|agent]` | The working rules added for that model (`agent`: what a sub-agent gets), and their size |
+| `almanac lessons [clear AGENT]` | Lessons per sub-agent type, from review verdicts; `clear` drops one type's |
 | `almanac cheatsheet path` | Where your own copies of the rules go |
 | `almanac skill scan PATH\|URL` | Scan a skill or plugin (exit 0 SAFE, 1 CAUTION, 2 DO_NOT_INSTALL, 3 not scanned) |
 | `almanac skill add URL\|PATH` | Fetch into quarantine, scan, install the skills only if SAFE (`--skill`, `--ref`, `--accept-caution`, `--replace`). With `--bundle` (and `--name`): install as a plugin in your Almanac bundle instead |
@@ -1490,6 +1506,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `playbooks.background` | `true` | Mine and compile in the background at each start |
 | `playbooks.compile_per_day` | `1` | Most Sonnet sessions a day that write a playbook from a repeated task (`0` is off) |
 | `cheatsheet.mode` | `"on"` | `"off"` stops adding the working rules for each model |
+| `lessons.enabled` | `true` | `false` stops distilling review verdicts into lessons and adding them to sub-agents |
 | `offline.hold_minutes` | `480` | Minutes a model request waits for the network to return (`0` fails at once) |
 | `keepalive.enabled` | `false` | Opt in to cache pings: while a conversation is paused, a tiny request restarts its cache's life (see Cache keepalive) |
 | `keepalive.max_idle_minutes` | `240` | Stop pinging a conversation this long after its last real request |

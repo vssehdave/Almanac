@@ -262,7 +262,8 @@ class Memory:
                                 ("agent_type", "text not null default ''"),
                                 ("review", "text not null default ''"),  # '' main thread; 'pending' sub-agent work; 'reviewed' once an Opus model signed it off
                                 ("review_note", "text not null default ''"),
-                                ("closecheck", "integer not null default 0")):  # closecheck: exchanges the model last judged for closed open work
+                                ("closecheck", "integer not null default 0"),  # closecheck: exchanges the model last judged for closed open work
+                                ("lessoned", "integer not null default 0")):  # lessoned: 1 once its review verdict was distilled into lessons
                 if column not in have:  # a database written before conversation summaries
                     store.run(f"alter table convo add column {column} {ddl}")
                     if column == "review":  # sub-agent work stored before reviews existed is unreviewed too

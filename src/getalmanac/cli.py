@@ -50,6 +50,7 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac playbook compile     have one Claude Code session write the best repeat up as a playbook (--top N, --dry-run)
   almanac playbook dedupe      merge playbooks that do the same route into one (--include-approved to touch approved ones)
   almanac library list|show|forget   the prompt library: how past prompts were solved (list --project NAME; show ID; forget ID)
+  almanac lessons [clear AGENT]   lessons per sub-agent type, from review verdicts; clear drops one type's
   almanac projects             projects seen; `projects merge FROM INTO`, `projects rename NAME NEW`
   almanac status               settings, files and recent activity
   almanac doctor               check that everything needed is in place
@@ -662,6 +663,30 @@ def _library(rest):
     return 0
 
 
+def _lessons(rest):
+    from . import lessons
+
+    parser = argparse.ArgumentParser(prog="almanac lessons")
+    sub = parser.add_subparsers(dest="cmd")
+    sub.add_parser("clear").add_argument("agent", help="the agent type whose lessons are removed")
+    args = parser.parse_args(rest)
+    state = _memory_handle().state
+    if args.cmd == "clear":
+        if not lessons.load(state, args.agent):
+            print(f"almanac: no lessons for {args.agent!r}; see `almanac lessons`", file=sys.stderr)
+            return 2
+        state.run("delete from state where key = ?", ("lesson:" + args.agent,))
+        print(f"cleared the lessons for {args.agent} (threads already running keep theirs)")
+        return 0
+    kept = state.scan("lesson:")
+    for key in sorted(kept):
+        if kept[key]:
+            _print(lessons.text(state, key.partition(":")[2]) + "\n")
+    if not any(kept.values()):
+        print("No lessons yet: they come from memory_review verdicts that report a problem.")
+    return 0
+
+
 def _mcp(_rest):
     from . import mcp
 
@@ -724,7 +749,7 @@ def _version(_rest):
 COMMANDS = {"sandbox": _sandbox, "serve": _serve, "report": _report, "status": _status, "doctor": _doctor, "config": _config,
             "version": _version, "memory": _memory, "projects": _projects, "route": _route, "cheatsheet": _cheatsheet, "mcp": _mcp,
             "semantic": _semantic, "cloud": _cloud, "skill": _skill, "pack": _pack,
-            "playbook": _playbook, "library": _library, "review-gate": _review_gate}
+            "playbook": _playbook, "library": _library, "lessons": _lessons, "review-gate": _review_gate}
 
 
 def main(argv=None):
