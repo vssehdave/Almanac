@@ -10,7 +10,7 @@ apply, and load them before you start. Say in one line which you used.
 - To add a skill or plugin the owner names, use the `almanac:adopt` skill.
 - Hand a self-contained piece of work to an agent when one fits it; the
   agent's file sets its model. Do small things yourself: no agent for a
-  job of a few tool calls, and never more than four agents at once.
+  job of a few tool calls, and never more than six agents at once.
 - A skill that changes a lot without supervision (a clean-up of a whole
   codebase, unattended improvements on a branch): start it only when the owner
   has asked for that outcome in words, and on a clean branch.

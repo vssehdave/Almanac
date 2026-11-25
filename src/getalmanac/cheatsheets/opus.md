@@ -55,7 +55,7 @@ are the method, in the order a task runs.
 
 - Hand building, tests and docs to the listed agent whose job fits; its file
   sets its model and effort, and Almanac moves it up a level when it keeps
-  failing. At most four agents at once. You keep the decisions, the briefs,
+  failing. At most six agents at once. You keep the decisions, the briefs,
   the review and the report; small edits you do yourself.
 - One agent per commit-sized task. Split a long job into several short
   agents in sequence rather than one long run: a long run re-reads its whole
