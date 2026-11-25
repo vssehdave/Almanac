@@ -5,13 +5,14 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import test_compact as tc
 from helpers import Rig, sse
 from test_memory import make_repo
 
-from getalmanac import compact, memory as memory_mod, summarize
+from getalmanac import compact, lessons, memory as memory_mod, summarize
 from getalmanac.memory import Memory, MemoryLayer, ProjectLayer
 from getalmanac.status import combine
 from getalmanac.store import State, Store
@@ -131,6 +132,12 @@ class SummaryTest(Case):
         self.assertEqual([c["title"] for c in self.memory.outline(leaf["convo"])[0]["children"]], [TITLE])
         note = self.memory.recall(self.key, "retry helper backoff", "another-lane", 2400)
         self.assertIn(f"{TITLE}", note)
+
+    def test_a_failing_lesson_distil_still_lets_summaries_run(self):
+        with mock.patch.object(lessons, "distil", side_effect=RuntimeError("boom")) as distil:
+            self.ask("Add a retry helper to the fetch module")
+        self.assertTrue(distil.called)
+        self.assertEqual(self.leaves()[0]["summary"], SUMMARY)
 
     def test_the_call_is_one_plain_request_made_as_the_same_user(self):
         self.ask("Add a retry helper to the fetch module", extra={"user-agent": "claude-cli/9"})

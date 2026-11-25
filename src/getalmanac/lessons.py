@@ -57,7 +57,7 @@ def distil(memory, ctx, orig, convo_id):
     from . import accounts, summarize
 
     cfg = ctx.cfg["memory"]
-    if not (ctx.cfg["lessons"]["enabled"] and cfg["enabled"] and cfg["summary_model"]):
+    if not ((ctx.cfg.get("lessons") or {}).get("enabled") and cfg["enabled"] and cfg["summary_model"]):
         return
     rows = memory.store.run("select id, agent_type, review_note from convo where parent = ? and review = 'reviewed' "
                             "and lessoned = 0 and agent_type != '' order by id", (convo_id,))

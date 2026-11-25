@@ -364,7 +364,10 @@ class SummaryLayer:
         self._arm(ctx, orig)
         own = self.memory.convo_of(ctx.lane)
         if own:
-            lessons.distil(self.memory, ctx, orig, own["id"])
+            try:
+                lessons.distil(self.memory, ctx, orig, own["id"])
+            except Exception:  # lessons are extra: this turn's summaries still run
+                pass
         store = ctx.state
         # Only this conversation's exchanges: the login on this request must not carry another conversation's text.
         rows = self.memory.store.run("select id from node where kind = 'leaf' and convo = (select id from convo where lane = ?) "

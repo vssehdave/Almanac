@@ -716,14 +716,17 @@ To change the text, put a file with the same name (`opus.md`, `sonnet.md`,
 `haiku.md`, `common.md` or `agent.md`) in the folder `almanac cheatsheet path` prints. It
 replaces the packaged one from the next run.
 
-**Lessons per agent type** (`lessons.enabled`, on by default). When the main model files a
-`memory_review` verdict that reports a problem with a sub-agent's work, the summary model
-(`memory.summary_model`, through the same upstream and login) turns it into a lesson for that
-agent type: the cause, and the sign that it is happening again. Each type keeps at most five; a
+**Lessons per agent type** (`lessons.enabled`, on by default). Every new `memory_review`
+verdict the main model files on a sub-agent's work is sent to the summary model
+(`memory.summary_model`, through the same upstream and login), which picks out the ones that
+report a problem and turns them into lessons for that agent type: the cause, and the sign that
+it is happening again. Each type keeps at most five; a
 repeat sharpens the lesson it matches instead of adding one. With `memory.summary_model` set to
 `""` nothing is distilled. A sub-agent thread gets its type's lessons after its working rules.
 The text is fixed at the thread's first request and sent the same for the rest of the thread, so
 its cache keeps hitting; a new lesson reaches only threads started after it.
+Lessons are shared across projects and survive `almanac memory forget` of a project or a
+conversation; only `forget --all` or `almanac lessons clear` removes them.
 
 ```bash
 almanac lessons                  # every agent type's lessons
