@@ -390,10 +390,14 @@ def save_json(path, data):
     os.replace(tmp, path)
 
 
-def _check(targets, accept_caution, ask, out):
+OVERRIDE_NOTE = "installed over DO_NOT_INSTALL by owner"
+
+
+def _check(targets, accept_caution, ask, out, accept_danger=False):
     """Scan each (label, folder) and show it. Returns (results, stop): the exit code to stop with, or None to go on.
 
-    `ask` is an optional yes/no question to the user, for a CAUTION verdict.
+    `ask` is an optional yes/no question to the user, for a CAUTION verdict. With `accept_danger`, a DO_NOT_INSTALL verdict
+    can be installed after the owner types yes; a failed scan never can.
     """
     results = []
     for label, folder in targets:
@@ -403,8 +407,11 @@ def _check(targets, accept_caution, ask, out):
             return results, ERROR
         results.append(res)
     worst = max(code(r) for r in results)
-    if worst >= VERDICTS["DO_NOT_INSTALL"]:
-        out("almanac: refused. Nothing was installed. A DO_NOT_INSTALL verdict or a failed scan cannot be overridden.")
+    failed = any(r["error"] for r in results) or worst > VERDICTS["DO_NOT_INSTALL"]
+    if worst >= VERDICTS["DO_NOT_INSTALL"] and (failed or not (accept_danger and ask
+                                                                and ask("Install a DO_NOT_INSTALL item anyway? Type yes: "))):
+        out("almanac: refused. Nothing was installed. A failed scan cannot be overridden; "
+            "for a DO_NOT_INSTALL verdict only the owner can, with --accept-danger.")
         return results, worst
     if worst == VERDICTS["CAUTION"] and not accept_caution and not (ask and ask("Install anyway? [y/N] ")):
         out("almanac: refused. Nothing was installed. Read the issues above; add --accept-caution to install anyway.")
@@ -413,7 +420,7 @@ def _check(targets, accept_caution, ask, out):
 
 
 def add(source, wanted=None, ref=None, accept_caution=False, replace=False, plugin=False, out=print, bundle=False,
-        name=None, ask=None, hooks=False) -> int:
+        name=None, ask=None, hooks=False, accept_danger=False) -> int:
     """Fetch, scan and install skill folders. Returns the worst verdict's exit code (3 on any failure).
 
     `bundle` installs them as a plugin in the Almanac bundle instead (see `_bundle`).
@@ -426,7 +433,7 @@ def add(source, wanted=None, ref=None, accept_caution=False, replace=False, plug
             out(f"almanac: could not fetch {source}: {exc}")
             return ERROR
         if bundle:
-            return _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, box, out, hooks)
+            return _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, box, out, hooks, accept_danger)
         parts = plugin_parts(tree)
         if plugin or (parts and (parts["hooks"] or parts["mcp"]) and not wanted):
             return _plugin(tree, source, parts, out)
@@ -447,7 +454,7 @@ def add(source, wanted=None, ref=None, accept_caution=False, replace=False, plug
             if dest.exists() and not replace:
                 out(f"almanac: a skill called {name} is already installed at {dest}; add --replace to overwrite it")
                 return ERROR
-        results, stop = _check(skills, accept_caution, ask, out)
+        results, stop = _check(skills, accept_caution, ask, out, accept_danger)
         if stop is not None:
             return stop
         dest_root.mkdir(parents=True, exist_ok=True)
@@ -462,6 +469,8 @@ def add(source, wanted=None, ref=None, accept_caution=False, replace=False, plug
             digest = tree_hash(dest)
             installed[name] = {"name": name, "source": source, "commit": commit, "tree": digest, "score": res["score"],
                                "verdict": res["verdict"], "date": time.strftime("%Y-%m-%d %H:%M:%S")}
+            if code(res) == VERDICTS["DO_NOT_INSTALL"]:
+                installed[name]["note"] = OVERRIDE_NOTE
             note_scan(dest, "skill", digest, res, name)
             out(f"installed {name} -> {dest}")
         save_json(_records_path(), records)
@@ -505,7 +514,7 @@ def drop_flag(path: Path) -> bool:
     return True
 
 
-def _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, box, out, hooks=False) -> int:
+def _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, box, out, hooks=False, accept_danger=False) -> int:
     """Install the skills and agents in `tree` as a plugin folder in the Almanac bundle, after the scan.
 
     Copied as plain text: no links, no scripts run, no hooks unless `hooks` is set. MCP servers are kept only when pinned to an exact version.
@@ -534,7 +543,7 @@ def _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, bo
         kept_hooks = stage_hooks(tree, hook_dir)
         if kept_hooks and wanted:
             targets = targets + [("hooks", hook_dir)]  # a picked skill's scan does not reach the hooks
-    results, stop = _check(targets, accept_caution, ask, out)
+    results, stop = _check(targets, accept_caution, ask, out, accept_danger)
     if stop is not None:
         return stop
     res = max(results, key=code)
@@ -567,6 +576,7 @@ def _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, bo
     dest.parent.mkdir(exist_ok=True)
     os.replace(staged, dest)
     changed = ["manifest written here"]
+    changed += [OVERRIDE_NOTE] if code(res) == VERDICTS["DO_NOT_INSTALL"] else []
     changed += [f"disable-model-invocation removed from {len(flagged)} skill(s)"] if flagged else []
     left = [line for line in parts["hooks"] if line not in kept_hooks]
     changed += [f"hooks kept ({len(kept_hooks)})"] if kept_hooks else []
