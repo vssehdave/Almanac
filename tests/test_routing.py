@@ -684,9 +684,16 @@ class AgentFloorTest(Case):
         self.assertEqual(self.sub("Add a retry to fetch() in net.py.", LARGE), LARGE)
         self.assertEqual(self.sub("Difficulty: simple\nlist the files", LARGE, agent="b"), LARGE)
 
-    def test_a_task_that_needs_more_still_moves_the_agent_up(self):
-        self.send(convo([{"text": "hello"}]), model=LARGE)
+    def test_a_task_that_needs_more_still_moves_an_inheriting_agent_up(self):
+        self.send(convo([{"text": "hello"}]), model=SMALL)
         self.assertEqual(self.sub("Difficulty: hard\nfind the race", SMALL), LARGE)
+
+    def test_an_agents_own_model_is_never_moved_up(self):
+        self.send(convo([{"text": "hello"}]), model=LARGE)  # the parent runs on Opus; this agent's file names Sonnet
+        task = "Review a.py, b.py, c.py, d.py and e.py for bugs."
+        self.assertEqual(routing.classify(task, agent=True)[0], "large")  # the task alone would go to Opus
+        self.assertEqual(self.sub(task, MEDIUM), MEDIUM)
+        self.assertEqual(self.sub("Difficulty: hard\nfind the race", MEDIUM, agent="b"), MEDIUM)
 
     def test_an_agent_that_only_inherited_the_parents_model_keeps_it_unless_route_inherited_is_on(self):
         self.send(convo([{"text": "hello"}]), model=LARGE)

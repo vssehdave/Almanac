@@ -585,14 +585,15 @@ is none, and picks the sub-agent's model. It no longer asks the model to write t
 line, since an agent's own file usually sets its model. An agent file may also set
 `effort:`, which is the sub-agent's starting effort.
 A sub-agent keeps that model to the end; failures in its own thread raise its effort
-as above. Routing never takes a sub-agent below the model its own definition
-asked for, or inherited from its parent: a sub-agent that starts on Opus stays on
-Opus for a simple task. Set `routing.route_inherited` to
+as above. A sub-agent whose own definition names a model other than its parent's
+keeps exactly that model: neither the `Difficulty:` line nor its task moves it up or
+down (only a request too large for that model's window moves up). Routing never takes
+any other sub-agent below the model it inherited from its parent: a sub-agent that
+starts on Opus stays on Opus for a simple task. Set `routing.route_inherited` to
 `true` to let a sub-agent that only inherited its parent's model (same model as the
-parent) be routed down by difficulty; one defined on another model keeps its
-floor. Almanac cannot tell an agent defined on the same model as its parent from
-one that inherited it, so with the setting on it counts both as inherited.
-`almanac route pin` beats this floor. Forks always stay on their
+parent) be routed down by difficulty. Almanac cannot tell an agent defined on the
+same model as its parent from one that inherited it, so it counts both as inherited.
+`almanac route pin` beats all of this. Forks always stay on their
 parent's model. Without that line, a task that
 asks for no coding and no hard job keeps the model Claude Code chose for it,
 whatever the agent's type, except that a sub-agent which only inherited an Opus
