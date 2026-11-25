@@ -144,6 +144,50 @@ class Add(Base):
             self.assertEqual(self.installed(), [], spec)
             self.assertTrue(self.quarantine_empty())
 
+    def test_accept_danger_override(self):
+        make_skill(self.src, "bad", "DO_NOT_INSTALL 90")
+        rc, text = self.add(str(self.src), accept_caution=True)
+        self.assertEqual((rc, self.installed()), (2, []))
+        self.assertIn("--accept-danger", text)
+        asked = []
+        rc, text = self.add(str(self.src), accept_caution=True)  # no way to ask: refused
+        self.assertEqual((rc, self.installed()), (2, []))
+        rc, _ = self.add(str(self.src), accept_caution=True, confirm=lambda q: asked.append(q) and False)
+        self.assertEqual((rc, self.installed()), (2, []))
+        self.assertIn("Type yes", asked[0])
+        rc, _ = self.add(str(self.src), accept_caution=True, confirm=lambda q: True)
+        self.assertEqual((rc, self.installed()), (2, ["bad"]))
+        record = json.loads((self.tmp / "home" / "skills.json").read_text())["skills"]["bad"]
+        self.assertEqual(record["note"], skills.OVERRIDE_NOTE)
+        make_skill(self.tmp / "b", "bad")
+        (self.tmp / "b" / "verdict.txt").write_text("DO_NOT_INSTALL 90")  # a bundle scans the whole tree
+        self.assertEqual(self.add(str(self.tmp / "b"), bundle=True, name="mine", accept_caution=True, confirm=lambda q: True)[0], 2)
+        self.assertIn(skills.OVERRIDE_NOTE, (self.tmp / "home" / "bundle" / "SOURCES.md").read_text())
+
+    def test_accept_danger_never_overrides_failed_scan(self):
+        for spec in ("ERROR", "JUNK"):
+            src = self.tmp / ("src-" + spec)
+            make_skill(src, "bad", spec)
+            rc, _ = self.add(str(src), accept_caution=True, ask=lambda q: True, confirm=lambda q: True)
+            self.assertEqual((rc, self.installed()), (3, []), spec)
+
+    def test_bundle_override_declined_or_failed_scan(self):
+        for spec, answer in (("DO_NOT_INSTALL 90", False), ("ERROR", True), ("JUNK", True)):
+            src = self.tmp / ("bsrc-" + spec.split()[0])
+            make_skill(src, "bad")
+            (src / "verdict.txt").write_text(spec)
+            rc, _ = self.add(str(src), bundle=True, name="mine", accept_caution=True, confirm=lambda q, a=answer: a)
+            self.assertGreaterEqual(rc, 2, spec)
+            self.assertFalse((self.tmp / "home" / "bundle" / "mine").exists(), spec)
+            self.assertFalse((self.tmp / "home" / "bundle" / "SOURCES.md").exists(), spec)
+
+    def test_cli_confirm_strictness(self):
+        for typed, danger, want in (("y", True, False), ("YES", True, False), ("yes", True, True), (" yes ", True, True),
+                                    ("y", False, True)):
+            ask = cli._typed_yes if danger else cli._yes
+            with mock.patch("builtins.input", lambda q, t=typed: t):
+                self.assertEqual(ask("Install anyway? [y/N] "), want, (typed, danger))
+
     def test_existing_skill_needs_replace(self):
         make_skill(self.src, "dup")
         self.assertEqual(self.add(str(self.src))[0], 0)
