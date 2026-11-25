@@ -117,6 +117,10 @@ class CheatsheetLayer:
             sheet = sheet + "\n\n" + index() if sheet else index()
         if lean:  # every thread, whatever the model: the lean rules come first, the model's own sheet after them
             sheet = lean + "\n\n" + sheet if sheet else lean
+        if sub and ctx.agent_type and getattr(ctx, "state", None) is not None and (ctx.cfg.get("lessons") or {}).get("enabled"):
+            from . import lessons  # frozen at the thread's first request: a new lesson reaches only new threads
+            learned = ctx.state.frozen(f"lessons:{ctx.lane}", lambda: lessons.text(ctx.state, ctx.agent_type[:40]))
+            sheet = sheet + "\n\n" + learned if sheet and learned else sheet or learned
         system = body.get("system")
         if not sheet or not system:
             return
