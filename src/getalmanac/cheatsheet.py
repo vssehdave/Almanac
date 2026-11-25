@@ -8,7 +8,9 @@ place every time, so a conversation's system prompt keeps the same bytes and
 the prompt cache keeps hitting. No cache breakpoint is added, moved or removed.
 """
 import functools
+import os
 from importlib import resources
+from pathlib import Path
 
 from . import config
 
@@ -23,7 +25,8 @@ INDEX = 12  # playbooks listed
 
 
 def override_dir():
-    return config.home() / "cheatsheets"
+    """ALMANAC_CHEATSHEETS (set by `almanac eval` for one arm) wins over the user's folder under ALMANAC_HOME."""
+    return Path(os.environ["ALMANAC_CHEATSHEETS"]) if os.environ.get("ALMANAC_CHEATSHEETS") else config.home() / "cheatsheets"
 
 
 @functools.lru_cache(maxsize=None)
