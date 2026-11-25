@@ -306,8 +306,10 @@ class SummaryLayer:
         rows = self.memory.store.run("select id, turns, sumturns from convo where lane = ?", (ctx.lane,))
         if not rows or rows[0]["turns"] < 2 or rows[0]["sumturns"] >= rows[0]["turns"]:  # one exchange has its own summary already
             return
-        if paused_until(store) or not reserve(store, cfg["summary_daily_calls"] if cap else None):
+        if paused_until(store):
             return
+        if not reserve(store, cfg["summary_daily_calls"] if cap else None):
+            return False  # the daily cap is full (None for every other early return)
         text = self.memory.digest(ctx.lane)
         if len(text) > INPUT_CHARS:
             text = text[: INPUT_CHARS // 3] + "\n... (middle not shown) ...\n" + text[-(2 * INPUT_CHARS // 3):]
@@ -343,7 +345,8 @@ class SummaryLayer:
 
     def observe(self, ctx, orig, reply):
         if reply.get("idle"):
-            return self._idle(ctx)
+            self._idle(ctx)
+            return
         cfg = ctx.cfg["memory"]
         if not (cfg["enabled"] and cfg["summary_model"] and MemoryLayer._main_thread(orig, ctx)):
             return
@@ -444,7 +447,8 @@ def refine(memory, cfg, project=None, limit=None, dry_run=False, say=print, fact
         sql = ("select n.id from node n join convo c on c.id = n.convo where n.kind = 'leaf' and c.lane like 'import:%' "
                "and n.summary = '' and n.tries < ?" + (" and n.project = ?" if project else "") + " order by n.ts desc, n.id desc")
         ids = [r["id"] for r in store.run(sql, (MAX_TRIES, project) if project else (MAX_TRIES,))]
-    if limit is None:
+    explicit = limit is not None
+    if not explicit:
         limit = max(0, cfg["memory"]["summary_daily_calls"] - today(state)["calls"])
     ids = ids[:limit]
     report["pending"] = len(ids)
@@ -468,9 +472,11 @@ def refine(memory, cfg, project=None, limit=None, dry_run=False, say=print, fact
     layer, ctx = SummaryLayer(memory), _Ask(state, upstream, tok)
     orig = {"system": IDENTITY}
     for n, node_id in enumerate(ids, 1):
+        if not reserve(state, None if explicit else cfg["memory"]["summary_daily_calls"]):  # an explicit --limit may pass the cap
+            report["stopped"] = "the daily call cap is reached"
+            break
         if not facts:
             store.run("update node set tries = tries + 1 where id = ?", (node_id,))
-        reserve(state)  # no cap: an explicit --limit may go past the daily count
         upstream.log.last = {}
         had = store.run("select summary, facts from node where id = ?", (node_id,))[0]
         ok = layer._ask(ctx, orig, node_id, model, facts_only=facts)
@@ -513,7 +519,8 @@ def backfill(memory, cfg, project=None, limit=None, dry_run=False, say=print) ->
            "and exists (select 1 from node n where n.convo = convo.id and n.kind = 'leaf' and n.status = 'open' and n.seq < "
            "(select max(seq) from node where convo = convo.id and kind = 'leaf')))) order by updated desc, id desc")
     rows = [dict(r) for r in store.run(sql, (project,) if project else ())]
-    if limit is None:
+    explicit = limit is not None
+    if not explicit:
         limit = max(0, cfg["memory"]["summary_daily_calls"] - today(state)["calls"])
     rows = rows[:limit]
     report["pending"] = len(rows)
@@ -539,10 +546,14 @@ def backfill(memory, cfg, project=None, limit=None, dry_run=False, say=print) ->
     for row in rows:
         job = Idle(_Ask(state, upstream, tok, cfg, row["lane"]), {"system": IDENTITY})
         if row["recheck"]:
-            reserve(state)
+            if not reserve(state, None if explicit else cfg["memory"]["summary_daily_calls"]):
+                report["stopped"] = "the daily call cap is reached"
+                break
             report["rechecked" if layer._recheck(job, row["id"]) else "failed"] += 1
         else:
-            layer._idle(job, cap=False)
+            if layer._idle(job, cap=not explicit) is False:
+                report["stopped"] = "the daily call cap is reached"
+                break
             report["summarized" if store.run("select sumturns from convo where id = ?", (row["id"],))[0]["sumturns"] else "failed"] += 1
         if paused_until(state):  # the login or the allowance, not this conversation
             report["stopped"] = f"the API refused a call; paused for {PAUSE_SECONDS // 60} minutes (try again later)"
