@@ -573,6 +573,8 @@ def _skill(rest):
     if args.cmd == "add":
         ask = _yes if sys.stdin.isatty() else None
         skills.offer_scanner(ask, out=_print)
+        if args.accept_danger and not ask:
+            _print("almanac: --accept-danger needs a terminal to type yes in; a DO_NOT_INSTALL item will be refused.")
         return skills.add(args.source, args.skill, args.ref, args.accept_caution or args.accept_danger, args.replace,
                           out=_print, bundle=args.bundle, name=args.name, ask=ask, hooks=args.hooks,
                           confirm=_typed_yes if args.accept_danger and ask else None)
