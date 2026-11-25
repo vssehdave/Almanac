@@ -308,6 +308,17 @@ def mcp_servers(tree: Path) -> dict:
     return servers
 
 
+def hook_lines(data) -> list:
+    """One "Event: command" line per hook in a parsed hooks file."""
+    lines = []
+    for event, entries in (data.get("hooks", data) or {}).items():
+        for entry in entries if isinstance(entries, list) else []:
+            for hook in (entry.get("hooks") or []) if isinstance(entry, dict) else []:
+                if isinstance(hook, dict):
+                    lines.append(f"{event}: {str(hook.get('command', hook.get('type', '?')))[:120]}")
+    return lines
+
+
 def plugin_parts(tree: Path):
     """What a Claude Code plugin at `tree` declares that runs code: {"hooks": [...], "mcp": [...]}, or None."""
     if not (tree / ".claude-plugin").is_dir():
@@ -322,15 +333,30 @@ def plugin_parts(tree: Path):
         elif isinstance(item, str):
             hooks.append(f"hooks file {item}")
     for data in sources:
-        for event, entries in (data.get("hooks", data) or {}).items():
-            for entry in entries if isinstance(entries, list) else []:
-                for hook in (entry.get("hooks") or []) if isinstance(entry, dict) else []:
-                    if isinstance(hook, dict):
-                        hooks.append(f"{event}: {str(hook.get('command', hook.get('type', '?')))[:120]}")
+        hooks += hook_lines(data)
     for name, spec in mcp_servers(tree).items():
         spec = spec if isinstance(spec, dict) else {}
         mcp.append(f"{name}: {' '.join(str(x) for x in [spec.get('command', spec.get('url', '?')), *(spec.get('args') or [])])[:160]}")
     return {"hooks": hooks, "mcp": mcp}
+
+
+HOOK_PATH = re.compile(r"\$\{?CLAUDE_PLUGIN_ROOT\}?/([\w./@+-]+)")
+
+
+def stage_hooks(tree: Path, dest: Path) -> list:
+    """Copy hooks/hooks.json and the plugin files its commands name into `dest`. Returns the hook lines kept."""
+    file = tree / "hooks" / "hooks.json"
+    if not file.is_file() or linked(file):
+        return []
+    root = os.path.realpath(tree)
+    for rel in sorted(set(HOOK_PATH.findall(file.read_text(encoding="utf-8", errors="replace")))):
+        src = tree / rel
+        if os.path.realpath(src).startswith(root + os.sep) and src.is_file() and not linked(src):
+            (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dest / rel)
+    (dest / "hooks").mkdir(exist_ok=True)
+    shutil.copyfile(file, dest / "hooks" / "hooks.json")
+    return hook_lines(_json(file))
 
 
 def plugin_commands(tree: Path, source: str):
@@ -383,7 +409,7 @@ def _check(targets, accept_caution, ask, out):
 
 
 def add(source, wanted=None, ref=None, accept_caution=False, replace=False, plugin=False, out=print, bundle=False,
-        name=None, ask=None) -> int:
+        name=None, ask=None, hooks=False) -> int:
     """Fetch, scan and install skill folders. Returns the worst verdict's exit code (3 on any failure).
 
     `bundle` installs them as a plugin in the Almanac bundle instead (see `_bundle`).
@@ -396,7 +422,7 @@ def add(source, wanted=None, ref=None, accept_caution=False, replace=False, plug
             out(f"almanac: could not fetch {source}: {exc}")
             return ERROR
         if bundle:
-            return _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, box, out)
+            return _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, box, out, hooks)
         parts = plugin_parts(tree)
         if plugin or (parts and (parts["hooks"] or parts["mcp"]) and not wanted):
             return _plugin(tree, source, parts, out)
@@ -475,10 +501,10 @@ def drop_flag(path: Path) -> bool:
     return True
 
 
-def _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, box, out) -> int:
+def _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, box, out, hooks=False) -> int:
     """Install the skills and agents in `tree` as a plugin folder in the Almanac bundle, after the scan.
 
-    Copied as plain text: no links, no scripts run, no hooks. MCP servers are kept only when pinned to an exact version.
+    Copied as plain text: no links, no scripts run, no hooks unless `hooks` is set. MCP servers are kept only when pinned to an exact version.
     """
     name = name or re.sub(r"[^A-Za-z0-9._-]", "-", source_name(source)) or "plugin"
     if not NAME.match(name) or name.lower() in ("almanac", "sources.md"):
@@ -497,7 +523,14 @@ def _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, bo
     if not (found or agents):
         out(f"almanac: no skills (SKILL.md) or agents (agents/*.md) in {source}")
         return ERROR
-    results, stop = _check(found if wanted else [(name, tree)], accept_caution, ask, out)
+    targets = found if wanted else [(name, tree)]
+    hook_dir, kept_hooks = box / "hooks-stage", []
+    if hooks:
+        hook_dir.mkdir()
+        kept_hooks = stage_hooks(tree, hook_dir)
+        if kept_hooks and wanted:
+            targets = targets + [("hooks", hook_dir)]  # a picked skill's scan does not reach the hooks
+    results, stop = _check(targets, accept_caution, ask, out)
     if stop is not None:
         return stop
     res = max(results, key=code)
@@ -507,6 +540,8 @@ def _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, bo
     for agent in agents:
         (staged / "agents").mkdir(parents=True, exist_ok=True)
         shutil.copyfile(agent, staged / "agents" / agent.name)
+    if kept_hooks:
+        shutil.copytree(hook_dir, staged, dirs_exist_ok=True)
     flagged = [skill for skill, _ in found if drop_flag(staged / "skills" / skill / "SKILL.md")]
     licence, licence_file = find_licence(tree)
     if licence_file:
@@ -529,7 +564,9 @@ def _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, bo
     os.replace(staged, dest)
     changed = ["manifest written here"]
     changed += [f"disable-model-invocation removed from {len(flagged)} skill(s)"] if flagged else []
-    changed += [f"hooks not installed ({len(parts['hooks'])})"] if parts["hooks"] else []
+    left = [line for line in parts["hooks"] if line not in kept_hooks]
+    changed += [f"hooks kept ({len(kept_hooks)})"] if kept_hooks else []
+    changed += [f"hooks not installed ({len(left)})"] if left else []
     changed += [f"MCP server(s) kept, pinned: {', '.join(kept)}"] if kept else []
     changed += [f"MCP server(s) left out, no exact version: {', '.join(n for n in servers if n not in kept)}"] if len(kept) < len(servers) else []
     row = f"| `{name}` | {source} | {(commit or 'local')[:8]} | {licence} | {'; '.join(changed)} |"
@@ -542,7 +579,9 @@ def _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, bo
         handle.write(eol.join(lines) + eol)
     note_scan(dest, "plugin", tree_hash(dest), res, f"bundle/{name}")
     out(f"installed {name}: {len(found)} skill(s), {len(agents)} agent(s)")
-    for line in parts["hooks"]:
+    for line in kept_hooks:
+        out(f"  hook kept: {line}")
+    for line in left:
         out(f"  hook NOT installed (your call): {line}")
     for n in servers:
         out(f"  MCP server {n}: " + ("kept, pinned. It runs code fetched from a registry on first use; the scan covered text only"

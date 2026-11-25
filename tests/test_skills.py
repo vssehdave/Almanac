@@ -459,6 +459,22 @@ class Bundle(Base):
             self.assertIn(want, row[0])
         self.assertTrue(self.quarantine_empty())
 
+    def test_hooks_flag_keeps_hooks_and_the_files_they_run(self):
+        self.plugin()
+        (self.src / "hooks" / "hooks.json").write_text(json.dumps({"hooks": {"SessionStart": [{"hooks": [
+            {"type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/start.js"}]}]}}))
+        (self.src / "scripts").mkdir()
+        (self.src / "scripts" / "start.js").write_text("console.log(1)\n")
+        (self.src / "scripts" / "other.js").write_text("not named\n")
+        rc, text = self.add(str(self.src), bundle=True, name="mine", hooks=True)
+        dest = self.tmp / "home" / "bundle" / "mine"
+        self.assertEqual(rc, 0, text)
+        self.assertTrue((dest / "hooks" / "hooks.json").is_file() and (dest / "scripts" / "start.js").is_file())
+        self.assertFalse((dest / "scripts" / "other.js").exists())
+        self.assertIn("hook kept: SessionStart: node ${CLAUDE_PLUGIN_ROOT}/scripts/start.js", text)
+        self.assertIn("hooks kept (1)", self.sources()[0])
+        self.assertNotIn("hooks not installed", self.sources()[0])
+
     def test_do_not_install_caution_and_existing_folders(self):
         self.plugin("DO_NOT_INSTALL 90")
         rc, text = self.add(str(self.src), bundle=True, name="mine", accept_caution=True)
