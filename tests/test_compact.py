@@ -102,6 +102,13 @@ class PrefixTest(unittest.TestCase):
         self.assertIn("memory_read", with_tools)
         self.assertNotIn("memory_read", without)
         self.assertIn("Almanac compacted this conversation", without)
+        big = history(30)
+        flat = compact.build_prefix(big, len(big) - 1, {}, budget_chars=3000, tools=False)
+        self.assertIn("earlier exchanges not listed", summary(flat))
+        self.assertNotIn("memory_search", summary(flat))
+        sect = compact.build_prefix(big, len(big) - 1, {}, 12000, None, {n: "noise" for n in range(20)}, tools=False)
+        self.assertNotIn("memory_search", summary(sect))
+        self.assertIn("memory_search", summary(compact.build_prefix(big, len(big) - 1, {}, 12000, None, {n: "noise" for n in range(20)})))
 
     def test_a_small_budget_still_keeps_the_last_exchange_and_says_what_is_missing(self):
         messages = history(30)

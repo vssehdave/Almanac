@@ -137,7 +137,7 @@ def _fill(lines, room):
     return kept, room, len(lines) - len(kept)
 
 
-def _sections(groups, lo, hi, tag, told, statuses, room, skip_done=False) -> list:
+def _sections(groups, lo, hi, tag, told, statuses, room, skip_done=False, tools=True) -> list:
     """The outline of exchanges lo..hi-1 by status: decisions, open work, done, and a count of what is left out on purpose."""
     lines, hidden = {"decision": [], "open": [], "done": []}, 0
     for seq in range(lo, hi):
@@ -152,7 +152,7 @@ def _sections(groups, lo, hi, tag, told, statuses, room, skip_done=False) -> lis
             line += f" ({_first_line(record['notes'], 160)})"
         lines[status].append(line)
     closing = (f"{hidden} earlier exchange{'s' if hidden != 1 else ''} marked superseded or noise "
-               "are not listed; they stay readable through the memory tools (memory_search, memory_read).") if hidden else ""
+               "are not listed" + ("; they stay readable through the memory tools (memory_search, memory_read)." if tools else ".")) if hidden else ""
     heads = {"decision": "Standing decisions, oldest first:", "open": "Open work:", "done": "Done, newest first:"}
     room -= len(closing) + sum(len(heads[k]) + 1 for k in lines if lines[k])
     # Decisions take the room first and lose their newest first; open work next; what is done fills the rest.
@@ -170,7 +170,7 @@ def _sections(groups, lo, hi, tag, told, statuses, room, skip_done=False) -> lis
     return parts + ([closing] if closing else [])
 
 
-def _gen(groups, lo, hi, tag, told, statuses, room, title, first, joined=(), skip_done=False, header=HEADER) -> str:
+def _gen(groups, lo, hi, tag, told, statuses, room, title, first, joined=(), skip_done=False, header=HEADER, tools=True) -> str:
     """One generation of the outline: exchanges lo..hi-1, under a title, with the model's joined notes when it wrote some."""
     parts = ([header] if first else []) + [title]
     room -= len(title)
@@ -178,7 +178,7 @@ def _gen(groups, lo, hi, tag, told, statuses, room, title, first, joined=(), ski
         parts.append(JOINED + "\n" + "\n".join("- " + line for line in joined))
         room -= len(parts[-1])
     if statuses:
-        return "\n\n".join(parts + _sections(groups, lo, hi, tag, told, statuses, room, skip_done))
+        return "\n\n".join(parts + _sections(groups, lo, hi, tag, told, statuses, room, skip_done, tools))
     flat = []
     for seq in range(hi - 1, lo - 1, -1):  # without statuses: one list, newest first until the room is out
         record = exchange(groups[seq][1])
@@ -187,7 +187,7 @@ def _gen(groups, lo, hi, tag, told, statuses, room, title, first, joined=(), ski
         if record["notes"]:
             line += f" ({_first_line(record['notes'], 160)})"
         if len(line) > room:
-            flat.append(f"- ({seq + 1 - lo} earlier exchange{'s' if seq > lo else ''} not listed; find them with memory_search)")
+            flat.append(f"- ({seq + 1 - lo} earlier exchange{'s' if seq > lo else ''} not listed{'; find them with memory_search' if tools else ''})")
             break
         flat.append(line)
         room -= len(line) + 1
@@ -286,14 +286,14 @@ def build_prefix(messages, covered, ids, budget_chars, told=None, statuses=None,
                     found, why = [], "error"
         if synth:
             info["rollup_synth" if kind == "rollup" else "synth"] = "ok" if found else (why or "empty")
-        return (_gen(groups, glo, ghi, tag, told, statuses, room, title, first, found, skip_done, header),
+        return (_gen(groups, glo, ghi, tag, told, statuses, room, title, first, found, skip_done, header, tools),
                 {"lo": glo, "hi": ghi, "kind": kind, "lines": list(found)})
 
     cap = int(outline_chars * GEN_SHARE) if not legacy else budget_chars - used - len(HEADER) - 400 - len(note)
     new, title = first_full > lo, f"Exchanges {lo + 1} to {first_full}:"
     sizes = [len(b["text"]) for b in blocks]
     if new and not legacy:
-        sizes.append(len(_gen(groups, lo, first_full, tag, told, statuses, cap, title, not gens, header=header)) + (SYNTH_RESERVE if synth else 0))
+        sizes.append(len(_gen(groups, lo, first_full, tag, told, statuses, cap, title, not gens, header=header, tools=tools)) + (SYNTH_RESERVE if synth else 0))
     k = 0 if legacy else _rolled(sizes, outline_chars)
     info.update(kind="rollup" if k else "append", rolled=min(k, len(gens)), gen_chars=0,
                 kept_chars=len(json.dumps(opening + (blocks if not k else []))) if prev else 0)
