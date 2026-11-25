@@ -21,7 +21,7 @@ REQUESTS_PER_RUN = 15  # a guess for the plan: the sample tasks take about this 
 MAX_TURNS = 30
 RUN_SECONDS = 900
 ALLOWED = "Read Edit Write Glob Grep Bash(python:*) Bash(python3:*)"
-METRICS = ("requests", "input_tokens", "output_tokens", "cache_read_input_tokens", "tool_calls", "spawns")
+METRICS = ("requests", "input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "tool_calls", "spawns")
 
 SAMPLE = {
     "fix-test": ("fix_test", {
@@ -109,7 +109,7 @@ def totals(path: Path) -> dict:
         if rec.get("kind") != "messages" or rec.get("status") != 200:
             continue
         out["requests"] += 1
-        for key in ("input_tokens", "output_tokens", "cache_read_input_tokens"):
+        for key in ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"):
             out[key] += (rec.get("usage") or {}).get(key, 0)
         out["tool_calls"] += rec.get("tool_calls", 0)
         out["spawns"] += rec.get("spawns", 0)
@@ -119,7 +119,7 @@ def totals(path: Path) -> dict:
 def run_claude(cmd, env, cwd):
     """The real launcher in headless mode. Returns its exit code (-1: timed out)."""
     try:
-        return subprocess.run(cmd, env=env, cwd=cwd, timeout=RUN_SECONDS, capture_output=True).returncode
+        return subprocess.run(cmd, env=env, cwd=cwd, timeout=RUN_SECONDS, capture_output=True, stdin=subprocess.DEVNULL).returncode
     except subprocess.TimeoutExpired:
         return -1
 
@@ -137,8 +137,11 @@ def one_run(task, variant, repo, work, model, cheat_dir, runner):
     home.mkdir()
     (home / "config.json").write_text(json.dumps({
         "routing": {"mode": "off"}, "cheatsheet": {"mode": "off" if variant == "off" else "on"},
+        "startup": {"lean_rules": variant != "off"},
         "memory": {"summary_model": "", "semantic": False, "auto_import": False}}), encoding="utf-8")
-    env = {k: v for k, v in os.environ.items() if k not in ("ALMANAC_CHEATSHEETS", "ALMANAC_DISABLE", "ALMANAC_UPSTREAM")}
+    outer = os.environ.get("ALMANAC_PROXY")  # an Almanac this command was started under: arms must not go through it
+    env = {k: v for k, v in os.environ.items() if k not in ("ALMANAC_CHEATSHEETS", "ALMANAC_DISABLE", "ALMANAC_UPSTREAM", "ALMANAC_PROXY")
+           and not (k == "ANTHROPIC_BASE_URL" and v == outer)}
     env["ALMANAC_HOME"] = str(home)
     if variant == "current":
         env["ALMANAC_CHEATSHEETS"] = str(cheat_dir)
@@ -157,14 +160,14 @@ def tables(runs, variants) -> str:
         if not mine:
             continue
         out.append(f"{variant}  (per-run averages over {len(mine)} runs)")
-        out.append(f"{'task':<12}{'runs':>5}{'pass':>6}{'reqs':>7}{'input':>10}{'output':>9}{'cache read':>12}{'tools':>7}{'agents':>8}")
+        out.append(f"{'task':<12}{'runs':>5}{'pass':>6}{'reqs':>7}{'input':>10}{'output':>9}{'cache new':>10}{'cache read':>12}{'tools':>7}{'agents':>8}")
         for name in [*dict.fromkeys(r["task"] for r in mine), None]:
             rows = [r for r in mine if name in (None, r["task"])]
             avg = {k: sum(r[k] for r in rows) / len(rows) for k in METRICS}
             checked = [r["check"] for r in rows if r["check"] is not None]
             out.append(f"{name or 'all':<12}{len(rows):>5}{(str(sum(checked)) + '/' + str(len(checked))) if checked else '-':>6}"
                        f"{avg['requests']:>7.1f}{avg['input_tokens']:>10.0f}{avg['output_tokens']:>9.0f}"
-                       f"{avg['cache_read_input_tokens']:>12.0f}{avg['tool_calls']:>7.1f}{avg['spawns']:>8.1f}")
+                       f"{avg['cache_creation_input_tokens']:>10.0f}{avg['cache_read_input_tokens']:>12.0f}{avg['tool_calls']:>7.1f}{avg['spawns']:>8.1f}")
         out.append("")
     return "\n".join(out)
 
@@ -184,15 +187,17 @@ def main(rest, runner=run_claude):
     if args.n < 1 or not variants or any(v not in VARIANTS for v in variants):
         print(f"almanac eval: -n must be at least 1 and --variants some of {', '.join(VARIANTS)}", file=sys.stderr)
         return 2
+    if args.repo and not args.tasks:
+        print("almanac eval: --repo needs --tasks (the built-in tasks run in their own repository)", file=sys.stderr)
+        return 2
     scratch = Path(tempfile.mkdtemp(prefix="almanac-eval-"))
     try:
         if args.tasks:
             tasks = json.loads(Path(args.tasks).read_text(encoding="utf-8"))
             repo = Path(args.repo or Path(args.tasks).resolve().parent)
         else:
-            repo = Path(args.repo) if args.repo else scratch / "sample"
-            repo.mkdir(parents=True, exist_ok=True)
-            tasks = make_sample(repo)
+            tasks = [{"name": name} for name in SAMPLE]  # written only after --yes
+            repo = scratch / "sample"
         ref = None
         if "current" in variants:
             ref = git("rev-parse", "--verify", f"{args.ref or 'HEAD'}^{{commit}}", cwd=checkout_dir()).strip()
@@ -204,10 +209,13 @@ def main(rest, runner=run_claude):
         if not args.yes:
             print("This spends your allowance. Run again with --yes to go ahead.")
             return 1
+        if not args.tasks:
+            tasks = make_sample(repo)
         runs = []
-        for task in tasks:  # variants alternate inside each task and repeat, so drift in the service spreads over all of them
+        for t, task in enumerate(tasks):  # the arm order rotates, so no arm always runs first and warms the cache for the others
             for i in range(args.n):
-                for variant in variants:
+                k = (t + i) % len(variants)
+                for variant in variants[k:] + variants[:k]:
                     print(f"  {task['name']} / {variant} / {i + 1}", flush=True)
                     runs.append({"repeat": i + 1, **one_run(task, variant, repo, scratch / f"run{len(runs)}", args.model, scratch / "current", runner)})
         print("\n" + tables(runs, variants))
