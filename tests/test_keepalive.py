@@ -113,6 +113,11 @@ class ScheduleTest(Case):
         self.real(body(tools=False))
         self.assertEqual(Timer.made, [])
 
+    def test_sub_agent_is_never_pinged(self):
+        self.rig.messages(body(), session=SESSION, extra={"authorization": TOKEN, "x-claude-code-agent-id": "a1"})
+        self.rig.records()
+        self.assertEqual(Timer.made, [])
+
     def test_failed_request_is_not_kept(self):
         self.rig.upstream.respond = lambda req: (500, {"content-type": "application/json"}, b"{}")
         self.real()
