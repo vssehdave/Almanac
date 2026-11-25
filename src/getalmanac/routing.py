@@ -7,10 +7,11 @@
 Anthropic's prompt cache belongs to one model. A conversation sent to a different
 model writes its whole prefix into that model's cache again, at the cache-write
 price, and the old model's cache goes cold. So a thread's model is chosen once, on
-the first request Almanac sees of it, stored, and never changed afterwards. Sub-agents
-are routed by their task, though never below the model their own definition asked for;
-one that names no model and carries no difficulty line, so would only inherit the main
-thread's large model, starts on medium instead. The main thread is routed only in mode
+the first request Almanac sees of it, stored, and never changed afterwards. A sub-agent
+whose own definition names a model keeps exactly that model; others are routed by their
+task, though never below the model they start on, and one that names no model and
+carries no difficulty line, so would only inherit the main thread's large model,
+starts on medium instead. The main thread is routed only in mode
 "all", from the prompt in hand when it is first seen. The one response to a failure, on
 any thread, is effort "high" said in a last message (see `_hold`), until `calm_after`
 requests in a row come back clean.
@@ -325,8 +326,11 @@ class RoutingLayer:
         dec = {"kind": kind, "key": key, "from": tier_now, "ts": round(time.time(), 1), "skip": "", "move": "none", "ms": 0}
         pin = store.get(pin_key(ctx.project)) if ctx.project else None
         top = TIERS.index(cfg["ceiling"]) if cfg["ceiling"] in TIERS else len(TIERS) - 1
+        parent = (store.get(f"main:{ctx.session}") or {}).get("sent") if kind == "sub" else None
         if pin in TIERS:
             tier, why, ambiguous = pin, "pinned by `almanac route pin`", False
+        elif parent and parent != body["model"]:  # the agent's definition named its model: the task never moves it
+            tier, why, ambiguous = tier_now, "the model the agent's own definition names", False
         else:
             tier, why, ambiguous = classify(text, agent=kind == "sub")
             if ambiguous and cfg["classifier"] == "model" and tier != "inherit":
@@ -337,7 +341,6 @@ class RoutingLayer:
                     tier, why = asked
         if why == FAILED_WHY:  # a failure changes effort only (see `_hold`), never the model
             tier, why = "inherit", why + "; effort rises instead"
-        parent = (store.get(f"main:{ctx.session}") or {}).get("sent") if kind == "sub" else None
         default = kind == "sub" and tier == "inherit" and pin not in TIERS and tier_now == "large" and parent == body["model"]
         if default:  # no model of its own and no difficulty sign: the parent's Opus is not the right start
             tier, why = "medium", "a sub-agent with no difficulty line and no model of its own starts on medium"

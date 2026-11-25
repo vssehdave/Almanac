@@ -585,14 +585,15 @@ is none, and picks the sub-agent's model. It no longer asks the model to write t
 line, since an agent's own file usually sets its model. An agent file may also set
 `effort:`, which is the sub-agent's starting effort.
 A sub-agent keeps that model to the end; failures in its own thread raise its effort
-as above. Routing never takes a sub-agent below the model its own definition
-asked for, or inherited from its parent: a sub-agent that starts on Opus stays on
-Opus for a simple task. Set `routing.route_inherited` to
+as above. A sub-agent whose own definition names a model other than its parent's
+keeps exactly that model: neither the `Difficulty:` line nor its task moves it up or
+down (only a request too large for that model's window moves up). Routing never takes
+any other sub-agent below the model it inherited from its parent: a sub-agent that
+starts on Opus stays on Opus for a simple task. Set `routing.route_inherited` to
 `true` to let a sub-agent that only inherited its parent's model (same model as the
-parent) be routed down by difficulty; one defined on another model keeps its
-floor. Almanac cannot tell an agent defined on the same model as its parent from
-one that inherited it, so with the setting on it counts both as inherited.
-`almanac route pin` beats this floor. Forks always stay on their
+parent) be routed down by difficulty. Almanac cannot tell an agent defined on the
+same model as its parent from one that inherited it, so it counts both as inherited.
+`almanac route pin` beats all of this. Forks always stay on their
 parent's model. Without that line, a task that
 asks for no coding and no hard job keeps the model Claude Code chose for it,
 whatever the agent's type, except that a sub-agent which only inherited an Opus
@@ -716,6 +717,24 @@ To change the text, put a file with the same name (`opus.md`, `sonnet.md`,
 `haiku.md`, `common.md` or `agent.md`) in the folder `almanac cheatsheet path` prints. It
 replaces the packaged one from the next run.
 
+**Lessons per agent type** (`lessons.enabled`, on by default). Every new `memory_review`
+verdict the main model files on a sub-agent's work is sent to the summary model
+(`memory.summary_model`, through the same upstream and login), which picks out the ones that
+report a problem and turns them into lessons for that agent type: the cause, and the sign that
+it is happening again. Each type keeps at most five; a
+repeat sharpens the lesson it matches instead of adding one. With `memory.summary_model` set to
+`""` nothing is distilled. A sub-agent thread gets its type's lessons after its working rules.
+The text is fixed at the thread's first request and sent the same for the rest of the thread, so
+its cache keeps hitting; a new lesson reaches only threads started after it.
+Lessons are shared across projects and survive `almanac memory forget` of a project or a
+conversation; only `forget --all` or `almanac lessons clear` removes them.
+
+```bash
+almanac lessons                  # every agent type's lessons
+almanac lessons clear Explore    # drop one type's lessons
+almanac config set lessons.enabled off
+```
+
 ## Adopting skills and plugins
 
 Almanac ships no third-party skills. It carries one plugin of its own (`almanac`:
@@ -738,7 +757,11 @@ with SkillSpector, refused on DO_NOT_INSTALL, and on CAUTION installed only with
 skills and agents are copied as plain text into `<almanac home>/bundle/<name>`
 with a manifest, the licence file, and the `disable-model-invocation` flag
 removed so Claude can start them without a slash command. Hooks are listed and
-never installed. An MCP server is kept only when pinned to an exact version;
+not installed, unless you add `--hooks`: then `hooks/hooks.json` and the plugin
+files its commands name through `${CLAUDE_PLUGIN_ROOT}` are kept, scanned like
+the rest, and run in every session. The scan result for each folder is
+remembered by content hash in `<almanac home>/scan-cache.json`, so a reinstall
+only scans what is new or changed; a failed scan is never remembered. An MCP server is kept only when pinned to an exact version;
 others are left out and named. A row with the source, commit, licence and
 changes is added to `bundle/SOURCES.md`, and the command prints the folder.
 
@@ -1412,9 +1435,10 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac route [status]` | Routing mode, pin, unavailable tiers and the last 10 decisions |
 | `almanac route pin small\|medium\|large\|off` | Keep this project on one tier, or lift the pin |
 | `almanac cheatsheet show [opus\|sonnet\|haiku\|fable\|agent]` | The working rules added for that model (`agent`: what a sub-agent gets), and their size |
+| `almanac lessons [clear AGENT]` | Lessons per sub-agent type, from review verdicts; `clear` drops one type's |
 | `almanac cheatsheet path` | Where your own copies of the rules go |
 | `almanac skill scan PATH\|URL` | Scan a skill or plugin (exit 0 SAFE, 1 CAUTION, 2 DO_NOT_INSTALL, 3 not scanned) |
-| `almanac skill add URL\|PATH` | Fetch into quarantine, scan, install the skills only if SAFE (`--skill`, `--ref`, `--accept-caution`, `--replace`). With `--bundle` (and `--name`): install as a plugin in your Almanac bundle instead |
+| `almanac skill add URL\|PATH` | Fetch into quarantine, scan, install the skills only if SAFE (`--skill`, `--ref`, `--accept-caution`, `--replace`). With `--bundle` (and `--name`, `--hooks`): install as a plugin in your Almanac bundle instead |
 | `almanac skill import-bundle PATH` | Copy plugin folders from an older bundle into your Almanac bundle |
 | `almanac skill accept NAME` | Stop the launch warning for an item at its current contents (`skill unaccept NAME` undoes it) |
 | `almanac skill audit` | Scan installed skills and plugins not scanned yet, then a table (`--again` for all) |
@@ -1490,6 +1514,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `playbooks.background` | `true` | Mine and compile in the background at each start |
 | `playbooks.compile_per_day` | `1` | Most Sonnet sessions a day that write a playbook from a repeated task (`0` is off) |
 | `cheatsheet.mode` | `"on"` | `"off"` stops adding the working rules for each model |
+| `lessons.enabled` | `true` | `false` stops distilling review verdicts into lessons and adding them to sub-agents |
 | `offline.hold_minutes` | `480` | Minutes a model request waits for the network to return (`0` fails at once) |
 | `keepalive.enabled` | `false` | Opt in to cache pings: while a conversation is paused, a tiny request restarts its cache's life (see Cache keepalive) |
 | `keepalive.max_idle_minutes` | `240` | Stop pinging a conversation this long after its last real request |
@@ -1693,7 +1718,7 @@ of its price and starts the clock again. A pause of a few hours then costs a
 few reads instead of one rewrite. A very long pause can cost more than the
 rewrite, which is why `keepalive.max_idle_minutes` (default 240) stops it.
 
-- Only the main thread and sub-agents are kept alive, never titles or
+- Only the main thread is kept alive, never sub-agents, forks, titles or
   classifiers, and only requests that carry cache marks. A new real request on
   the same thread resets the timer. A tick is skipped while a real request on
   that thread is running. At most `keepalive.max_lanes` threads are kept (4).

@@ -55,15 +55,20 @@ are the method, in the order a task runs.
 
 - Hand building, tests and docs to the listed agent whose job fits; its file
   sets its model and effort, and Almanac moves it up a level when it keeps
-  failing. At most four agents at once. You keep the decisions, the briefs,
-  the review and the report; small edits you do yourself.
+  failing. At most six agents at once. You keep the decisions, the briefs,
+  the review and the report; a one-line edit you do yourself.
+- Code work runs as a chain: a design agent first when the change spans
+  several files, then the builder, then the crew reviewer for the diff's
+  language (and `crew:pr-test-analyzer` for its tests), then the verifier.
+- An investigation that needs more than three searches or reads, or one large
+  log, goes to `crew:code-explorer`, so its output stays out of your context.
 - One agent per commit-sized task. Split a long job into several short
   agents in sequence rather than one long run: a long run re-reads its whole
   history on every step and gets its cache rewritten when it is cut. Each new
   agent of the same type finds the earlier ones' work in memory; name the
   files it must read in the brief so it does not search for them.
-- When an agent finishes, check its claims against the code or output, then
-  call memory_review with a one-line verdict.
+- An agent's report is a claim. When it finishes, check the diff and the test
+  run against it, then call memory_review with a one-line verdict.
 - An agent starts knowing nothing. Its brief holds everything it needs: the
   exact folder and branch, what already exists, what to build, the commands to
   run and how to run them, the rules it must keep (commit format, what never to
@@ -73,8 +78,6 @@ are the method, in the order a task runs.
   builder writes tests.
 - Turn what an audit finds into a numbered list of fixes, each with the fix
   you chose, and send that to the builder. Do not forward a report and hope.
-- Read what an agent reports as a claim. Check the diff and the test run
-  yourself before you merge.
 
 ## Keep the session cheap and moving
 
@@ -84,8 +87,7 @@ are the method, in the order a task runs.
   with a search or a short script.
 - Work that may break the owner's running setup goes in a separate worktree,
   never in the checkout they run from.
-- Do not stop to ask about steps you can undo. While long work runs, one line
-  on what you are doing is enough. End your turn only when the work is done or
+- While long work runs, one line on what you are doing is enough. End your turn only when the work is done or
   truly waits on the owner.
 - Remove what your tests left behind: branches, worktrees, scheduled jobs,
   temp files. Leave shared state idle, not half-set.

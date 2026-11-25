@@ -14,7 +14,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import accounts, profile
+from . import accounts, lessons, profile
 from .memory import MemoryLayer, clean
 from .status import STATUSES
 
@@ -362,6 +362,12 @@ class SummaryLayer:
         if reply.get("stop_reason") in ("tool_use", None) or not ctx.project:  # nothing finished yet (None: cut off)
             return
         self._arm(ctx, orig)
+        own = self.memory.convo_of(ctx.lane)
+        if own:
+            try:
+                lessons.distil(self.memory, ctx, orig, own["id"])
+            except Exception:  # lessons are extra: this turn's summaries still run
+                pass
         store = ctx.state
         # Only this conversation's exchanges: the login on this request must not carry another conversation's text.
         rows = self.memory.store.run("select id from node where kind = 'leaf' and convo = (select id from convo where lane = ?) "

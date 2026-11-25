@@ -109,6 +109,8 @@ DEFAULTS = {
         "enabled": True,  # load the package's own plugin and the plugins in <almanac home>/bundle into every session
     },
     "cheatsheet": {"mode": "on"},
+    # lessons per sub-agent type, distilled from memory_review verdicts by memory.summary_model, added to that type's threads
+    "lessons": {"enabled": True},
     "playbooks": {
         "enabled": True,
         "inject": True,  # tell Claude which playbook matches a request (see playbook_layer.py and the getplaybook package)
@@ -155,6 +157,7 @@ _OFF = {
     "bundle": [("bundle", "enabled", False)],
     "routing": [("routing", "mode", "off")],
     "cheatsheet": [("cheatsheet", "mode", "off")],
+    "lessons": [("lessons", "enabled", False)],
     "cloud": [("cloud", "auto", False)],
     "keepalive": [("keepalive", "enabled", False)],
     "accounts": [("accounts", "fallback", [])],
