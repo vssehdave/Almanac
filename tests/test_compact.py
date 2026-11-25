@@ -949,6 +949,22 @@ class ColdTest(LayerCase):
         self.assertEqual(record["cold"]["before"], compact.estimate(body(grown), None, current, None))
         self.assertLess(record["cold"]["before"], compact.estimate(body(grown), None, grown, None))
 
+    def test_a_cold_build_rolls_up_when_an_append_would_stay_over_its_room(self):
+        def build(n, prev=None, cold=None):
+            messages, info = history(n), {}
+            prefix = compact.build_prefix(messages, len(messages) - 1, {}, 6000, outline_chars=4000, prev=prev, info=info, cold=cold)
+            return {"covered": len(messages) - 1, "prefix": prefix, "nopen": info["nopen"], "gens": info["gens"], "recent_from": info["recent_from"]}, info
+        prev, _ = build(20)
+        prev, _ = build(26, prev)  # two generations, together under the outline budget
+        self.assertEqual(len(prev["gens"]), 2)
+        warm, winfo = build(28, prev)
+        cold, cinfo = build(28, prev, cold=4000)
+        self.assertEqual((winfo["kind"], cinfo["kind"]), ("append", "rollup"))
+        self.assertEqual(cinfo["gens"][0]["kind"], "rollup")
+        self.assertLess(len(json.dumps(cold["prefix"])), len(json.dumps(warm["prefix"])))
+        again, _ = build(28, prev, cold=4000)
+        self.assertEqual(again["prefix"], cold["prefix"])  # the same bytes every time
+
     def test_a_cold_return_recompacts_a_stored_compaction_without_growth(self):
         messages = history(14)
         self.cold(messages)

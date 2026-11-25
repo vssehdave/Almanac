@@ -219,7 +219,7 @@ def _wrap(text) -> dict:
 
 
 def build_prefix(messages, covered, ids, budget_chars, told=None, statuses=None, related=None,
-                 outline_chars=None, prev=None, synth=None, info=None, tools=True) -> list:
+                 outline_chars=None, prev=None, synth=None, info=None, tools=True, cold=None) -> list:
     """The messages that stand in for `messages[:covered]`.
 
     `told` maps seq -> (title, summary) written by a model; `statuses` maps seq -> status (see status.py).
@@ -235,6 +235,8 @@ def build_prefix(messages, covered, ids, budget_chars, told=None, statuses=None,
     oldest generations ("rollup"); with no lines the generation is the rule-written outline alone.
     `info` is filled with what was done, for the caller to store and log.
     `tools` False (the memory tools are not registered) leaves out what the header says of them.
+    `cold` (the cache is gone, so the kept bytes save nothing) is the characters the messages may take: when an append would
+    stay over it, every generation is rolled up instead.
     """
     told, info = told or {}, {} if info is None else info
     old = messages[:covered]
@@ -295,6 +297,8 @@ def build_prefix(messages, covered, ids, budget_chars, told=None, statuses=None,
     if new and not legacy:
         sizes.append(len(_gen(groups, lo, first_full, tag, told, statuses, cap, title, not gens, header=header, tools=tools)) + (SYNTH_RESERVE if synth else 0))
     k = 0 if legacy else _rolled(sizes, outline_chars)
+    if cold is not None and not k and not legacy and len(sizes) >= 2 and len(json.dumps(opening)) + sum(sizes) + used + len(note) > cold:
+        k = len(sizes)
     info.update(kind="rollup" if k else "append", rolled=min(k, len(gens)), gen_chars=0,
                 kept_chars=len(json.dumps(opening + (blocks if not k else []))) if prev else 0)
     if k:  # the one change to earlier bytes: the oldest generations merge, and every later byte moves with them
@@ -633,6 +637,7 @@ class CompactLayer:
         prefix = build_prefix(messages, covered, ids, target, told, statuses, near, outline_chars=int(target * cfg["outline_share"]),
                               tools=ctx.cfg["memory"]["enabled"] and ctx.cfg["memory"].get("tools", True),
                               prev=state if state and state.get("gens") else None, info=info,
+                              cold=int(target - len(json.dumps(body.get("tools") or [])) - len(json.dumps(body.get("system") or ""))) if self._cold(ctx, cfg) else None,
                               synth=lambda kind, text: summarize.outline_lines(ctx, getattr(ctx, "orig", None) or body, kind, text))
         log = {k: info[k] for k in ("kind", "rolled", "gen_chars", "kept_chars", "synth", "rollup_synth") if k in info}
         log["gens"] = len(info["gens"])
