@@ -388,6 +388,24 @@ class Launch(Base):
         self.assertEqual((todo, len(unhashed)), ([], 1))
 
 
+class ScanCache(Base):
+    def calls(self):
+        return len(self.log.read_text().splitlines()) if self.log.exists() else 0
+
+    def test_a_matching_hash_skips_the_scan_and_a_change_or_failure_does_not(self):
+        folder = make_skill(self.src, "a", "CAUTION 30")
+        self.assertEqual(skills.scan(folder)["verdict"], "CAUTION")
+        self.assertEqual(skills.scan(folder)["verdict"], "CAUTION")
+        self.assertEqual(self.calls(), 1)
+        (folder / "verdict.txt").write_text("DO_NOT_INSTALL 90")  # changed content: scanned again
+        self.assertEqual(skills.code(skills.scan(folder)), 2)
+        self.assertEqual(self.calls(), 2)
+        bad = make_skill(self.src, "b", "ERROR")
+        skills.scan(bad)
+        skills.scan(bad)
+        self.assertEqual(self.calls(), 4)  # a failed scan is never cached
+
+
 class Bundle(Base):
     def plugin(self, verdict=None):
         """A source with a skill that blocks the model, an agent, a hook, two MCP servers and a licence."""
@@ -440,6 +458,35 @@ class Bundle(Base):
                      "pinned: pinned", "left out, no exact version: loose"):
             self.assertIn(want, row[0])
         self.assertTrue(self.quarantine_empty())
+
+    def test_hooks_flag_keeps_hooks_and_the_files_they_run(self):
+        self.plugin()
+        (self.src / "hooks" / "hooks.json").write_text(json.dumps({"hooks": {"SessionStart": [{"hooks": [
+            {"type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/start.js"}]}]}}))
+        (self.src / "scripts").mkdir()
+        (self.src / "scripts" / "start.js").write_text("console.log(1)\n")
+        (self.src / "scripts" / "other.js").write_text("not named\n")
+        rc, text = self.add(str(self.src), bundle=True, name="mine", hooks=True)
+        dest = self.tmp / "home" / "bundle" / "mine"
+        self.assertEqual(rc, 0, text)
+        self.assertTrue((dest / "hooks" / "hooks.json").is_file() and (dest / "scripts" / "start.js").is_file())
+        self.assertFalse((dest / "scripts" / "other.js").exists())
+        self.assertIn("hook kept: SessionStart: node ${CLAUDE_PLUGIN_ROOT}/scripts/start.js", text)
+        self.assertIn("hooks kept (1)", self.sources()[0])
+        self.assertNotIn("hooks not installed", self.sources()[0])
+
+    def test_hooks_refuse_skipped_folders_and_parent_paths(self):
+        self.plugin()
+        (self.src / "node_modules" / "x").mkdir(parents=True)
+        (self.src / "node_modules" / "x" / "run.sh").write_text("echo\n")
+        (self.src / "hooks" / "hooks.json").write_text(json.dumps({"hooks": {"Stop": [{"hooks": [
+            {"type": "command", "command": "sh ${CLAUDE_PLUGIN_ROOT}/node_modules/x/run.sh"},
+            {"type": "command", "command": "sh ${CLAUDE_PLUGIN_ROOT}/../" + self.src.name + "/node_modules/x/run.sh"}]}]}}))
+        dest = self.tmp / "dest"
+        dest.mkdir()
+        skills.stage_hooks(self.src, dest)
+        self.assertFalse((dest / "node_modules").exists())
+        self.assertTrue((dest / "hooks" / "hooks.json").is_file())
 
     def test_do_not_install_caution_and_existing_folders(self):
         self.plugin("DO_NOT_INSTALL 90")

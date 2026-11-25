@@ -757,7 +757,11 @@ with SkillSpector, refused on DO_NOT_INSTALL, and on CAUTION installed only with
 skills and agents are copied as plain text into `<almanac home>/bundle/<name>`
 with a manifest, the licence file, and the `disable-model-invocation` flag
 removed so Claude can start them without a slash command. Hooks are listed and
-never installed. An MCP server is kept only when pinned to an exact version;
+not installed, unless you add `--hooks`: then `hooks/hooks.json` and the plugin
+files its commands name through `${CLAUDE_PLUGIN_ROOT}` are kept, scanned like
+the rest, and run in every session. The scan result for each folder is
+remembered by content hash in `<almanac home>/scan-cache.json`, so a reinstall
+only scans what is new or changed; a failed scan is never remembered. An MCP server is kept only when pinned to an exact version;
 others are left out and named. A row with the source, commit, licence and
 changes is added to `bundle/SOURCES.md`, and the command prints the folder.
 
@@ -1434,7 +1438,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac lessons [clear AGENT]` | Lessons per sub-agent type, from review verdicts; `clear` drops one type's |
 | `almanac cheatsheet path` | Where your own copies of the rules go |
 | `almanac skill scan PATH\|URL` | Scan a skill or plugin (exit 0 SAFE, 1 CAUTION, 2 DO_NOT_INSTALL, 3 not scanned) |
-| `almanac skill add URL\|PATH` | Fetch into quarantine, scan, install the skills only if SAFE (`--skill`, `--ref`, `--accept-caution`, `--replace`). With `--bundle` (and `--name`): install as a plugin in your Almanac bundle instead |
+| `almanac skill add URL\|PATH` | Fetch into quarantine, scan, install the skills only if SAFE (`--skill`, `--ref`, `--accept-caution`, `--replace`). With `--bundle` (and `--name`, `--hooks`): install as a plugin in your Almanac bundle instead |
 | `almanac skill import-bundle PATH` | Copy plugin folders from an older bundle into your Almanac bundle |
 | `almanac skill accept NAME` | Stop the launch warning for an item at its current contents (`skill unaccept NAME` undoes it) |
 | `almanac skill audit` | Scan installed skills and plugins not scanned yet, then a table (`--again` for all) |
