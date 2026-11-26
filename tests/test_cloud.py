@@ -794,7 +794,7 @@ class HandoffTest(CloudCase):
         for wrong in ("not-the-key", "", None):
             self.assertFalse(self.opens(wrong)[0], wrong)
         box = json.loads(git(self.bare, "show", "cloud/handoff:almanac-handoff.sealed"))
-        for field, value in (("ct", base64.b64encode(b"x" + base64.b64decode(box["ct"])[1:]).decode()), ("tag", "0" * 64),
+        for field, value in (("ct", base64.b64encode(bytes([base64.b64decode(box["ct"])[0] ^ 1]) + base64.b64decode(box["ct"])[1:]).decode()), ("tag", "0" * 64),
                              ("nonce", "1" * 32), ("v", 2)):
             self.replace_file(json.dumps(dict(box, **{field: value})))
             self.assertFalse(self.opens(key)[0], field)
