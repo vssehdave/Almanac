@@ -159,6 +159,34 @@ class CodeSyncTest(Case):
         self.assertIsNotNone(self.store.run("select commit_id from codeedit where tool_use_id = 'e1'")[0][0])
         self.assertEqual(self.store.run("select count(*) from codeedit where kind = 'outside'")[0][0], 0)
 
+    def test_edit_in_a_worktree_keeps_its_branch_while_main_is_checked_out(self):
+        self.commit("a.py", "a = 1\n", "2026-01-01T09:00:00+00:00")
+        work = project.normalize(os.path.realpath(os.path.join(self.tmp, "wt")))
+        self.git("worktree", "add", "-q", "-b", "feat/x", work)
+        self.assertEqual(codemem._head_branch(work + "/a.py"), "feat/x")
+        group = [use("w1", "Edit", file_path=work + "/a.py", old_string="a = 1", new_string="a = 2"), out("w1")]
+        codemem.capture(self.store, 1, self.key, 1, group, datetime.fromisoformat("2026-01-01T10:00:00+00:00").timestamp())
+        with open(work + "/a.py", "w") as handle:
+            handle.write("a = 2\n")
+        subprocess.run(["git", "-C", work, "commit", "-q", "-am", "wt"], check=True, capture_output=True,
+                       env={**os.environ, **GIT_ENV, "GIT_AUTHOR_DATE": "2026-01-01T10:01:00+00:00", "GIT_COMMITTER_DATE": "2026-01-01T10:01:00+00:00"})
+        self.sync()
+        row = self.store.run("select commit_id, branch from codeedit where tool_use_id = 'w1'")[0]
+        self.assertIsNotNone(row["commit_id"])
+        self.assertEqual(row["branch"], "feat/x")
+
+    def test_outside_commit_on_a_merged_branch_gets_the_branch_from_the_merge(self):
+        self.commit("a.py", "a = 1\n", "2026-01-01T09:00:00+00:00")
+        self.record("e1", "a.py", "a = 1", "a = 1", "2026-01-01T09:30:00+00:00")
+        self.git("checkout", "-q", "-b", "feat/y")
+        self.commit("b.py", "b\n", "2026-01-01T10:00:00+00:00", "by hand")
+        self.git("checkout", "-q", "main")
+        self.git("merge", "--no-ff", "-q", "-m", "Merge pull request #5 from me/feat/y", "feat/y", when="2026-01-01T11:00:00+00:00")
+        self.git("branch", "-q", "-D", "feat/y")
+        self.sync()
+        rows = self.store.run("select branch, content from codeedit where kind = 'outside' and content = 'by hand'")
+        self.assertEqual([r["branch"] for r in rows], ["feat/y"])
+
     def test_uncommitted_change_is_recorded_once_and_a_rerun_adds_nothing(self):
         self.commit("a.py", "a = 1\n", "2026-01-01T09:00:00+00:00")
         self.record("e1", "a.py", "a = 1", "a = 2", "2026-01-01T10:00:00+00:00")
