@@ -106,5 +106,32 @@ class NoVerifyGuard(unittest.TestCase):
         self.assertIn("skips git hooks", run("no_verify_guard.py", "Bash", command="git commit -n")[1])
 
 
+class DestructiveGuard(unittest.TestCase):
+    def code(self, command, tool="Bash"):
+        return run("no_verify_guard.py", tool, command=command)
+
+    def test_destructive_commands_are_blocked(self):
+        for command in ("rm -rf build", "rm -fr x", "rm -r -f x", "sudo rm -rf /tmp/x", "env git reset --hard",
+                        "git reset --hard HEAD~1", "git clean -fd", "git clean -xdf", "git checkout -- .",
+                        "git restore .", "git branch -D feat", "git push --force origin main", "git push -f",
+                        "git push --force-with-lease", 'sqlite3 a.db "DROP TABLE t"', 'psql -c "drop database x"',
+                        'sqlite3 a.db "ALTER TABLE t DROP COLUMN c"', "cd x && rm -rf y"):
+            with self.subTest(command=command):
+                self.assertEqual(self.code(command)[0], 2)
+
+    def test_powershell_remove_item_recurse_force_is_blocked(self):
+        self.assertEqual(self.code("Remove-Item -Recurse -Force build", "PowerShell")[0], 2)
+
+    def test_safe_commands_are_allowed(self):
+        for command in ("rm file.txt", "rm -r build", "git reset --soft HEAD~1", "git clean -n", "git push",
+                        "git push origin main", "git branch -d feat", 'echo "rm -rf /"', "git restore src/a.py",
+                        "git checkout main"):
+            with self.subTest(command=command):
+                self.assertEqual(self.code(command)[0], 0)
+
+    def test_reason_asks_the_user(self):
+        self.assertIn("Ask the user first", self.code("git reset --hard")[1])
+
+
 if __name__ == "__main__":
     unittest.main()
