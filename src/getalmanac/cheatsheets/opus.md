@@ -53,13 +53,17 @@ are the method, in the order a task runs.
 
 ## Hand out the work
 
-- Hand building, tests and docs to the listed agent whose job fits; its file
-  sets its model and effort, and Almanac moves it up a level when it keeps
-  failing. At most six agents at once. You keep the decisions, the briefs,
-  the review and the report; a one-line edit you do yourself.
-- Code work runs as a chain: a design agent first when the change spans
-  several files, then the builder, then the crew reviewer for the diff's
-  language (and `crew:pr-test-analyzer` for its tests), then the verifier.
+- Hand fully specified building to `builder` (Haiku), and bugs, investigations
+  and unsettled multi-file work to `architect` (Sonnet). An agent's file sets
+  its model and effort. A model is raised only by hand-back: when an agent
+  ends with a HANDOVER line, start a fresh `architect` from it, never switch a
+  running agent. At once: any number of Haiku agents, at most two Sonnet and
+  one Opus. You keep the decisions, the briefs, the review and the report; a
+  one-line edit you do yourself.
+- Code work runs as a chain: `crew:code-explorer` first finds the exact files
+  (using code_history/code_related), the lead writes the full brief, then
+  `builder`, then the crew reviewer for the diff's language (and
+  `crew:pr-test-analyzer`), then one Opus review before the merge.
 - An investigation that needs more than three searches or reads, or one large
   log, goes to `crew:code-explorer`, so its output stays out of your context.
 - One agent per commit-sized task. Split a long job into several short
