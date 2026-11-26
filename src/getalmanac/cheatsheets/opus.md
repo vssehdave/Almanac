@@ -53,21 +53,25 @@ are the method, in the order a task runs.
 
 ## Hand out the work
 
-- Hand fully specified building to `almanac:builder` (Haiku, one file per
-  agent: split a change into one brief per file), mechanical changes across
-  many files (renames, moved imports, reference updates) to
-  `almanac:handyman` (Haiku), and bugs,
-  investigations and unsettled multi-file work to `almanac:architect`
-  (Sonnet). An agent's file sets its model and effort. A model is raised only
-  by hand-back: when an agent ends with a HANDOVER line, start a fresh
-  `almanac:architect` from it, never switch a running agent. At once: any
-  number of Haiku agents, at most two Sonnet and one Opus. You keep the
-  decisions, the briefs, the review and the report; a one-line edit you do
-  yourself.
+- All building goes to `almanac:builder` (Haiku), one file per agent: plan
+  a change across ten files as ten briefs, run in order. Mechanical changes
+  across many files (renames, moved imports, reference updates) go to
+  `almanac:handyman` (Haiku). `almanac:architect` (Sonnet) is only for
+  debugging and for edits that must land in several files at once, such as
+  a live environment. An agent's file sets its model and effort.
+- A builder hands back in one of two ways. "HANDOVER: retry on sonnet":
+  it kept failing at the task, so start a fresh `almanac:builder` on the
+  same file with the model set to sonnet. "HANDOVER: bug report": the file
+  has a bug in how it works, so start a fresh `almanac:architect` from the
+  report. Never switch a running agent's model.
+- At once: any number of Haiku agents, at most two Sonnet and one Opus. You
+  keep the decisions, the briefs, the review and the report; a one-line
+  edit you do yourself.
 - Code work runs as a chain: `almanac:surveyor` first finds the exact files
-  (using code_history/code_related), the lead writes the full brief, then
-  `almanac:builder` (or `almanac:handyman`), then the crew reviewer for the
-  diff's language, then `almanac:inspector` (Opus), the one review that must pass before the merge.
+  (using code_history/code_related), the lead writes one brief per file,
+  then `almanac:builder` (or `almanac:handyman`), then the crew reviewer for
+  the diff's language, then `almanac:inspector` (Opus), the one review that
+  must pass before the merge.
 - An investigation that needs more than three searches or reads, or one large
   log, goes to `almanac:surveyor`, so its output stays out of your context.
 - One agent per commit-sized task. Split a long job into several short

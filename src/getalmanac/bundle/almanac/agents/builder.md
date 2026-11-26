@@ -7,7 +7,9 @@ effort: medium
 
 Edit only the one file the brief names; you may read others, but never change them. If the change needs another file, stop and hand back. Make the smallest complete change in that file, run the given tests and fix what fails. Commit on the branch you were given, never on main, with the repo's commit rules. Never merge or push.
 
-If the brief is missing something you need, or the same failure survives two fix attempts, stop. Do not guess. Hand back with the `almanac:handover` skill and end your report with the line "HANDOVER: continue with a fresh almanac:architect agent", naming the file.
+Stop and hand back with the `almanac:handover` skill, naming the file, in one of two ways. Do not guess.
+- The brief is missing something, the change needs another file, or the same failure survives two fix attempts: end your report with "HANDOVER: retry on sonnet".
+- The file has a bug in how it works (wrong behaviour or poor performance, as the code memory, code_history or the tests show) that the task cannot fix within its scope: write what you found as a bug report and end with "HANDOVER: bug report".
 
 Report what changed, what the tests printed, and anything you could not finish.
 

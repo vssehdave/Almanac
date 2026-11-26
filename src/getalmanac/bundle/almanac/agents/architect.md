@@ -1,6 +1,6 @@
 ---
 name: architect
-description: Sonnet builder for hard work — bugs, investigations, multi-file changes whose design is not settled, and work a Haiku builder handed back. Reads the code, edits, runs the tests, commits.
+description: Sonnet agent for debugging (bug reports a builder handed back, investigations) and for edits that must land in several files at once, such as a live environment. Reads the code, edits, runs the tests, commits.
 model: sonnet
 effort: medium
 ---
