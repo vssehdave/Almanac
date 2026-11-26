@@ -529,6 +529,12 @@ class SubagentTest(Case):
     def note_of(self, sent):
         return [b["text"] for b in sent["messages"][0]["content"] if "subagent of conversation" in b.get("text", "")]
 
+    def test_a_subagent_note_is_asked_for_its_own_smaller_size(self):
+        with mock.patch.object(self.memory, "recall", return_value="") as recall:
+            self.sub(self.body())
+        self.assertEqual(recall.call_args.args[3], self.rig.cfg["memory"]["sub_recall_chars"])
+        self.assertLess(self.rig.cfg["memory"]["sub_recall_chars"], self.rig.cfg["memory"]["recall_chars"])
+
     def test_a_subagent_gets_the_note_and_the_fifth_request_is_byte_identical(self):
         first = self.sub(self.body())
         note = self.note_of(first)

@@ -47,6 +47,9 @@ DEFAULTS = {
         "lean_rules": True,  # Almanac's own minimal-change rules, added to the main thread and every sub-agent (cheatsheet.py)
         "lean_level": "full",  # lite: build what was asked and name the smaller option; full; ultra: also question the request
         "lean_rules_text": "",  # your own wording instead of the packaged rules ("" keeps them)
+        "sub_skill_chars": 0,  # description characters kept per listed skill in a sub-agent thread (0: names only; the full text shows on a match)
+        "sub_cold": ["Agent", "Task"],  # tools also deferred in sub-agent threads (none of 5,000 logged sub-agent requests spawned one)
+        "sub_ttl": "1h",  # cache life of a sub-agent's tools and system prompt: "1h" costs 2x to write instead of 1.25x but survives a pause; "" keeps the client's 5 minutes
         "system_prefix": False,  # move the stable startup sections to the end of the system prompt so a new conversation can read them from cache (sysprefix.py)
     },
     "tools": {
@@ -60,6 +63,7 @@ DEFAULTS = {
         "enabled": True,
         "recall": True,
         "recall_chars": 2400,  # most characters of memory added to a new conversation
+        "sub_recall_chars": 800,  # the same for a sub-agent's first message
         "tools": True,  # give Claude Code the memory_search / memory_read tools
         "keep_days": 365,  # conversations untouched for longer are deleted; 0 keeps everything
         "summary_model": "claude-haiku-5-5",  # writes each exchange's title and summary in the background; "" keeps rule-written text

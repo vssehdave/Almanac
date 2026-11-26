@@ -210,7 +210,8 @@ class SkillsLayer(_ListingLayer):
 
     def settings(self, ctx):
         cfg = ctx.cfg["skills"]
-        return (cfg["stub_chars"], cfg["max_full"]) if cfg["enabled"] else None
+        chars = ctx.cfg["startup"]["sub_skill_chars"] if ctx.thread == "sub" else cfg["stub_chars"]  # a sub-agent seldom needs a skill: names only, the text loads on a match
+        return (chars, cfg["max_full"]) if cfg["enabled"] else None
 
     def always_full(self, ctx) -> set:
         return set(ctx.cfg["skills"]["always_full"])
@@ -235,6 +236,59 @@ class AgentsLayer(_ListingLayer):
         return _untooled(description)
 
 
+MCP_RUN = 8  # a server with at least this many deferred names is listed as one line
+
+
+def _collapse_names(messages):
+    """In a sub-agent's deferred-name list, one line per MCP server that has many names. ToolSearch still finds them by keyword.
+    The same list gives the same text: it is a pure function of it."""
+    for msg in messages[:8]:
+        for block in rq.blocks(msg) if isinstance(msg.get("content"), list) else []:
+            text = block.get("text") if block.get("type") == "text" else None
+            if not text or DEFER_MARK not in text:
+                continue
+            at = text.find(DEFER_MARK)
+            end = text.find("\n\n", at)
+            end = len(text) if end < 0 else end
+            head, _, body = text[at:end].partition(":\n")
+            lines = body.split("\n") if body else []
+            servers = {}
+            for line in lines:
+                m = re.match(r"mcp__([^_].*?)__", line)
+                if m:
+                    servers.setdefault(m.group(1), []).append(line)
+            big = {k for k, v in servers.items() if len(v) >= MCP_RUN}
+            if not big:
+                return
+            out, done = [], set()
+            for line in lines:
+                m = re.match(r"mcp__([^_].*?)__", line)
+                if not m or m.group(1) not in big:
+                    out.append(line)
+                elif m.group(1) not in done:
+                    done.add(m.group(1))
+                    out.append(f"mcp__{m.group(1)}__* ({len(servers[m.group(1)])} tools; search ToolSearch by keyword to load)")
+            block["text"] = text[:at] + head + ":\n" + "\n".join(out) + text[end:]
+            return
+
+
+class SubTtlLayer:
+    """A sub-agent's stable prefix (tools and system prompt) keeps its cache for an hour, so a pause (waiting on other
+    agents, a usage limit) does not make the next request write it again. Marks in the messages keep the client's ttl: a
+    longer ttl must come before a shorter one, and these come first."""
+
+    def transform(self, body, ctx):
+        if ctx.thread != "sub" or ctx.cfg["startup"]["sub_ttl"] != "1h":
+            return
+        marks = [b["cache_control"] for part in ("tools", "system") if isinstance(body.get(part), list)
+                 for b in body[part] if isinstance(b, dict) and isinstance(b.get("cache_control"), dict)]
+        todo = [m for m in marks if m.get("ttl") != "1h"]
+        for mark in todo:
+            mark["ttl"] = "1h"
+        if todo:
+            ctx.stats["sub_ttl"] = len(todo)
+
+
 class ToolsLayer:
     """Defer the schemas of rarely used tools until the model asks for them."""
 
@@ -246,7 +300,10 @@ class ToolsLayer:
         names = {t.get("name") for t in tools if isinstance(t, dict)}
         if "ToolSearch" not in names:  # without the search tool nothing could load them again
             return
-        cold = [t for t in tools if isinstance(t, dict) and t.get("name") in cfg["cold"]
+        if ctx.thread == "sub":
+            _collapse_names(body.get("messages") or [])
+        cold_names = set(cfg["cold"]) | (set(ctx.cfg["startup"]["sub_cold"]) if ctx.thread == "sub" else set())
+        cold = [t for t in tools if isinstance(t, dict) and t.get("name") in cold_names
                 and t.get("name") not in cfg["hot"] and not t.get("defer_loading") and "type" not in t
                 and not (t.get("name") == "PowerShell" and "Bash" not in names)]
         if not cold:

@@ -483,6 +483,7 @@ LICENCES = (("Apache-2.0", "apache license"), ("MIT", "permission is hereby gran
             ("MPL-2.0", "mozilla public license"), ("GPL", "gnu general public license"),
             ("Unlicense", "free and unencumbered software"))
 PINNED = re.compile(r"(@|==)v?\d+\.\d+\.\d+(?:[-+][\w.]+)?\Z")  # pkg@1.2.3 (npx) or pkg==1.2.3 (uvx)
+SHIPPED = Path(__file__).parent / "bundle"
 BUNDLE_HEAD = ("# Adopted skills and plugins\n\nEach folder here is a plugin Almanac loads into every session. Each was scanned "
                "and its findings read before it was installed.\n\n| Folder | From | Commit | Licence | Changed |\n|---|---|---|---|---|\n")
 
@@ -592,6 +593,12 @@ def _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, bo
         handle.write(eol.join(lines) + eol)
     note_scan(dest, "plugin", tree_hash(dest), res, f"bundle/{name}")
     out(f"installed {name}: {len(found)} skill(s), {len(agents)} agent(s)")
+    report = integration_report(dest, bundle_dir())
+    _mark(name, bool(report))
+    for line in report:
+        out(f"  {line}")
+    if report:
+        out(f"  integration pending: {len(report)} open item(s). Resolve them, then run: almanac skill integrate {name}")
     for line in kept_hooks:
         out(f"  hook kept: {line}")
     for line in left:
@@ -601,6 +608,126 @@ def _bundle(tree, commit, source, wanted, name, accept_caution, replace, ask, bo
                                     if n in kept else "left out, no exact version pinned"))
     out(f"bundle folder: {dest}")
     return code(res)
+
+OVERLAP = 0.5  # share of description words two skills or agents must have in common (the same name always counts)
+STOP = frozenset("the and for with use when this that you your from into are any not can will all its our".split())
+FENCE = re.compile(r"^(```|~~~).*?^\1", re.S | re.M)
+MD_LINK = re.compile(r"\]\(\s*<?([^)\s>]+)")
+ROOT_PATH = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}/([\w./@-]+)")
+
+
+def _front(path: Path):
+    """(name, description) from a SKILL.md or agent file's frontmatter; the name falls back to the folder or file name."""
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), 0) if lines[:1] == ["---"] else 0
+    meta, key = {}, None
+    for line in lines[1:end]:
+        if line[:1] in (" ", "\t") and key:
+            meta[key] += " " + line.strip()
+        elif ":" in line:
+            key, value = line.split(":", 1)
+            key = key.strip()
+            meta[key] = value.strip().strip("\"'>|")
+    name = meta.get("name") or (path.parent.name if path.name == "SKILL.md" else path.stem)
+    return name, meta.get("description", "")
+
+
+def _items(root: Path):
+    """[(kind, path)] for every SKILL.md and every .md file in a folder called agents under `root`."""
+    found = []
+    for here, dirs, files in os.walk(root):
+        dirs[:] = sorted(d for d in dirs if d not in SKIP and not linked(os.path.join(here, d)))
+        if "SKILL.md" in files:
+            found.append(("skill", Path(here) / "SKILL.md"))
+            dirs[:] = []
+        elif os.path.basename(here) == "agents":
+            found += [("agent", Path(here) / f) for f in sorted(files) if f.endswith(".md")]
+    return found
+
+
+def _words(text: str):
+    return {w for w in re.findall(r"[a-z0-9]{3,}", text.lower()) if w not in STOP}
+
+
+def _shown(path: Path, bundle_root: Path) -> str:
+    if path.is_relative_to(bundle_root):
+        return path.relative_to(bundle_root).as_posix()
+    return f"shipped/{path.relative_to(SHIPPED).as_posix()}"
+
+
+def integration_report(dest, bundle_root) -> list:
+    """What still stops the plugin at `dest` from being one coherent part of the bundle. Empty when nothing does.
+
+    Outside references, overlaps with other skills or agents (bundle and shipped), and layout problems.
+    Pure and deterministic: the same folders give the same lines.
+    """
+    dest, bundle_root = Path(dest), Path(bundle_root)
+    lines, root = [], os.path.realpath(bundle_root)
+    for md in sorted(dest.rglob("*.md")):
+        if any(part in SKIP for part in md.relative_to(dest).parts) or linked(md):
+            continue
+        text = FENCE.sub("", md.read_text(encoding="utf-8", errors="replace"))
+        for target in sorted(set(MD_LINK.findall(text))):
+            path = target.split("#")[0]
+            if not path or re.match(r"[A-Za-z][A-Za-z0-9+.-]*:", path) or path.startswith("${"):
+                continue
+            real = os.path.realpath(md.parent / path)
+            if not (os.path.exists(real) and (real == root or real.startswith(root + os.sep))):
+                lines.append(f"outside reference: {_shown(md, bundle_root)} links to {target}, which is not in the bundle")
+        for rel in sorted(set(ROOT_PATH.findall(text))):
+            if not (dest / rel.rstrip(".")).exists():
+                lines.append(f"outside reference: {_shown(md, bundle_root)} uses ${{CLAUDE_PLUGIN_ROOT}}/{rel}, which does not exist")
+    mine = _items(dest)
+    for kind, path in mine:
+        rel = path.relative_to(dest).parts
+        if not (rel[0] == "skills" if kind == "skill" else len(rel) == 2 and rel[0] == "agents"):
+            want = "skills/NAME/SKILL.md" if kind == "skill" else "agents/NAME.md"
+            lines.append(f"layout: {_shown(path, bundle_root)} is not where Claude Code loads it ({want})")
+    trees = sorted(d for d in bundle_root.iterdir() if d.is_dir() and d.resolve() != dest.resolve()) if bundle_root.is_dir() else []
+    others = [item for tree in trees for item in _items(tree)]
+    if SHIPPED.is_dir() and SHIPPED.resolve() != bundle_root.resolve():
+        others += _items(SHIPPED)
+    known = [(path, *_front(path)) for _, path in others]
+    for _, path in mine:
+        name, desc = _front(path)
+        words = _words(desc)
+        for other, other_name, other_desc in known:
+            both = words | _words(other_desc)
+            score = len(words & _words(other_desc)) / len(both) if both else 0
+            if name.lower() == other_name.lower() or score >= OVERLAP:
+                lines.append(f"overlap: {_shown(path, bundle_root)} and {_shown(other, bundle_root)} "
+                             f"do the same job ({name} / {other_name})")
+    return sorted(set(lines))
+
+
+def pending() -> list:
+    """Bundle plugins adopted but not yet integrated, that are still installed."""
+    marked = load_json(_records_path(), {}).get("integration", {})
+    return sorted(n for n in marked if (bundle_dir() / n).is_dir())
+
+
+def _mark(name, open_) -> None:
+    records = load_json(_records_path(), {})
+    marks = records.setdefault("integration", {})
+    if open_:
+        marks[name] = "pending"
+    elif not marks.pop(name, None):
+        return
+    save_json(_records_path(), records)
+
+
+def integrate(name, out=print) -> int:
+    """Re-run the integration report for a bundle plugin. 1 while anything is open; 0 and cleared when clean."""
+    dest = bundle_dir() / name
+    if not NAME.match(name) or linked(dest) or not dest.is_dir():
+        out(f"almanac: no plugin called {name} in {bundle_dir()}")
+        return ERROR
+    lines = integration_report(dest, bundle_dir())
+    for line in lines:
+        out(line)
+    _mark(name, bool(lines))
+    out(f"{name}: {len(lines)} open item(s)" if lines else f"{name}: integrated")
+    return 1 if lines else 0
 
 
 SOURCE_ROW = re.compile(r"\| `([^`]+)` \| (.*?) \| ([^|]*?) \| [^|]* \| (.*) \|\s*\Z")

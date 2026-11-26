@@ -1377,7 +1377,7 @@ class MemoryLayer:
                                f'{{"conversation": {parent["id"]}}} before re-deriving earlier findings.\n</system-reminder>'
                                if tools else "")  # the note names a tool: no tool, no note
                     recalled = self.memory.recall(parent["project"], rq.human_text(messages[rq.human_turns(messages)[0]]), ctx.lane,
-                                                  cfg["recall_chars"], tools_hint=tools, agent_type=ctx.agent_type)
+                                                  cfg.get("sub_recall_chars", cfg["recall_chars"]), tools_hint=tools, agent_type=ctx.agent_type)
                     return "\n".join(part for part in (pointer, recalled) if part)
                 note = ctx.state.frozen(f"subnote:{ctx.lane}", compose, outside=True)  # encoding the query is slow: not under the store's lock
                 if note:
