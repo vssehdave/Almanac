@@ -74,3 +74,7 @@ Use `almanac:lean-review` on the diff. Drop anything the gain does not need.
 - Test result.
 - Left out: anything slower you saw but did not touch, and any file you
   needed but could not edit.
+
+## Skills to use
+
+Load these skills when they fit the work: `almanac:lean-review` (to judge scope), `almanac:python-testing` (for tests), `almanac:handover` (to hand back).
