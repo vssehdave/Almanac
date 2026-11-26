@@ -24,6 +24,9 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac memory recent        the latest conversations, by project
   almanac memory summarize     model summaries for imported exchanges (--project NAME, --limit N, --dry-run, --facts, --backfill)
   almanac memory import PATH... store past Claude Code transcripts (a ~/.claude/projects folder name, folder or .jsonl; --days N, --dry-run)
+  almanac memory pins          the pinned plans of this folder's project
+  almanac memory pin-done PIN ITEM   mark a pinned plan's item done (the last one drops the pin)
+  almanac memory unpin PIN     drop a pinned plan
   almanac memory forget        delete stored conversations (--project NAME | --conversation ID | --all; --force for open ones)
   almanac cloud packet         print the hand-off packet for a Claude Code cloud session (--conversation ID)
   almanac cloud send           show that packet, ask, then run `claude --cloud` with it (--conversation ID, --yes)
@@ -287,6 +290,11 @@ def _memory(rest):
     refine.add_argument("--dry-run", action="store_true", help="make no calls; print how many exchanges would be summarized")
     refine.add_argument("--facts", action="store_true", help="instead, add searchable facts to exchanges that were summarized before facts existed")
     refine.add_argument("--backfill", action="store_true", help="instead, summarize conversations that have no model summary and close the open work later exchanges finished")
+    sub.add_parser("pins")
+    done = sub.add_parser("pin-done")
+    done.add_argument("pin", type=int)
+    done.add_argument("item", type=int)
+    sub.add_parser("unpin").add_argument("pin", type=int)
     forget = sub.add_parser("forget")
     group = forget.add_mutually_exclusive_group(required=True)
     group.add_argument("--project")
@@ -325,6 +333,20 @@ def _memory(rest):
         (summarize.backfill if args.backfill else summarize.refine)(
             memory, config.load(), project=project_key(args.project) if args.project else None, limit=args.limit,
             dry_run=args.dry_run, **({} if args.backfill else {"facts": args.facts}))
+    elif args.cmd in ("pins", "pin-done", "unpin"):
+        project = memory.projects.see(os.getcwd(), touch=False)
+        if not project:
+            print("almanac: no project is known for this folder", file=sys.stderr)
+            return 2
+        if args.cmd == "pins":
+            _print(mcp.render_pins(memory.pins(project)))
+        elif args.cmd == "unpin":
+            if not memory.unpin(project, args.pin):
+                print(f"almanac: no pin {args.pin} in this project", file=sys.stderr)
+                return 2
+            print(f"dropped pin {args.pin}")
+        else:
+            print(memory.pin_done(project, args.pin, args.item))
     elif args.cmd == "recent":
         _print(mcp.render_projects(memory))
         print(f"exchanges by status: {_status_counts(memory)}")
