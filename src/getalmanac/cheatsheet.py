@@ -24,7 +24,7 @@ ALIASES = {"mythos": "fable"}  # the same model under another name
 INDEX = 12  # playbooks listed
 BUDGET_NOTE = ("# Context budget reached\n\nThis agent has used up its context budget. Stop now: finish only the step in progress, "
                "commit or save your work, then end with a hand-back that lists what is done and what is left, so the lead can "
-               "continue in a fresh agent of the same type. Start no new work.")
+               "continue in a fresh agent of the same type. Write the hand-back in the format of the almanac:handover skill. Start no new work.")
 COLD_NOTE = ("# Status note\n\nThe earlier conversation was compacted after a pause. Before you continue, write a brief handover "
              "status: what was being done, what is done, and what is next.")
 

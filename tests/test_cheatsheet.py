@@ -157,7 +157,8 @@ class NoteTest(Fresh):
         work = body(convo([{"text": "hello"}]), SMALL, tools=[{"name": "Read"}], system=claude_system())
         there = ctx(klass="subagent" if sub else "main", agent="a1" if sub else "")
         there.state, there.lane, there.stats = self.state, convo_id, {}
-        there.cfg["compaction"]["sub_budget_tokens"] = 75000 if budget is None else budget
+        if budget is not None:
+            there.cfg["compaction"]["sub_budget_tokens"] = budget
         self.state.put(f"usage:{convo_id}", {"messages": len(work["messages"]), "tokens": tokens})
         transform(work, there)
         return work["system"]
@@ -165,15 +166,27 @@ class NoteTest(Fresh):
     def test_budget_note_appears_past_the_limit_and_stays_identical(self):
         self.assertEqual(self.go(60000), self.go(60000))  # below: nothing
         self.assertNotIn(cheatsheet.BUDGET_NOTE, json.dumps(self.go(60000)))
-        over = self.go(80000)
+        over = self.go(120000)
         self.assertEqual(over[-1]["text"], cheatsheet.BUDGET_NOTE)
-        self.assertEqual(self.go(80000), over)
+        self.assertEqual(self.go(120000), over)
         self.assertEqual(self.go(50000), over)  # a stub pass that shrinks the body does not take it back
         self.assertEqual(cache_marks(over), cache_marks(claude_system()))
 
+    def test_config_set_changes_the_limit_the_layer_reads(self):
+        with mock.patch.dict(os.environ, {"ALMANAC_HOME": tempfile.mkdtemp(prefix="almanac-cfg-")}):
+            self.assertEqual(config.load()["compaction"]["sub_budget_tokens"], 100000)
+            self.assertEqual(config.set_value("compaction.sub_budget_tokens", "30000"), 30000)
+            work = body(convo([{"text": "hello"}]), SMALL, tools=[{"name": "Read"}], system=claude_system())
+            there = ctx(klass="subagent", agent="a1")
+            there.cfg = config.load()
+            there.state, there.lane, there.stats = self.state, "cfg", {}
+            self.state.put("usage:cfg", {"messages": len(work["messages"]), "tokens": 40000})
+            transform(work, there)
+            self.assertEqual(work["system"][-1]["text"], cheatsheet.BUDGET_NOTE)
+
     def test_budget_note_is_off_with_zero_and_for_the_main_thread(self):
-        self.assertNotIn(cheatsheet.BUDGET_NOTE, json.dumps(self.go(90000, budget=0)))
-        self.assertNotIn(cheatsheet.BUDGET_NOTE, json.dumps(self.go(90000, sub=False)))
+        self.assertNotIn(cheatsheet.BUDGET_NOTE, json.dumps(self.go(120000, budget=0)))
+        self.assertNotIn(cheatsheet.BUDGET_NOTE, json.dumps(self.go(120000, sub=False)))
 
     def test_cold_note_follows_a_cold_compaction_only(self):
         self.assertNotIn(cheatsheet.COLD_NOTE, json.dumps(self.go(1000, sub=False)))
