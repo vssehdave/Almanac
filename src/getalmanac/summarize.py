@@ -245,7 +245,7 @@ class Idle:
     proxy. The request body is not kept."""
 
     def __init__(self, ctx, orig):
-        self.cfg, self.state, self.proxy, self.lane, self.agent = ctx.cfg, ctx.state, ctx.proxy, ctx.lane, ctx.agent
+        self.cfg, self.state, self.proxy, self.lane, self.agent = ctx.cfg, ctx.state, ctx.proxy, ctx.lane, getattr(ctx, "agent", "")
         self.headers = _headers(ctx.headers)
         self.system = _identity(orig)
 

@@ -62,7 +62,8 @@ class EvalTest(unittest.TestCase):
             code = evaluate.main(["--yes", "--variants", "off", "--out", str(self.out)], self.runner)
         self.assertEqual(code, 0)
         self.assertIn("could not remove", err.getvalue())
-        self.assertEqual(len(err.getvalue().strip().splitlines()), 1)
+        self.assertNotIn("Traceback", err.getvalue())
+        self.assertEqual(sum("could not remove" in line for line in err.getvalue().splitlines()), 1)  # stray ResourceWarnings from other tests may share stderr
 
     def test_outer_almanac_is_not_inherited(self):
         old = dict(os.environ)

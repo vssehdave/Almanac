@@ -66,12 +66,6 @@ TOOLS = [
                     "done already, and read the exchange named in an entry with memory_read.",
      "inputSchema": {"type": "object", "required": ["query"], "properties": {
          "query": {"type": "string", "description": "The request, or the words that describe it"}}}},
-    {"name": "errors",
-     "description": "Recent errors Almanac carried on past (a failed summary, a layer that raised and was skipped), newest first: "
-                    "time, where, the sub-agent if any, and the error. Read-only.",
-     "inputSchema": {"type": "object", "properties": {
-         "since": {"type": "string", "description": "How far back: 30m, 24h or 7d (default 24h)"},
-         "limit": {"type": "integer", "minimum": 1, "maximum": 100}}}},
     {"name": "memory_review",
      "description": "Record your review of sub-agent work after checking it against the code. Without a conversation number it "
                     "covers every unreviewed sub-agent of this conversation; with one (memory_search marks it "
@@ -79,6 +73,12 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["verdict"], "properties": {
          "conversation": {"type": "integer", "minimum": 1, "description": "One sub-agent's conversation number; leave out for all of this conversation's"},
          "verdict": {"type": "string", "description": "Short: what was checked and whether the work holds"}}}},
+    {"name": "errors",
+     "description": "Recent errors Almanac carried on past (a failed summary, a layer that raised and was skipped), newest first: "
+                    "time, where, the sub-agent if any, and the error. Read-only.",
+     "inputSchema": {"type": "object", "properties": {
+         "since": {"type": "string", "description": "How far back: 30m, 24h or 7d (default 24h)"},
+         "limit": {"type": "integer", "minimum": 1, "maximum": 100}}}},
 ]
 
 
