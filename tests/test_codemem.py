@@ -111,7 +111,7 @@ GIT_ENV = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@x", "GIT_COMMITTER_NAM
 class CodeSyncTest(Case):
     def setUp(self):
         super().setUp()
-        self.repo = project.normalize(os.path.join(self.tmp, "real"))
+        self.repo = project.normalize(os.path.realpath(os.path.join(self.tmp, "real")))
         os.makedirs(self.repo)
         self.git("init", "-q", "-b", "main")
         self.key = "dir:" + self.repo.lower()
@@ -150,6 +150,14 @@ class CodeSyncTest(Case):
         subjects = sorted(r["content"] for r in self.store.run("select content from codeedit where kind = 'outside'"))
         self.assertEqual(subjects, ["by hand", "new file"])
         self.assertIn("commit " + by_kind["edit"]["commit_id"][:7] + " on main", codemem.render(self.rows("a.py")))
+
+    def test_edit_stamped_minutes_after_its_own_commit_still_links(self):
+        self.commit("a.py", "a = 1\n", "2026-01-01T09:00:00+00:00")
+        self.commit("a.py", "a = 2\n", "2026-01-01T10:00:00+00:00", "same turn")
+        self.record("e1", "a.py", "a = 1", "a = 2", "2026-01-01T10:03:00+00:00")
+        self.sync()
+        self.assertIsNotNone(self.store.run("select commit_id from codeedit where tool_use_id = 'e1'")[0][0])
+        self.assertEqual(self.store.run("select count(*) from codeedit where kind = 'outside'")[0][0], 0)
 
     def test_uncommitted_change_is_recorded_once_and_a_rerun_adds_nothing(self):
         self.commit("a.py", "a = 1\n", "2026-01-01T09:00:00+00:00")

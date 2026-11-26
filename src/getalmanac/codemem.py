@@ -7,7 +7,7 @@ import hashlib
 import json
 import os
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from .memory import clean
 from .project import normalize
@@ -128,6 +128,14 @@ def _git(root, *args):
     return done.stdout.decode("utf-8", "replace").strip("\r\n") if done.returncode == 0 else None
 
 
+SLACK = timedelta(minutes=10)  # an edit is stamped with its exchange, which can end after the commit made in it
+
+
+def _same(path):
+    """Spelling-free key for a path: git and Claude may differ in case or Windows short names."""
+    return os.path.normcase(os.path.realpath(path))
+
+
 def _when(text):
     return datetime.fromisoformat(text.replace("Z", "+00:00"))
 
@@ -180,20 +188,20 @@ def sync(store, project, folder):
     if head and (marker or first):
         known = marker and _git(top, "cat-file", "-e", marker[0]["sha"] + "^{commit}") is not None
         log = _git(top, "log", "--reverse", "--no-renames", "--name-only", "--format=%x1e%H%x1f%cI%x1f%s",
-                   f"{marker[0]['sha']}..HEAD" if known else f"--since={first}")
+                   f"{marker[0]['sha']}..HEAD" if known else f"--since={(_when(first) - SLACK).isoformat()}")
         pending = {}
         for row in store.run("select rowid, path, ts from codeedit where project = ? and commit_id is null and kind != 'outside' "
                              "and status != 'duplicate' order by ts, rowid", (project,)):
-            pending.setdefault(row["path"], []).append(row)
+            pending.setdefault(_same(row["path"]), []).append(row)
         for chunk in (log or "").split("\x1e")[1:]:
             head_line, _, names = chunk.partition("\n")
             sha, stamp, subject = (head_line.split("\x1f") + ["", ""])[:3]
             for name in filter(None, names.splitlines()):
                 path = normalize(top + "/" + name)
-                took = [r for r in pending.get(path, []) if _when(r["ts"]) <= _when(stamp)]
+                took = [r for r in pending.get(_same(path), []) if _when(r["ts"]) <= _when(stamp) + SLACK]
                 for r in took:
                     store.run("update codeedit set commit_id = ?, branch = ? where rowid = ?", (sha, branch, r["rowid"]))
-                    pending[path].remove(r)
+                    pending[_same(path)].remove(r)
                 made["linked"] += len(took)
                 if not took and not store.run("select 1 from codeedit where commit_id = ? and path = ?", (sha, path)):
                     made["outside"] += _outside(
