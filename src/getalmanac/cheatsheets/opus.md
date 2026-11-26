@@ -53,19 +53,20 @@ are the method, in the order a task runs.
 
 ## Hand out the work
 
-- Hand fully specified building to `builder` (Haiku), and bugs, investigations
-  and unsettled multi-file work to `architect` (Sonnet). An agent's file sets
-  its model and effort. A model is raised only by hand-back: when an agent
-  ends with a HANDOVER line, start a fresh `architect` from it, never switch a
-  running agent. At once: any number of Haiku agents, at most two Sonnet and
-  one Opus. You keep the decisions, the briefs, the review and the report; a
-  one-line edit you do yourself.
-- Code work runs as a chain: `crew:code-explorer` first finds the exact files
+- Hand fully specified building to `almanac:builder` (Haiku), and bugs,
+  investigations and unsettled multi-file work to `almanac:architect`
+  (Sonnet). An agent's file sets its model and effort. A model is raised only
+  by hand-back: when an agent ends with a HANDOVER line, start a fresh
+  `almanac:architect` from it, never switch a running agent. At once: any
+  number of Haiku agents, at most two Sonnet and one Opus. You keep the
+  decisions, the briefs, the review and the report; a one-line edit you do
+  yourself.
+- Code work runs as a chain: `almanac:surveyor` first finds the exact files
   (using code_history/code_related), the lead writes the full brief, then
-  `builder`, then the crew reviewer for the diff's language (and
-  `crew:pr-test-analyzer`), then one Opus review before the merge.
+  `almanac:builder`, then the crew reviewer for the diff's language, then
+  `almanac:inspector` (Opus), the one review that must pass before the merge.
 - An investigation that needs more than three searches or reads, or one large
-  log, goes to `crew:code-explorer`, so its output stays out of your context.
+  log, goes to `almanac:surveyor`, so its output stays out of your context.
 - One agent per commit-sized task. Split a long job into several short
   agents in sequence rather than one long run: a long run re-reads its whole
   history on every step and gets its cache rewritten when it is cut. Each new
