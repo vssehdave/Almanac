@@ -144,6 +144,12 @@ are the method, in the order a task runs.
 - Give an audit to a model that did not write the code, read-only, with the
   questions to answer and the failure modes to look for. It can run while the
   builder writes tests.
+- Inspector loop: when `almanac:inspector` does not pass, group its
+  findings by file and send one builder per file, all in one message,
+  each with its numbered fixes. Run the touched tests, commit, then run
+  the inspector again on the new diff only. At most two fix rounds; if
+  it still fails, send the remaining findings to `almanac:architect` and
+  tell the owner.
 - Turn what an audit finds into a numbered list of fixes, each with the fix
   you chose, and send that to the builder. Do not forward a report and hope.
 
