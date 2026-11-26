@@ -445,6 +445,7 @@ class CompactLayer:
     def _note_cold(cls, body, ctx, before, after, acted):
         if acted and ctx.cold and cls._cold(ctx, ctx.cfg["compaction"]):  # a forced pass (recompact) is not a cold return
             ctx.stats["cold"] = {"before": before, "after": estimate(body, ctx, after, None)}
+            ctx.state.put(f"coldnote:{ctx.lane}", {"on": 1})  # cheatsheet.py keeps asking for a status note on this thread's later requests
 
     def _relieve_agent(self, body, ctx):
         """A sub-agent thread has no stored prefix, but a long one still fills its window: only the stubs apply to it."""

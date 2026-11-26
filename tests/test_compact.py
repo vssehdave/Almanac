@@ -952,6 +952,13 @@ class ColdTest(LayerCase):
         self.assertGreater(record["cold"]["before"], record["cold"]["after"])
         self.assertEqual(record["cold"]["before"], compact.estimate(body(messages), None, messages, None))
 
+    def test_a_cold_compaction_leaves_a_note_flag_and_a_warm_one_does_not(self):
+        self.cold(history(14))
+        lane = self.rig.records()[-1]["lane"]
+        self.assertTrue(self.state.get(f"coldnote:{lane}"))
+        self.rig.messages(body(copy.deepcopy(history(14))), extra={"x-claude-code-agent-id": "w1"})  # a new thread, never cold
+        self.assertFalse(self.state.get(f"coldnote:{self.rig.records()[-1]['lane']}"))
+
     def test_a_second_cold_return_counts_against_the_stored_prefix_not_the_raw_history(self):
         messages = history(14)
         self.cold(messages)
