@@ -58,4 +58,4 @@ Rate gaps by impact:
 
 Load these skills when they fit the work: `almanac:ai-regression-testing`.
 
-Judge the change by the smallest-complete-change rules: if the `ponytail:ponytail-review` skill is available, use it.
+Judge the change by the smallest-complete-change rules: if the `almanac:ponytail-review` skill is available, use it.

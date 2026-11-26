@@ -13,4 +13,4 @@ Report the files changed, what the tests printed, and anything you could not fin
 
 ## Skills to use
 
-Load these skills when they fit the work: `ponytail:ponytail`.
+Load these skills when they fit the work: `almanac:ponytail`.
