@@ -146,6 +146,43 @@ class LayerTest(Fresh):
         self.assertEqual(run(LARGE, mode="off")["system"], claude_system())
 
 
+class NoteTest(Fresh):
+    """The budget and cold-return notes: one fixed last system block, on from the first request that shows it."""
+
+    def setUp(self):
+        super().setUp()
+        self.state = State(Path(tempfile.mkdtemp(prefix="almanac-note-")) / "state.db")
+
+    def go(self, tokens, sub=True, budget=None, convo_id="a1"):
+        work = body(convo([{"text": "hello"}]), SMALL, tools=[{"name": "Read"}], system=claude_system())
+        there = ctx(klass="subagent" if sub else "main", agent="a1" if sub else "")
+        there.state, there.lane, there.stats = self.state, convo_id, {}
+        there.cfg["compaction"]["sub_budget_tokens"] = 75000 if budget is None else budget
+        self.state.put(f"usage:{convo_id}", {"messages": len(work["messages"]), "tokens": tokens})
+        transform(work, there)
+        return work["system"]
+
+    def test_budget_note_appears_past_the_limit_and_stays_identical(self):
+        self.assertEqual(self.go(60000), self.go(60000))  # below: nothing
+        self.assertNotIn(cheatsheet.BUDGET_NOTE, json.dumps(self.go(60000)))
+        over = self.go(80000)
+        self.assertEqual(over[-1]["text"], cheatsheet.BUDGET_NOTE)
+        self.assertEqual(self.go(80000), over)
+        self.assertEqual(self.go(50000), over)  # a stub pass that shrinks the body does not take it back
+        self.assertEqual(cache_marks(over), cache_marks(claude_system()))
+
+    def test_budget_note_is_off_with_zero_and_for_the_main_thread(self):
+        self.assertNotIn(cheatsheet.BUDGET_NOTE, json.dumps(self.go(90000, budget=0)))
+        self.assertNotIn(cheatsheet.BUDGET_NOTE, json.dumps(self.go(90000, sub=False)))
+
+    def test_cold_note_follows_a_cold_compaction_only(self):
+        self.assertNotIn(cheatsheet.COLD_NOTE, json.dumps(self.go(1000, sub=False)))
+        self.state.put("coldnote:a1", {"on": 1})
+        first = self.go(1000, sub=False)
+        self.assertEqual(first[-1]["text"], cheatsheet.COLD_NOTE)
+        self.assertEqual(self.go(2000, sub=False), first)
+
+
 class LeanTest(Fresh):
     def sheet(self, model, **kw):
         return run(model, **{"lean": True, **kw})["system"][-1]["text"]

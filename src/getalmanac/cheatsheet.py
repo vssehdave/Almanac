@@ -22,6 +22,11 @@ LEVELS = {  # what the level adds to the lean rules; "full" is the rules as writ
 }
 ALIASES = {"mythos": "fable"}  # the same model under another name
 INDEX = 12  # playbooks listed
+BUDGET_NOTE = ("# Context budget reached\n\nThis agent has used up its context budget. Stop now: finish only the step in progress, "
+               "commit or save your work, then end with a hand-back that lists what is done and what is left, so the lead can "
+               "continue in a fresh agent of the same type. Start no new work.")
+COLD_NOTE = ("# Status note\n\nThe earlier conversation was compacted after a pause. Before you continue, write a brief handover "
+             "status: what was being done, what is done, and what is next.")
 
 
 def override_dir():
@@ -105,6 +110,38 @@ def index() -> str:
 
 class CheatsheetLayer:
     def transform(self, body, ctx):
+        self._sheet(body, ctx)
+        try:
+            self._notes(body, ctx)
+        except Exception as exc:  # fail open: the request goes out without the notes
+            ctx.stats["notes_error"] = type(exc).__name__
+
+    @staticmethod
+    def _notes(body, ctx):
+        """Fixed notes as one last system block. A note is switched on once in the store and never off, so from the
+        request that first shows it every later one carries the same bytes in the same place. No breakpoint is touched."""
+        if ctx.kind != "messages" or not ctx.thread or getattr(ctx, "state", None) is None:
+            return
+        notes = []
+        limit = int(ctx.cfg["compaction"].get("sub_budget_tokens") or 0)
+        key = f"budgetnote:{ctx.lane}"
+        if ctx.thread == "sub" and limit > 0 and ctx.cfg["compaction"]["enabled"]:
+            from . import compact
+            if ctx.state.get(key) or compact.estimate(body, ctx, body.get("messages") or []) >= limit:
+                ctx.state.put(key, {"on": 1})
+                notes.append(BUDGET_NOTE)
+        if ctx.state.get(f"coldnote:{ctx.lane}"):
+            notes.append(COLD_NOTE)
+        system = body.get("system")
+        if not notes or not system:
+            return
+        block = {"type": "text", "text": "\n\n".join(notes)}
+        if isinstance(system, str):
+            body["system"] = [{"type": "text", "text": system}, block]
+        elif isinstance(system, list):
+            system.append(block)
+
+    def _sheet(self, body, ctx):
         if ctx.kind != "messages" or not isinstance(body.get("model"), str):
             return
         if not ctx.thread:
