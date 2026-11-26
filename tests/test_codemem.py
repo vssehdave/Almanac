@@ -1,7 +1,10 @@
 import contextlib
 import io
 import os
+import subprocess
 import unittest
+from datetime import datetime
+from unittest import mock
 
 from test_memory import Case, human, reply
 
@@ -101,6 +104,133 @@ class CodeMemoryTest(Case):
             self.assertEqual(cli.main(["code", "history", self.file, "-n", "1"]), 0)
         self.assertIn("exchange", buffer.getvalue())
         self.assertIn("1 edit(s)", buffer.getvalue())
+
+GIT_ENV = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@x", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@x"}
+
+
+class CodeSyncTest(Case):
+    def setUp(self):
+        super().setUp()
+        self.repo = project.normalize(os.path.realpath(os.path.join(self.tmp, "real")))
+        os.makedirs(self.repo)
+        self.git("init", "-q", "-b", "main")
+        self.key = "dir:" + self.repo.lower()
+
+    def git(self, *args, when=None):
+        env = {**os.environ, **GIT_ENV, **({"GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when} if when else {})}
+        subprocess.run(["git", "-C", self.repo, *args], env=env, check=True, capture_output=True)
+
+    def commit(self, name, text, when, message="change"):
+        with open(os.path.join(self.repo, name), "w") as handle:
+            handle.write(text)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", message, when=when)
+
+    def record(self, call, name, old, new, at, tool="Edit", convo=1):
+        group = [use(call, tool, file_path=f"{self.repo}/{name}", **({"old_string": old, "new_string": new} if tool == "Edit" else {"content": new})),
+                 out(call)]
+        codemem.capture(self.store, convo, self.key, 1, group, datetime.fromisoformat(at).timestamp())
+
+    def sync(self):
+        return codemem.sync(self.store, self.key, self.repo)
+
+    def rows(self, name):
+        return codemem.history(self.store, f"{self.repo}/{name}")
+
+    def test_edit_links_to_the_first_commit_after_it_and_an_unmatched_commit_is_outside(self):
+        self.commit("a.py", "a = 1\n", "2026-01-01T09:00:00+00:00", "start")
+        self.record("e1", "a.py", "a = 1", "a = 2", "2026-01-01T10:00:00+00:00")
+        self.commit("a.py", "a = 2\n", "2026-01-01T11:00:00+00:00", "use two")
+        self.commit("a.py", "a = 3\n", "2026-01-01T12:00:00+00:00", "by hand")
+        self.commit("b.py", "b\n", "2026-01-01T13:00:00+00:00", "new file")
+        self.sync()
+        by_kind = {r["kind"]: r for r in self.rows("a.py")}
+        self.assertEqual(by_kind["edit"]["commit_id"], self.store.run("select commit_id from codeedit where tool_use_id = 'e1'")[0][0])
+        self.assertEqual(by_kind["edit"]["branch"], "main")
+        subjects = sorted(r["content"] for r in self.store.run("select content from codeedit where kind = 'outside'"))
+        self.assertEqual(subjects, ["by hand", "new file"])
+        self.assertIn("commit " + by_kind["edit"]["commit_id"][:7] + " on main", codemem.render(self.rows("a.py")))
+
+    def test_edit_stamped_minutes_after_its_own_commit_still_links(self):
+        self.commit("a.py", "a = 1\n", "2026-01-01T09:00:00+00:00")
+        self.commit("a.py", "a = 2\n", "2026-01-01T10:00:00+00:00", "same turn")
+        self.record("e1", "a.py", "a = 1", "a = 2", "2026-01-01T10:03:00+00:00")
+        self.sync()
+        self.assertIsNotNone(self.store.run("select commit_id from codeedit where tool_use_id = 'e1'")[0][0])
+        self.assertEqual(self.store.run("select count(*) from codeedit where kind = 'outside'")[0][0], 0)
+
+    def test_edit_in_a_worktree_keeps_its_branch_while_main_is_checked_out(self):
+        self.commit("a.py", "a = 1\n", "2026-01-01T09:00:00+00:00")
+        work = project.normalize(os.path.realpath(os.path.join(self.tmp, "wt")))
+        self.git("worktree", "add", "-q", "-b", "feat/x", work)
+        self.assertEqual(codemem._head_branch(work + "/a.py"), "feat/x")
+        group = [use("w1", "Edit", file_path=work + "/a.py", old_string="a = 1", new_string="a = 2"), out("w1")]
+        codemem.capture(self.store, 1, self.key, 1, group, datetime.fromisoformat("2026-01-01T10:00:00+00:00").timestamp())
+        with open(work + "/a.py", "w") as handle:
+            handle.write("a = 2\n")
+        subprocess.run(["git", "-C", work, "commit", "-q", "-am", "wt"], check=True, capture_output=True,
+                       env={**os.environ, **GIT_ENV, "GIT_AUTHOR_DATE": "2026-01-01T10:01:00+00:00", "GIT_COMMITTER_DATE": "2026-01-01T10:01:00+00:00"})
+        self.sync()
+        row = self.store.run("select commit_id, branch from codeedit where tool_use_id = 'w1'")[0]
+        self.assertIsNotNone(row["commit_id"])
+        self.assertEqual(row["branch"], "feat/x")
+
+    def test_outside_commit_on_a_merged_branch_gets_the_branch_from_the_merge(self):
+        self.commit("a.py", "a = 1\n", "2026-01-01T09:00:00+00:00")
+        self.record("e1", "a.py", "a = 1", "a = 1", "2026-01-01T09:30:00+00:00")
+        self.git("checkout", "-q", "-b", "feat/y")
+        self.commit("b.py", "b\n", "2026-01-01T10:00:00+00:00", "by hand")
+        self.git("checkout", "-q", "main")
+        self.git("merge", "--no-ff", "-q", "-m", "Merge pull request #5 from me/feat/y", "feat/y", when="2026-01-01T11:00:00+00:00")
+        self.git("branch", "-q", "-D", "feat/y")
+        self.sync()
+        rows = self.store.run("select branch, content from codeedit where kind = 'outside' and content = 'by hand'")
+        self.assertEqual([r["branch"] for r in rows], ["feat/y"])
+
+    def test_uncommitted_change_is_recorded_once_and_a_rerun_adds_nothing(self):
+        self.commit("a.py", "a = 1\n", "2026-01-01T09:00:00+00:00")
+        self.record("e1", "a.py", "a = 1", "a = 2", "2026-01-01T10:00:00+00:00")
+        self.commit("a.py", "a = 2\n", "2026-01-01T11:00:00+00:00")
+        with open(os.path.join(self.repo, "a.py"), "w") as handle:
+            handle.write("a = 9\n")
+        self.sync()
+        self.sync()
+        counts = [(r["kind"], r["status"]) for r in self.store.run("select kind, status from codeedit order by rowid")]
+        self.assertEqual(counts, [("edit", "ok"), ("outside", "uncommitted")])
+        with open(os.path.join(self.repo, "a.py"), "w") as handle:
+            handle.write("a = 10\n")
+        self.sync()
+        self.assertEqual(len(self.store.run("select 1 from codeedit where status = 'uncommitted'")), 2)
+
+    def test_repeats_collapse_and_an_exact_inverse_marks_the_first_reverted(self):
+        self.commit("a.py", "a = 1\n", "2026-01-01T09:00:00+00:00")
+        self.record("e1", "a.py", "a = 1", "a = 2", "2026-01-01T10:00:00+00:00")
+        self.record("e2", "a.py", "a = 1", "a = 2", "2026-01-01T10:01:00+00:00")
+        self.record("e3", "a.py", "a = 2", "a = 1", "2026-01-01T10:02:00+00:00")
+        self.sync()
+        status = {r["tool_use_id"]: r["status"] for r in self.store.run("select tool_use_id, status from codeedit")}
+        self.assertEqual(status, {"e1": "reverted", "e2": "duplicate", "e3": "ok"})
+        self.assertEqual([r["tool_use_id"] for r in self.rows("a.py")], ["e3", "e1"])
+        self.record("e1", "a.py", "a = 1", "a = 2", "2026-01-01T10:00:00+00:00")  # the history is sent again
+        self.assertEqual(self.store.run("select status from codeedit where tool_use_id = 'e1'")[0][0], "reverted")
+
+    def test_not_a_git_repo_or_no_git_changes_nothing(self):
+        plain = os.path.join(self.tmp, "plain")
+        os.makedirs(plain)
+        self.assertIn("not a git repository", codemem.sync(self.store, "dir:x", plain))
+        with mock.patch("subprocess.run", side_effect=FileNotFoundError):
+            self.assertIn("not a git repository", self.sync())
+        self.assertEqual(self.store.run("select 1 from codeedit"), [])
+        self.assertEqual(self.store.run("select 1 from codesync"), [])
+
+    def test_setup_adds_the_columns_to_an_older_table(self):
+        self.store.run("drop table codeedit")
+        self.store.run("create table codeedit (tool_use_id text primary key, ts text not null, project text not null, convo integer not null, "
+                       "node integer not null, path text not null, kind text not null, tool text not null, status text not null, "
+                       "edits text not null default '[]', content text, chash text not null, size integer not null default 0)")
+        codemem.setup(self.store)
+        codemem.setup(self.store)
+        self.assertEqual(self.store.run("select commit_id, branch from codeedit"), [])
 
 
 if __name__ == "__main__":
