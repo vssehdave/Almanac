@@ -54,6 +54,7 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac playbook mine        find tasks you repeat in past sessions, no model (--days 30, --min 3)
   almanac playbook compile     have one Claude Code session write the best repeat up as a playbook (--top N, --dry-run)
   almanac playbook dedupe      merge playbooks that do the same route into one (--include-approved to touch approved ones)
+  almanac code sync [--project P]    tie recorded edits to git commits
   almanac code history PATH [-n N]   the recorded changes to a file, newest first, with the exchange that made each
   almanac library list|show|forget   the prompt library: how past prompts were solved (list --project NAME; show ID; forget ID)
   almanac lessons [clear AGENT]   lessons per sub-agent type, from review verdicts; clear drops one type's
@@ -691,9 +692,20 @@ def _code(rest):
     history = sub.add_parser("history", help="the recorded changes to a file, newest first")
     history.add_argument("path")
     history.add_argument("-n", type=int, default=10)
+    sync = sub.add_parser("sync", help="tie recorded edits to git commits and note changes made outside Claude")
+    sync.add_argument("--project", default="", help="a project key, name or path (default: the current folder)")
     args = parser.parse_args(rest)
+    memory = _memory_handle()
+    if args.cmd == "sync":
+        from .project import describe
+
+        key = memory.projects.find(args.project) if args.project else describe(os.getcwd())[0]
+        row = memory.store.run("select root from project where key = ?", (key,)) if key else []
+        folder = args.project if os.path.isdir(args.project) else row[0]["root"] if row else describe(os.getcwd())[2]
+        _print(codemem.sync(memory.store, key, folder) if key else f"No project found for {args.project}.")
+        return 0
     path = os.path.abspath(args.path)
-    _print(codemem.render(codemem.history(_memory_handle().store, path, max(1, args.n)), path))
+    _print(codemem.render(codemem.history(memory.store, path, max(1, args.n)), path))
     return 0
 
 
