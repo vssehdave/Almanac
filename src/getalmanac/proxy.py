@@ -639,20 +639,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _gate(self, proxy, ctx, sent, auth):
         """Hold a sub-agent's first send until its sibling's first reply has warmed the cache (fails open)."""
         try:
-            if not (ctx and ctx.thread == "sub" and ctx.lane and proxy.seen(ctx.lane) is None):
+            if not (ctx and ctx.kind == "messages" and ctx.thread == "sub" and ctx.lane and proxy.seen(ctx.lane) is None):
                 return
             wait = proxy.cfg["startup"].get("swarm_wait_seconds", 0)
             if isinstance(wait, bool) or not isinstance(wait, (int, float)) or wait <= 0:
                 return
             body = json.loads(sent)
             digest = hashlib.sha256(json.dumps([body.get("tools"), body.get("system")], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-            self.ticket = proxy.gate.enter((body.get("model"), auth or "", digest), wait=wait, cap=3 * wait)
+            key = hashlib.sha256((auth or self.headers.get("authorization") or "").encode()).hexdigest()
+            self.ticket = proxy.gate.enter((body.get("model"), key, digest), wait=wait, cap=3 * wait)
             ctx.stats["swarm"] = self.ticket.mode
         except Exception:  # fail open: a gate that breaks sends at once
             pass
 
     def _forward(self, proxy, ctx, raw, sent, orig, started):
         self.hold, self.switched, self.ticket = None, None, None
+        final_resp = None
         try:
             seconds = proxy.cfg["offline"]["hold_minutes"] * 60 if ctx else 0
             if seconds > 0:
@@ -738,6 +740,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if ctx:
                     _tell(proxy, "outcome", ctx, orig, 502)
                 return self._reply(502, {"type": "error", "error": {"type": "api_error", "message": message}})
+            final_resp = resp  # the response that goes back to the client, after any retry or switch
             tee = self._pipe(resp, tee=ctx is not None)
             if ctx:
                 proxy.finish(ctx, orig, raw, sent, resp.status, tee, started)
@@ -749,7 +752,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     proxy.keepalive.arm(ctx, sent, kept, self.path, resp.status)
         finally:
             if self.ticket:
-                self.ticket.done(False)
+                self.ticket.done(final_resp is not None and final_resp.status == 200)
 
     do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = do_HEAD = do_OPTIONS = do_CONNECT = _handle
 
