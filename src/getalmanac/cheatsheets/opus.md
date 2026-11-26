@@ -54,7 +54,9 @@ are the method, in the order a task runs.
 ## Hand out the work
 
 - Hand fully specified building to `almanac:builder` (Haiku, one file per
-  agent: split a change into one brief per file), and bugs,
+  agent: split a change into one brief per file), mechanical changes across
+  many files (renames, moved imports, reference updates) to
+  `almanac:handyman` (Haiku), and bugs,
   investigations and unsettled multi-file work to `almanac:architect`
   (Sonnet). An agent's file sets its model and effort. A model is raised only
   by hand-back: when an agent ends with a HANDOVER line, start a fresh
@@ -64,8 +66,8 @@ are the method, in the order a task runs.
   yourself.
 - Code work runs as a chain: `almanac:surveyor` first finds the exact files
   (using code_history/code_related), the lead writes the full brief, then
-  `almanac:builder`, then the crew reviewer for the diff's language, then
-  `almanac:inspector` (Opus), the one review that must pass before the merge.
+  `almanac:builder` (or `almanac:handyman`), then the crew reviewer for the
+  diff's language, then `almanac:inspector` (Opus), the one review that must pass before the merge.
 - An investigation that needs more than three searches or reads, or one large
   log, goes to `almanac:surveyor`, so its output stays out of your context.
 - One agent per commit-sized task. Split a long job into several short
