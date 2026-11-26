@@ -128,6 +128,19 @@ class CodeMemoryTest(Case):
             self.assertEqual(cli.main(["code", "related", self.file]), 0)
         self.assertEqual(buffer.getvalue().strip(), text.strip())
 
+    def test_edits_are_recorded_when_the_proxy_stores_a_finished_exchange(self):
+        from helpers import Rig, sse
+        from getalmanac.memory import MemoryLayer, ProjectLayer
+        rig = Rig(layers=[ProjectLayer(self.memory), MemoryLayer(self.memory)], store=self.store, state=self.state)
+        self.addCleanup(rig.close)
+        rig.upstream.respond = lambda req: (200, {"content-type": "text/event-stream"}, sse("Done."))
+        env = {"role": "system", "content": [{"type": "text", "text": f"# Environment\n - Primary working directory: {self.alpha}\n"}]}
+        tools = [{"name": "Edit", "description": "x", "input_schema": {"type": "object"}}]
+        history = self.messages[:3] + [{"role": "assistant", "content": [{"type": "text", "text": "Fixed."}]}]
+        rig.messages({"model": "m", "tools": tools, "messages": [*history, human("Thanks, now run it"), env]})
+        rig.records()
+        self.assertEqual([r["tool_use_id"] for r in self.rows()], ["e1"])
+
     def test_cli(self):
         self.index()
         self.store.close()
