@@ -84,6 +84,16 @@ are the method, in the order a task runs.
   the file and line, then stop). End with "Your last message must be the
   report." Builders run in parallel, so tell each one what the others are
   changing and what interface they share.
+- Swarm by default. One file per builder, always, including a builder
+  you start straight from the main chat for a quick fix. A change that
+  touches N files is N builders, all sent in one message so they start
+  together and share one cached startup. Never give one builder two
+  files, and never edit a second file yourself to save a spawn.
+- A builder also needs: the exact names of the files the others are
+  writing, so it waits for their interfaces instead of guessing; any new
+  file's full interface (class, functions, return values) pasted in the
+  brief; test files as their own builder, briefed with the same
+  interface; and the Bash path form `/c/Users/...`, not `C:\...`.
 - Gate a commit on the real exit code. A pipe into `tail` or `head` hides a
   failure: send test output to a file, keep `$?`, and commit only on 0.
 - At once: any number of Haiku agents, at most two Sonnet and one Opus. You
