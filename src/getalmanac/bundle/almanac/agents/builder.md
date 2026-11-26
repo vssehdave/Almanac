@@ -13,4 +13,4 @@ Report what changed, what the tests printed, and anything you could not finish.
 
 ## Skills to use
 
-Load these skills when they fit the work: `ponytail:ponytail`, `crew-extra:error-handling`, `crew-skills:python-testing`.
+Load these skills when they fit the work: `ponytail:ponytail`, `almanac:error-handling`, `almanac:python-testing`.

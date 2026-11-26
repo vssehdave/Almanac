@@ -9,4 +9,4 @@ Do the task fully: read the code it touches, make the smallest complete change, 
 
 ## Skills to use
 
-Load these skills when they fit the work: `ponytail:ponytail`, `crew-extra:error-handling`, `crew-skills:python-testing`.
+Load these skills when they fit the work: `ponytail:ponytail`, `almanac:error-handling`, `almanac:python-testing`.
