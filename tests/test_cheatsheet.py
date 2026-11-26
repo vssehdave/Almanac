@@ -419,6 +419,13 @@ class SkillsSheetTest(unittest.TestCase):
         self.assertNotIn("playbook_run", cheatsheet.skills(playbooks=False))
 
 
+class HandoverSkillTest(unittest.TestCase):
+    def test_skill_exists_and_carries_the_marker(self):
+        text = (Path(cheatsheet.__file__).parent / "bundle" / "almanac" / "skills" / "handover" / "SKILL.md").read_text(encoding="utf-8")
+        marker = cheatsheet.HANDBACK_NOTE.rsplit("HANDOVER:", 1)[1].format(agent_type="<agent_type>")
+        self.assertIn("HANDOVER:" + marker, text)
+        self.assertIn("name: handover", text)
+
+
 if __name__ == "__main__":
     unittest.main()
-
