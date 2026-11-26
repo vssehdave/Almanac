@@ -154,7 +154,7 @@ class Add(Base):
         self.assertEqual((rc, self.installed()), (2, []))
         rc, _ = self.add(str(self.src), accept_caution=True, confirm=lambda q: asked.append(q) and False)
         self.assertEqual((rc, self.installed()), (2, []))
-        self.assertIn("Type yes", asked[0])
+        self.assertIn("[y/N]", asked[0])
         rc, _ = self.add(str(self.src), accept_caution=True, confirm=lambda q: True)
         self.assertEqual((rc, self.installed()), (2, ["bad"]))
         record = json.loads((self.tmp / "home" / "skills.json").read_text())["skills"]["bad"]
@@ -182,11 +182,10 @@ class Add(Base):
             self.assertFalse((self.tmp / "home" / "bundle" / "SOURCES.md").exists(), spec)
 
     def test_cli_confirm_strictness(self):
-        for typed, danger, want in (("y", True, False), ("YES", True, False), ("yes", True, True), (" yes ", True, True),
-                                    ("y", False, True)):
-            ask = cli._typed_yes if danger else cli._yes
+        for typed, want in (("y", True), ("Y", True), ("YES", True), (" yes ", True), ("", False), ("n", False)):
+            ask = cli._yes
             with mock.patch("builtins.input", lambda q, t=typed: t):
-                self.assertEqual(ask("Install anyway? [y/N] "), want, (typed, danger))
+                self.assertEqual(ask("Install anyway? [y/N] "), want, typed)
 
     def test_existing_skill_needs_replace(self):
         make_skill(self.src, "dup")

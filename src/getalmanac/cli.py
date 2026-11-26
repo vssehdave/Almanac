@@ -627,7 +627,7 @@ def _skill(rest):
             _print("almanac: --accept-danger needs a terminal to type yes in; a DO_NOT_INSTALL item will be refused.")
         return skills.add(args.source, args.skill, args.ref, args.accept_caution or args.accept_danger, args.replace,
                           out=_print, bundle=args.bundle, name=args.name, ask=ask, hooks=args.hooks,
-                          confirm=_typed_yes if args.accept_danger and ask else None)
+                          confirm=_yes if args.accept_danger and ask else None)
     if os.path.exists(args.target):
         res = skills.scan(args.target)
     else:
@@ -801,13 +801,6 @@ def _yes(question) -> bool:
     except EOFError:
         return False
 
-
-def _typed_yes(question) -> bool:
-    """The strict form for DO_NOT_INSTALL: exactly "yes", in lower case, and nothing else."""
-    try:
-        return input(question).strip() == "yes"
-    except EOFError:
-        return False
 
 
 def _review_gate(_rest):
