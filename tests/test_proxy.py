@@ -240,12 +240,12 @@ class LauncherTest(unittest.TestCase):
             handle.write('{"name": "almanac"}')
         self.addCleanup(shutil.rmtree, mine)
         on = launcher.with_bundle(["-p", "hi"], {"bundle": {"enabled": True}})
-        self.assertEqual(on[0::2][:-1], ["--plugin-dir"] * 4)
-        self.assertEqual([os.path.basename(p) for p in on[1:8:2]], ["almanac", "guard", "one", "two"])
+        self.assertEqual(on[0::2][:-1], ["--plugin-dir"] * 5)
+        self.assertEqual([os.path.basename(p) for p in on[1:10:2]], ["almanac", "egm", "guard", "one", "two"])
         self.assertTrue(os.path.isfile(os.path.join(on[1], ".claude-plugin", "plugin.json")))
-        self.assertEqual(on[8:], ["-p", "hi"])
+        self.assertEqual(on[10:], ["-p", "hi"])
         off = launcher.with_bundle(["-p", "hi"], {"bundle": {"enabled": True}, "guard": {"enabled": False}})
-        self.assertEqual([os.path.basename(p) for p in off[1:6:2]], ["almanac", "one", "two"])
+        self.assertEqual([os.path.basename(p) for p in off[1:8:2]], ["almanac", "egm", "one", "two"])
         self.assertEqual(launcher.with_bundle(["-p", "hi"], {"bundle": {"enabled": False}}), ["-p", "hi"])
 
     def test_every_bundled_plugin_has_a_manifest_and_a_licence(self):
