@@ -86,6 +86,14 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {
          "since": {"type": "string", "description": "How far back: 30m, 24h or 7d (default 24h)"},
          "limit": {"type": "integer", "minimum": 1, "maximum": 100}}}},
+    {"name": "memory_pins",
+     "description": "The pinned plans of this folder's project, oldest first: each pin's number, title and items with their numbers. "
+                    "Done items are marked. Read-only.",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "memory_pin_done",
+     "description": "Mark one item of a pinned plan done (numbers from memory_pins). When every item of a pin is done the pin is dropped.",
+     "inputSchema": {"type": "object", "required": ["pin", "item"], "properties": {
+         "pin": {"type": "integer", "minimum": 1}, "item": {"type": "integer", "minimum": 1}}}},
 ]
 
 
@@ -192,6 +200,16 @@ def render_messages(found) -> str:
         f"\"{_quote(' '.join(m['text'].split())[:500])}\"" for m in found)
 
 
+def render_pins(pins) -> str:
+    if not pins:
+        return "No pinned plans in this project."
+    out = []
+    for pin in pins:
+        out.append(f"pin {pin['id']}: {pin['title']} (from exchange {pin['source']})")
+        out += [f"  {i['seq']}. [{'x' if i['done'] else ' '}] {i['text']}" for i in pin["items"]]
+    return "\n".join(out)
+
+
 def render_projects(memory) -> str:
     lines = []
     for row in memory.projects.listing():
@@ -294,6 +312,13 @@ def call(memory, name, args, cwd) -> str:
                                                          max(1, min(100, int(args.get("limit") or 20)))))
     if name == "memory_review":  # the proxy files the review: it sees the model, this process does not
         return "Review noted. It counts only if an Opus model made this call."
+    if name in ("memory_pins", "memory_pin_done"):
+        project = memory.projects.see(cwd, touch=False)
+        if not project:
+            return "No project is known for this folder."
+        if name == "memory_pins":
+            return render_pins(memory.pins(project))
+        return memory.pin_done(project, int(args.get("pin") or 0), int(args.get("item") or 0))
     raise KeyError(name)
 
 

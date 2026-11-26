@@ -104,7 +104,7 @@ class ListShowForgetTest(CliCase):
 class ToolTest(CliCase):
     def test_library_find_comes_after_the_older_tools_which_keep_their_places(self):
         names = [t["name"] for t in mcp.TOOLS]
-        self.assertEqual(names[-4:], ["library_find", "code_history", "memory_review", "errors"])
+        self.assertEqual(names[-6:], ["library_find", "code_history", "memory_review", "errors", "memory_pins", "memory_pin_done"])
         self.assertEqual(names[:3], ["memory_search", "memory_read", "memory_projects"])
 
     def test_it_returns_up_to_three_current_entries_with_the_quoted_sentence(self):

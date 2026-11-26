@@ -49,6 +49,12 @@ create index if not exists node_convo on node (convo, kind, seq);
 create index if not exists node_project on node (project, kind, ts);
 create virtual table if not exists node_fts using fts5(title, text, tokenize='porter unicode61');
 create table if not exists detail (node integer primary key, text text not null);
+create table if not exists pin (
+    id integer primary key, project text not null, title text not null, source integer not null default 0, created real not null
+);
+create table if not exists pin_item (
+    pin integer not null, seq integer not null, text text not null, done integer not null default 0, primary key (pin, seq)
+);
 create virtual table if not exists detail_fts using fts5(text, tokenize='porter unicode61');
 create table if not exists fact (
     id integer primary key, node integer not null, text text not null, dvec blob, dname text not null default ''
@@ -1035,6 +1041,57 @@ class Memory:
         head = f"Almanac memory: {self.projects.name(key)} · {row['t']} exchanges · {row['n']} conversations"
         return self._timeline(rows, head) + "\nSearch: memory_search · memory_read <id>"
 
+    # ---- pinned plans -------------------------------------------------------------
+
+    def add_pin(self, project, title, items, source=0) -> int:
+        """Pin a plan to `project`: a title, the exchange it came from and its ordered items. Older pins stay. Returns its number."""
+        items = [i for i in (" ".join(str(i).split()) for i in items) if i]
+        if not project or not items:
+            raise ValueError("a pin needs a project and at least one item")
+        with self.store.lock:
+            pin = self.store.db.execute("insert into pin (project, title, source, created) values (?, ?, ?, ?)",
+                                        (project, " ".join(title.split()) or "Plan", int(source or 0), time.time())).lastrowid
+            self.store.many("insert into pin_item (pin, seq, text) values (?, ?, ?)", [(pin, n, t) for n, t in enumerate(items, 1)])
+        return pin
+
+    def pins(self, project) -> list:
+        """The active pins of `project`, oldest first, each with its items (seq, text, done)."""
+        out = []
+        for row in self.store.run("select * from pin where project = ? order by created, id", (project,)):
+            pin = dict(row)
+            pin["items"] = [dict(r) for r in self.store.run("select seq, text, done from pin_item where pin = ? order by seq", (row["id"],))]
+            out.append(pin)
+        return out
+
+    def pin_done(self, project, pin, item) -> str:
+        """Mark item `item` (1-based) of pin `pin` done; the pin is dropped with its last open item. Returns a line for the person."""
+        with self.store.lock:
+            if not self.store.run("select 1 from pin where id = ? and project = ?", (pin, project)):
+                return f"No pin {pin} in this project. memory_pins lists them."
+            if not self.store.run("select 1 from pin_item where pin = ? and seq = ?", (pin, item)):
+                return f"Pin {pin} has no item {item}."
+            self.store.run("update pin_item set done = 1 where pin = ? and seq = ?", (pin, item))
+            if self.store.run("select 1 from pin_item where pin = ? and done = 0", (pin,)):
+                return f"Pin {pin} item {item} done."
+            self.unpin(project, pin)
+        return f"Pin {pin} item {item} done; every item is done, so the pin was dropped."
+
+    def unpin(self, project, pin) -> bool:
+        with self.store.lock:
+            if not self.store.run("select 1 from pin where id = ? and project = ?", (pin, project)):
+                return False
+            self.store.run("delete from pin_item where pin = ?", (pin,))
+            self.store.run("delete from pin where id = ?", (pin,))
+        return True
+
+    def pin_lines(self, project) -> list:
+        """The startup lines for the project's pins: each title with its open items only. [] with no pins."""
+        lines = []
+        for pin in self.pins(project):
+            lines.append(f"  pin {pin['id']}: {pin['title']}")
+            lines += [f"    {i['seq']}. {i['text']}" for i in pin["items"] if not i["done"]]
+        return ["Pinned plans (open items; mark one done with memory_pin_done):", *lines] if lines else []
+
     def recall(self, project, first_text, lane, limit_chars, tools_hint=True, agent_type=None) -> str:
         """The note added to a new conversation's first message, or "" when nothing is worth adding.
 
@@ -1060,6 +1117,10 @@ class Memory:
             return text if len(text) <= n else text[:n - 1].rsplit(" ", 1)[0].rstrip(" ,;:-") + "…"
 
         lines, room = [head], limit_chars - len(head) - 1 - (len(hint) + 1 if hint else 0)
+        pinned = "\n".join([] if sub else self.pin_lines(project))[:max(0, room - 1)]  # a pinned plan comes before the history; cut to the budget
+        if pinned:
+            lines.append(pinned)
+            room -= len(pinned) + 1
 
         seen = set()
         words = lambda text: set(re.findall(r"[a-z0-9]{4,}", text.lower()))  # noqa: E731

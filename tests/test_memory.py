@@ -833,7 +833,8 @@ class McpTest(Case):
         self.assertEqual(self.ask("initialize", {"protocolVersion": "2025-06-18"})["result"]["protocolVersion"], "2025-06-18")
         self.assertEqual([t["name"] for t in self.ask("tools/list")["result"]["tools"]],
                          ["memory_search", "memory_read", "memory_projects",
-                          "memory_list", "memory_handover", "memory_user_messages", "library_find", "code_history", "memory_review", "errors"])
+                          "memory_list", "memory_handover", "memory_user_messages", "library_find", "code_history", "memory_review", "errors",
+                          "memory_pins", "memory_pin_done"])
         self.assertIsNone(mcp.handle(self.memory, {"jsonrpc": "2.0", "method": "notifications/initialized"}, self.alpha))
         self.assertEqual(self.ask("nope")["error"]["code"], -32601)
 
@@ -886,6 +887,58 @@ class McpTest(Case):
         replies = [json.loads(line) for line in out.getvalue().splitlines()]
         self.assertEqual(replies[0], {"jsonrpc": "2.0", "id": 1, "result": {}})
         self.assertEqual(replies[1]["error"]["code"], -32700)
+
+
+class PinTest(Case):
+    def setUp(self):
+        super().setUp()
+        self.key = self.memory.projects.see(self.alpha)
+
+    def test_pins_list_oldest_first_and_a_new_one_keeps_the_old(self):
+        first = self.memory.add_pin(self.key, "First plan", ["a", "b"], 7)
+        second = self.memory.add_pin(self.key, "Second plan", ["c"], 8)
+        pins = self.memory.pins(self.key)
+        self.assertEqual([p["id"] for p in pins], [first, second])
+        self.assertEqual([(i["seq"], i["text"], i["done"]) for i in pins[0]["items"]], [(1, "a", 0), (2, "b", 0)])
+        self.assertEqual(pins[0]["source"], 7)
+        self.assertEqual(self.memory.pins("other"), [])
+        out = mcp.call(self.memory, "memory_pins", {}, self.alpha)
+        self.assertLess(out.index("First plan"), out.index("Second plan"))
+        with self.assertRaises(ValueError):
+            self.memory.add_pin(self.key, "Empty", [], 1)
+
+    def test_the_pin_is_dropped_when_its_last_item_is_done(self):
+        pin = self.memory.add_pin(self.key, "Plan", ["a", "b"], 1)
+        self.assertIn("item 1 done.", mcp.call(self.memory, "memory_pin_done", {"pin": pin, "item": 1}, self.alpha))
+        self.assertEqual(len(self.memory.pins(self.key)), 1)
+        self.assertIn("dropped", self.memory.pin_done(self.key, pin, 2))
+        self.assertEqual(self.memory.pins(self.key), [])
+        self.assertEqual(self.store.run("select count(*) n from pin_item")[0]["n"], 0)
+        self.assertIn("No pin", self.memory.pin_done(self.key, pin, 1))
+
+    def test_unpin_drops_it_by_hand_and_only_in_its_project(self):
+        pin = self.memory.add_pin(self.key, "Plan", ["a"], 1)
+        self.assertFalse(self.memory.unpin("other", pin))
+        self.assertTrue(self.memory.unpin(self.key, pin))
+        self.assertEqual(self.memory.pins(self.key), [])
+
+    def test_startup_note_shows_open_items_and_stays_frozen(self):
+        self.memory.index("old", "old", self.key, [human("earlier work")], reply("ok"))
+        pin = self.memory.add_pin(self.key, "Ship it", ["step one", "step two"], 1)
+        self.memory.pin_done(self.key, pin, 1)
+        rig = Rig(layers=[ProjectLayer(self.memory), MemoryLayer(self.memory)], store=self.store, state=self.state)
+        self.addCleanup(rig.close)
+        env = f"# Environment\n - Primary working directory: {self.alpha}\n"
+        body = {"model": "m", "tools": [{"name": "Bash", "description": "x", "input_schema": {"type": "object"}}],
+                "messages": [human("start"), {"role": "system", "content": [{"type": "text", "text": env}]}]}
+        rig.messages(body)
+        note = rig.sent()["messages"][0]["content"][-2]["text"]
+        self.assertIn("Ship it", note)
+        self.assertIn("step two", note)
+        self.assertNotIn("step one", note)
+        self.memory.pin_done(self.key, pin, 2)  # the pin is gone, the conversation's note is not
+        rig.messages(body)
+        self.assertEqual(rig.sent()["messages"][0]["content"][-2]["text"], note)
 
 
 class StatusTest(Case):
