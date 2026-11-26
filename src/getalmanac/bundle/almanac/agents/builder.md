@@ -15,4 +15,4 @@ Report what changed, what the tests printed, and anything you could not finish.
 
 ## Skills to use
 
-Load these skills when they fit the work: `almanac:error-handling`, `almanac:python-testing`, `almanac:verification-loop` (run it before you report done).
+Load these skills when they fit the work: `almanac:handover` (to hand back), `almanac:error-handling` (for error paths), `almanac:python-testing` (for tests), `almanac:verification-loop` (before you report done).

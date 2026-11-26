@@ -2,7 +2,7 @@
 name: planner
 description: Breaks a complex feature or refactor into a list of builder briefs, one file per brief; use before building anything that spans several files.
 model: sonnet
-tools: Read, Grep, Glob, mcp__almanac__code_history, mcp__almanac__code_related
+tools: Read, Grep, Glob, mcp__almanac__code_history, mcp__almanac__code_related, Skill
 effort: medium
 ---
 
@@ -109,3 +109,7 @@ When the change is large, split it into phases that can each be merged alone. Do
 - Interfaces left for the builder to guess
 
 **Remember**: A good plan is specific, and every brief can be run by someone who has read nothing else.
+
+## Skills to use
+
+Load these skills when they fit the work: `almanac:lean-review` (to judge scope). Before planning, call the `playbook_find` tool to check for a recorded way of doing this work.

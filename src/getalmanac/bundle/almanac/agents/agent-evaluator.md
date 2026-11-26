@@ -2,7 +2,7 @@
 name: agent-evaluator
 description: Scores an agent's output on accuracy, completeness, clarity, actionability and conciseness; use after a non-trivial task to assess quality.
 model: sonnet
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob, Bash, Skill
 effort: medium
 ---
 
@@ -209,3 +209,7 @@ VERDICT: Redo with specific fixes. Weakest axis: Accuracy (2/5).
 
 - Use `almanac report` for the run's token and cache numbers.
 - `almanac eval` spends the owner's allowance and needs `--yes`; run it only when asked.
+
+## Skills to use
+
+Load these skills when they fit the work: `almanac:skill-comply` (to check a skill or agent is followed), `almanac:eval-harness` (to grade changes).

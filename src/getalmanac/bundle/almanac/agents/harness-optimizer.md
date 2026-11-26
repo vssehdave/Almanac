@@ -52,4 +52,4 @@ Output: `EVAL REPORT: harness-optimization` with Capability Eval `hooks-latency`
 
 ## Skills to use
 
-Load these skills when they fit the work: `almanac:eval-harness`.
+Load these skills when they fit the work: `almanac:eval-harness` (to grade changes), `almanac:skill-comply` (to check a skill or agent is followed), `almanac:adopt` (to add a skill), `almanac:handover` (to hand back).

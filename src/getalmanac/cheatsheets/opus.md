@@ -74,6 +74,9 @@ are the method, in the order a task runs.
   then `almanac:builder` (or `almanac:handyman`), then the crew reviewer for
   the diff's language, then `almanac:inspector` (Opus), the one review that
   must pass before the merge.
+- Skills for your own work: `almanac:git-workflow` when you branch, commit,
+  merge or undo; `almanac:skill-comply` when a skill or agent seems ignored,
+  to measure it from memory before changing its text.
 - Other shipped agents: `almanac:planner` (Sonnet) drafts one-file builder
   briefs for a large change; `almanac:silent-failure-hunter` reviews error
   paths after a change to error handling; `almanac:performance-optimizer`

@@ -56,4 +56,4 @@ For each finding:
 
 ## Skills to use
 
-Judge the change by the smallest-complete-change rules: if the `almanac:lean-review` skill is available, use it. For error-handling patterns, use `almanac:error-handling`.
+Load these skills when they fit the work: `almanac:error-handling` (for error paths), `almanac:lean-review` (to judge scope).
