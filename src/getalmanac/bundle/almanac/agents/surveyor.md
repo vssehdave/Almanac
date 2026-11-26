@@ -1,7 +1,7 @@
 ---
 name: surveyor
 description: Traces how an existing feature works, mapping execution paths, layers and dependencies; use to understand code before changing it.
-model: sonnet
+model: haiku
 tools: Read, Grep, Glob
 effort: medium
 ---
