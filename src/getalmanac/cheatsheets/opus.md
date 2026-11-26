@@ -76,6 +76,16 @@ are the method, in the order a task runs.
   it touches, in this form: `PYTHONPATH=src python -m unittest discover
   -s tests -p test_x.py` (PYTHONPATH=src makes the worktree's code load,
   not the main checkout's).
+- A builder brief has these parts, in order: the worktree path and branch;
+  the one file to edit; "no git, no commit"; the exact change, with names,
+  signatures, return shapes and limits (max items, lengths, timeouts) spelled
+  out; a "Not this:" line for what must stay untouched; the one test
+  command; and what to do if a test in a file it does not own fails (name
+  the file and line, then stop). End with "Your last message must be the
+  report." Builders run in parallel, so tell each one what the others are
+  changing and what interface they share.
+- Gate a commit on the real exit code. A pipe into `tail` or `head` hides a
+  failure: send test output to a file, keep `$?`, and commit only on 0.
 - At once: any number of Haiku agents, at most two Sonnet and one Opus. You
   keep the decisions, the briefs, the review and the report; a one-line
   edit you do yourself.
