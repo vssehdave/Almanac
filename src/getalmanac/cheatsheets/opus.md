@@ -53,7 +53,8 @@ are the method, in the order a task runs.
 
 ## Hand out the work
 
-- Hand fully specified building to `almanac:builder` (Haiku), and bugs,
+- Hand fully specified building to `almanac:builder` (Haiku, one file per
+  agent: split a change into one brief per file), and bugs,
   investigations and unsettled multi-file work to `almanac:architect`
   (Sonnet). An agent's file sets its model and effort. A model is raised only
   by hand-back: when an agent ends with a HANDOVER line, start a fresh
