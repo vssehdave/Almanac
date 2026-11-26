@@ -452,13 +452,17 @@ def _changed(rows, total):
 
 
 def stale(store, project, limit):
-    """[(path, text)] of files in the project's folder that Claude changed and whose purpose is missing or out of date:
-    new, or more than 30% or 80 lines changed since it was written."""
+    """[(path, text)] of the project's text files whose purpose is missing or out of date: those Claude changed first (new,
+    or more than 30% or 80 lines changed since it was written), then the other git-tracked files that have none."""
     root = store.run("select root from project where key = ?", (project,))
     out = []
-    for row in store.run("select distinct path from codeedit where project = ? and kind != 'outside' and status in ('ok', 'unknown') "
-                         "order by path", (project,)) if root else []:
-        path = row["path"]
+    paths = [r["path"] for r in store.run("select distinct path from codeedit where project = ? and kind != 'outside' and status in "
+                                          "('ok', 'unknown') order by path", (project,))] if root else []
+    top = root[0]["root"] if root else ""
+    repo = os.path.isfile(top + "/.git/HEAD") or os.path.isfile(top + "/.git")  # a worktree has a .git file; skip the spawn otherwise
+    names = _git(top, "ls-files") if repo else None  # None (no git, not a repository): only Claude's files
+    tracked = sorted({normalize(top + "/" + n) for n in (names or "").splitlines()} - set(paths))
+    for path in paths + tracked:
         if len(out) >= limit:
             break
         try:
