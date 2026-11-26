@@ -878,6 +878,19 @@ class LongTurnTest(LayerCase):
         self.assertEqual(stubbed(json.loads(self.rig.upstream.requests[-1]["body"])["messages"]), [])
 
 
+    def test_a_sub_agent_is_stubbed_from_sub_stub_tokens_but_the_main_thread_is_not(self):
+        self.rig.cfg["routing"]["windows"]["m"] = 1000000
+        self.rig.cfg["compaction"].update(stub_tokens=10 ** 6, sub_stub_tokens=25000, agent_outline=False)
+        self.rig.messages(body(copy.deepcopy(long_turn(30))))
+        self.assertEqual(stubbed(json.loads(self.rig.upstream.requests[-1]["body"])["messages"]), [])
+        extra = {"x-claude-code-agent-id": "a1"}
+        self.rig.messages(body(copy.deepcopy(long_turn(30))), extra=extra)
+        first = json.loads(self.rig.upstream.requests[-1]["body"])["messages"]
+        self.assertTrue(stubbed(first))
+        self.rig.messages(body(copy.deepcopy(long_turn(31))), extra=extra)
+        second = json.loads(self.rig.upstream.requests[-1]["body"])["messages"]
+        self.assertEqual(json.dumps(second[:len(first)]), json.dumps(first))  # the same bytes on the next request
+
     def test_a_long_sub_agent_gets_an_outline_and_keeps_it(self):
         self.rig.cfg["routing"]["windows"]["m"] = 1000000
         self.rig.cfg["compaction"].update(stub_tokens=6000, agent_stub_tokens=6000)
@@ -938,6 +951,13 @@ class ColdTest(LayerCase):
         self.assertEqual(record["compaction"]["fresh"], True)
         self.assertGreater(record["cold"]["before"], record["cold"]["after"])
         self.assertEqual(record["cold"]["before"], compact.estimate(body(messages), None, messages, None))
+
+    def test_a_cold_compaction_leaves_a_note_flag_and_a_warm_one_does_not(self):
+        self.cold(history(14))
+        lane = self.rig.records()[-1]["lane"]
+        self.assertTrue(self.state.get(f"coldnote:{lane}"))
+        self.rig.messages(body(copy.deepcopy(history(14))), extra={"x-claude-code-agent-id": "w1"})  # a new thread, never cold
+        self.assertFalse(self.state.get(f"coldnote:{self.rig.records()[-1]['lane']}"))
 
     def test_a_second_cold_return_counts_against_the_stored_prefix_not_the_raw_history(self):
         messages = history(14)

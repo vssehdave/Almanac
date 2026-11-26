@@ -67,6 +67,13 @@ are the method, in the order a task runs.
   history on every step and gets its cache rewritten when it is cut. Each new
   agent of the same type finds the earlier ones' work in memory; name the
   files it must read in the brief so it does not search for them.
+- Give each agent one commit's worth of work, and split a larger job into a
+  sequence of agents, one per commit. Almanac stops an agent at a context cap
+  and has it hand back what is done and left; continue in a fresh agent of the
+  same type from that hand-back and the memory_handover notes.
+  When a result contains the line "HANDOVER: continue with a fresh <type>
+  agent", start a new agent of that type with that hand-back and its
+  memory_handover notes as the brief; do not resume the old agent.
 - An agent's report is a claim. When it finishes, check the diff and the test
   run against it, then call memory_review with a one-line verdict.
 - An agent starts knowing nothing. Its brief holds everything it needs: the
