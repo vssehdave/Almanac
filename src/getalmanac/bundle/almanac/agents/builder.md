@@ -15,4 +15,4 @@ Report what changed, what the tests printed, and anything you could not finish.
 
 ## Skills to use
 
-Load these skills when they fit the work: `almanac:ponytail`, `almanac:error-handling`, `almanac:python-testing`.
+Load these skills when they fit the work: `almanac:error-handling`, `almanac:python-testing`.

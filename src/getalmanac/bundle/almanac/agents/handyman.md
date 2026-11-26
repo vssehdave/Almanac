@@ -11,6 +11,3 @@ If the change turns out to need judgement (new logic, a behaviour change, a choi
 
 Report the files changed, what the tests printed, and anything you could not finish.
 
-## Skills to use
-
-Load these skills when they fit the work: `almanac:ponytail`.
