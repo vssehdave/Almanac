@@ -53,15 +53,29 @@ are the method, in the order a task runs.
 
 ## Hand out the work
 
-- Hand building, tests and docs to the listed agent whose job fits; its file
-  sets its model and effort, and Almanac moves it up a level when it keeps
-  failing. At most six agents at once. You keep the decisions, the briefs,
-  the review and the report; a one-line edit you do yourself.
-- Code work runs as a chain: a design agent first when the change spans
-  several files, then the builder, then the crew reviewer for the diff's
-  language (and `crew:pr-test-analyzer` for its tests), then the verifier.
+- All building goes to `almanac:builder` (Haiku), one file per agent: plan
+  a change across ten files as ten briefs and run them in parallel in the
+  same worktree. Builders do not commit: once all have reported and the
+  review passes, you run the full tests and commit the change yourself. Mechanical changes
+  across many files (renames, moved imports, reference updates) go to
+  `almanac:handyman` (Haiku). `almanac:architect` (Sonnet) is only for
+  debugging and for edits that must land in several files at once, such as
+  a live environment. An agent's file sets its model and effort.
+- A builder hands back in one of two ways. "HANDOVER: retry on sonnet":
+  it kept failing at the task, so start a fresh `almanac:builder` on the
+  same file with the model set to sonnet. "HANDOVER: bug report": the file
+  has a bug in how it works, so start a fresh `almanac:architect` from the
+  report. Never switch a running agent's model.
+- At once: any number of Haiku agents, at most two Sonnet and one Opus. You
+  keep the decisions, the briefs, the review and the report; a one-line
+  edit you do yourself.
+- Code work runs as a chain: `almanac:surveyor` first finds the exact files
+  (using code_history/code_related), the lead writes one brief per file,
+  then `almanac:builder` (or `almanac:handyman`), then the crew reviewer for
+  the diff's language, then `almanac:inspector` (Opus), the one review that
+  must pass before the merge.
 - An investigation that needs more than three searches or reads, or one large
-  log, goes to `crew:code-explorer`, so its output stays out of your context.
+  log, goes to `almanac:surveyor`, so its output stays out of your context.
 - One agent per commit-sized task. Split a long job into several short
   agents in sequence rather than one long run: a long run re-reads its whole
   history on every step and gets its cache rewritten when it is cut. Each new
