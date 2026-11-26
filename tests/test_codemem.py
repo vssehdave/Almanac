@@ -1,11 +1,13 @@
 import contextlib
 import io
+import json
 import os
 import subprocess
 import unittest
 from datetime import datetime
 from unittest import mock
 
+import test_summarize as ts
 from test_memory import Case, human, reply
 
 from getalmanac import cli, codemem, mcp, project
@@ -91,6 +93,22 @@ class CodeMemoryTest(Case):
         self.assertIn("No recorded changes", mcp.call(self.memory, "code_history", {"path": "nope.py"}, self.alpha))
         self.assertIn("needs a path", mcp.call(self.memory, "code_history", {}, self.alpha))
         self.assertIn("code_history", [t["name"] for t in mcp.TOOLS])
+
+    def test_related_tool_and_cli_print_the_same_text(self):
+        self.index()
+        text = mcp.call(self.memory, "code_related", {"path": "src/app.py"}, self.alpha)
+        self.assertEqual(text, codemem.related(self.store, self.file))
+        self.assertIn("Last edit: 20", text)
+        self.assertIn("needs a path", mcp.call(self.memory, "code_related", {}, self.alpha))
+        self.store.close()
+        old = os.environ.get("ALMANAC_HOME")
+        os.environ["ALMANAC_HOME"] = self.tmp
+        self.addCleanup(lambda: os.environ.pop("ALMANAC_HOME") if old is None else os.environ.update(ALMANAC_HOME=old))
+        os.replace(os.path.join(self.tmp, "a.db"), os.path.join(self.tmp, "almanac.db"))
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            self.assertEqual(cli.main(["code", "related", self.file]), 0)
+        self.assertEqual(buffer.getvalue().strip(), text.strip())
 
     def test_cli(self):
         self.index()
@@ -231,6 +249,116 @@ class CodeSyncTest(Case):
         codemem.setup(self.store)
         codemem.setup(self.store)
         self.assertEqual(self.store.run("select commit_id, branch from codeedit"), [])
+
+
+class CodeRelatedTest(CodeSyncTest):
+    def put(self, name, text):
+        os.makedirs(os.path.dirname(os.path.join(self.repo, name)), exist_ok=True)
+        with open(os.path.join(self.repo, name), "w", encoding="utf-8") as handle:
+            handle.write(text)
+
+    def links(self, name):
+        return sorted(r["dst"][len(self.repo) + 1:] for r in self.store.run("select dst from coderel where src = ?", (f"{self.repo}/{name}",)))
+
+    def test_python_relative_and_package_imports_and_js_relative_imports_are_linked(self):
+        self.put("pkg/__init__.py", "")
+        self.put("pkg/a.py", '"""Does the a thing.\n\nMore."""\nfrom . import b\nfrom .c import x\nimport pkg.d\nimport os\nfrom pkg import e\n')
+        for name in "bcde":
+            self.put(f"pkg/{name}.py", "x = 1\n")
+        self.put("web/main.ts", "import { f } from './lib'\nconst g = require('./util.js')\nimport 'left-pad'\nimport('../pkg/x')\n")
+        self.put("web/lib.ts", "")
+        self.put("web/util.js", "")
+        self.git("add", "-A")
+        self.sync()
+        self.assertEqual(self.links("pkg/a.py"), ["pkg/__init__.py", "pkg/b.py", "pkg/c.py", "pkg/d.py", "pkg/e.py"])
+        self.assertEqual(self.links("web/main.ts"), ["web/lib.ts", "web/util.js"])
+        self.assertIn("Used by: " + f"{self.repo}/pkg/a.py", codemem.related(self.store, f"{self.repo}/pkg/b.py"))
+        self.assertIn("Purpose: Does the a thing.", codemem.related(self.store, f"{self.repo}/pkg/a.py"))
+
+    def test_a_reparsed_file_replaces_its_rows_and_an_import_outside_the_repo_is_ignored(self):
+        self.put("a.py", "import b\nimport c\n")
+        self.put("b.py", "")
+        self.put("c.py", "")
+        open(os.path.join(self.tmp, "outside.py"), "w").close()
+        self.put("sub/m.py", "from ... import outside\nfrom .. import a\n")
+        self.git("add", "-A")
+        self.sync()
+        self.assertEqual(self.links("a.py"), ["b.py", "c.py"])
+        self.assertEqual(self.links("sub/m.py"), ["a.py"])
+        self.put("a.py", "import c\n")
+        os.utime(f"{self.repo}/a.py", (9e9, 9e9))
+        self.git("add", "-A")
+        self.sync()
+        self.assertEqual(self.links("a.py"), ["c.py"])
+
+    def test_a_file_that_does_not_parse_has_no_links(self):
+        self.put("bad.py", "def (:\n")
+        self.git("add", "-A")
+        self.sync()
+        self.assertEqual(self.links("bad.py"), [])
+
+
+
+    def test_related_names_the_last_edit(self):
+        self.commit("a.py", "a = 1\n", "2026-01-01T09:00:00+00:00")
+        self.record("e1", "a.py", "a = 1", "a = 2", "2026-01-01T10:00:00+00:00")
+        self.commit("a.py", "a = 2\n", "2026-01-01T11:00:00+00:00")
+        self.sync()
+        text = codemem.related(self.store, f"{self.repo}/a.py")
+        self.assertIn("Purpose: unknown", text)
+        self.assertIn("Last edit: 2026-01-01T10:00:00+00:00, branch main, commit ", text)
+
+
+class PurposeTest(ts.Case):
+    def setUp(self):
+        super().setUp()
+        self.file = self.alpha + "/retry.py"
+        self.put("x = 1\n" * 10)
+
+    def put(self, text):
+        with open(self.file, "w", encoding="utf-8") as handle:
+            handle.write(text)
+
+    def edit(self, call, old, new, at):
+        codemem.capture(self.store, 1, self.key, 1, [use(call, "Edit", file_path=self.file, old_string=old, new_string=new), out(call)],
+                        datetime.fromisoformat(at).timestamp())
+
+    def purpose_calls(self):
+        return [c for c in self.calls if "one source file" in json.loads(c["body"])["system"][-1]["text"]]
+
+    def test_a_new_file_gets_one_line_through_the_summary_call_and_a_small_edit_does_not_redo_it(self):
+        self.edit("e1", "x = 1", "x = 2", "2026-01-01T10:00:00+00:00")
+        self.verdict = ts.message("Retries a call.\nSecond line.")
+        self.ask("Fix it")
+        (call,) = self.purpose_calls()
+        body = json.loads(call["body"])
+        self.assertEqual((body["model"], body["messages"][0]["content"]), (ts.MODEL, "x = 1\n" * 10))
+        self.assertEqual(self.store.run("select text from codepurpose")[0]["text"], "Retries a call. Second line.")
+        self.assertIn("Purpose: Retries a call.", codemem.related(self.store, self.file))
+        self.ask("Fix it more")
+        self.assertEqual(len(self.purpose_calls()), 1)
+
+    def test_a_large_change_since_the_purpose_asks_again(self):
+        self.edit("e1", "x = 1", "x = 2", "2026-01-01T10:00:00+00:00")
+        codemem.set_purpose(self.store, self.key, self.file, "Old.", "h")
+        self.store.run("update codepurpose set ts = '2026-01-01T00:00:00+00:00'")
+        self.assertEqual(codemem.stale(self.store, self.key, 5), [])  # 1 of 10 lines
+        self.edit("e2", "x = 1\nx = 1\nx = 1\nx = 1", "y", "2026-01-02T10:00:00+00:00")  # 4 of 10 lines
+        self.assertEqual([p for p, _ in codemem.stale(self.store, self.key, 5)], [self.file])
+
+    def test_nothing_is_asked_when_summary_model_is_empty(self):
+        self.start(**{"memory.summary_model": ""})
+        self.edit("e1", "x = 1", "x = 2", "2026-01-01T10:00:00+00:00")
+        self.ask("Fix it")
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.store.run("select 1 from codepurpose"), [])
+
+    def test_a_failed_call_is_tried_three_times_in_all(self):
+        self.edit("e1", "x = 1", "x = 2", "2026-01-01T10:00:00+00:00")
+        self.verdict = (500, ts.JSON_HEADERS, b"{}")
+        for n in range(5):
+            self.ask(f"Fix it {n}")
+        self.assertLessEqual(len(self.purpose_calls()), codemem.MAX_TRIES)
 
 
 if __name__ == "__main__":

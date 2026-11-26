@@ -692,6 +692,8 @@ def _code(rest):
     history = sub.add_parser("history", help="the recorded changes to a file, newest first")
     history.add_argument("path")
     history.add_argument("-n", type=int, default=10)
+    related = sub.add_parser("related", help="what a file is for, what it imports and what imports it")
+    related.add_argument("path")
     sync = sub.add_parser("sync", help="tie recorded edits to git commits and note changes made outside Claude")
     sync.add_argument("--project", default="", help="a project key, name or path (default: the current folder)")
     args = parser.parse_args(rest)
@@ -705,6 +707,9 @@ def _code(rest):
         _print(codemem.sync(memory.store, key, folder) if key else f"No project found for {args.project}.")
         return 0
     path = os.path.abspath(args.path)
+    if args.cmd == "related":
+        _print(codemem.related(memory.store, path))
+        return 0
     _print(codemem.render(codemem.history(memory.store, path, max(1, args.n)), path))
     return 0
 

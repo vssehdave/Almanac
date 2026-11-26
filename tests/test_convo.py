@@ -105,7 +105,7 @@ class ConvoToolsTest(MemoryCase):
 
     def test_the_tool_list_ends_with_the_new_tools(self):
         names = [t["name"] for t in mcp.handle(self.memory, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, self.alpha)["result"]["tools"]]
-        self.assertEqual(names[-9:-6], ["memory_list", "memory_handover", "memory_user_messages"])  # library_find, code_history, memory_review, errors and the pin tools were added after them
+        self.assertEqual(names[-10:-7], ["memory_list", "memory_handover", "memory_user_messages"])  # library_find, code_history, memory_review, errors and the pin tools were added after them
 
     def test_list_filters_by_time_and_project(self):
         everything = self.ask("memory_list")

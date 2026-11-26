@@ -73,6 +73,11 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["path"], "properties": {
          "path": {"type": "string", "description": "The file; a relative path is taken from the current folder"},
          "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Default 10"}}}},
+    {"name": "code_related",
+     "description": "What one file is for in a line, the files it imports, the files that import it and its last recorded edit "
+                    "(time, branch, commit, exchange). Use it to find what a change to a file may touch.",
+     "inputSchema": {"type": "object", "required": ["path"], "properties": {
+         "path": {"type": "string", "description": "The file; a relative path is taken from the current folder"}}}},
     {"name": "memory_review",
      "description": "Record your review of sub-agent work after checking it against the code. Without a conversation number it "
                     "covers every unreviewed sub-agent of this conversation; with one (memory_search marks it "
@@ -307,6 +312,9 @@ def call(memory, name, args, cwd) -> str:
             return "code_history needs a path."
         path = os.path.abspath(os.path.join(cwd or "", path))
         return codemem.render(codemem.history(memory.store, path, max(1, min(50, int(args.get("limit") or 10)))), path)
+    if name == "code_related":
+        path = str(args.get("path") or "")
+        return codemem.related(memory.store, os.path.abspath(os.path.join(cwd or "", path))) if path else "code_related needs a path."
     if name == "errors":
         return report.render_errors(report.recent_errors(report.Log(config.home() / "logs" / "requests.jsonl"), str(args.get("since") or "24h"),
                                                          max(1, min(100, int(args.get("limit") or 20)))))
