@@ -94,6 +94,10 @@ are the method, in the order a task runs.
   file's full interface (class, functions, return values) pasted in the
   brief; test files as their own builder, briefed with the same
   interface; and the Bash path form `/c/Users/...`, not `C:\...`.
+- After the builders: run only the test files the change touched, commit,
+  then `almanac:inspector`, then the PR. Never run the full suite locally
+  (over 10 minutes); CI runs it on every pull request. Merge only when
+  the inspector has passed and CI is green.
 - Gate a commit on the real exit code. A pipe into `tail` or `head` hides a
   failure: send test output to a file, keep `$?`, and commit only on 0.
 - At once: any number of Haiku agents, at most two Sonnet and one Opus. You
