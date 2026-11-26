@@ -54,7 +54,9 @@ are the method, in the order a task runs.
 ## Hand out the work
 
 - All building goes to `almanac:builder` (Haiku), one file per agent: plan
-  a change across ten files as ten briefs, run in order. Mechanical changes
+  a change across ten files as ten briefs and run them in parallel in the
+  same worktree. Builders do not commit: once all have reported and the
+  review passes, you run the full tests and commit the change yourself. Mechanical changes
   across many files (renames, moved imports, reference updates) go to
   `almanac:handyman` (Haiku). `almanac:architect` (Sonnet) is only for
   debugging and for edits that must land in several files at once, such as
