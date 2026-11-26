@@ -2,6 +2,7 @@
 name: architect
 description: Sonnet agent for debugging (bug reports a builder handed back, investigations) and for edits that must land in several files at once, such as a live environment. Reads the code, edits, runs the tests, commits.
 model: sonnet
+tools: Read, Edit, Write, Bash, Grep, Glob, Skill, mcp__almanac__memory_search, mcp__almanac__memory_read, mcp__almanac__code_history, mcp__almanac__code_related
 effort: medium
 ---
 

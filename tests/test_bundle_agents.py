@@ -93,6 +93,17 @@ class BundleAgents(unittest.TestCase):
             with self.subTest(skill=f.parent.name):
                 self.assertEqual(_front(f).get("name"), f.parent.name)
 
+    def test_every_agent_lists_its_tools(self):
+        for f in sorted((BUNDLE / "agents").glob("*.md")):
+            with self.subTest(file=f.name):
+                self.assertTrue(_front(f).get("tools"))
+
+    def test_builder_starts_lean(self):
+        front = _front(BUNDLE / "agents" / "builder.md")
+        self.assertEqual(front.get("omitClaudeMd"), "true")
+        self.assertEqual(front.get("effort"), "low")
+        self.assertNotIn("Skill", front.get("tools"))
+
 
 if __name__ == "__main__":
     unittest.main()

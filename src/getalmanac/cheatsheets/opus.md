@@ -65,7 +65,17 @@ are the method, in the order a task runs.
   it kept failing at the task, so start a fresh `almanac:builder` on the
   same file with the model set to sonnet. "HANDOVER: bug report": the file
   has a bug in how it works, so start a fresh `almanac:architect` from the
-  report. Never switch a running agent's model.
+  report. Never switch a running agent's model. A builder runs its test
+  once and reports; a failure it reports is yours to route (a new brief
+  for the test file, or architect for a bug).
+- Handyman commits its own mechanical change and reports in full; read its
+  report and diff, no Sonnet re-review. On "HANDOVER: retry handyman at
+  higher effort", start a fresh `almanac:handyman` with effort high, then
+  xhigh if that fails too. Never move handyman to another model.
+- Every builder and handyman brief carries one test command for the file
+  it touches, in this form: `PYTHONPATH=src python -m unittest discover
+  -s tests -p test_x.py` (PYTHONPATH=src makes the worktree's code load,
+  not the main checkout's).
 - At once: any number of Haiku agents, at most two Sonnet and one Opus. You
   keep the decisions, the briefs, the review and the report; a one-line
   edit you do yourself.
