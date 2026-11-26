@@ -142,6 +142,9 @@ DEFAULTS = {
         "max_idle_minutes": 240,  # stop pinging a conversation this long after its last real request
         "max_lanes": 4,  # conversation threads kept alive at once (the least recently active is dropped first)
     },
+    "code": {
+        "sync_on_start": True,  # at proxy start, tie recorded edits to git commits when the folder is a git repository
+    },
     "cloud": {
         "auto": False,  # true keeps a running task's snapshot on origin's cloud/handoff branch (see cloud.py)
         "heartbeat_minutes": 10,

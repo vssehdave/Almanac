@@ -9,6 +9,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 from datetime import datetime, timedelta, timezone
 
 from . import report
@@ -130,6 +131,41 @@ def capture(store, convo, project, node, group, at):
 
 def history(store, path, limit=10):
     return store.run("select * from codeedit where path = ? and status != 'duplicate' order by ts desc, rowid desc limit ?", (normalize(path), limit))
+
+
+def hints(store, project, text, limit=3):
+    """One line per file the text names that has recorded edits in `project`: its last edit. A name is an absolute path or the
+    end of one (`src/a.py`, `a.py`); the lines follow the order the names come in the text."""
+    known = [r["path"] for r in store.run("select distinct path from codeedit where project = ? and status != 'duplicate' order by path", (project,))]
+    out = []
+    for word in re.findall(r"[\w./\:~-]+\.\w+", text or ""):
+        name = normalize(word).removeprefix("./")
+        for path in known:
+            if (path == name or path.endswith("/" + name)) and not any(path in line for line in out):
+                last = history(store, path, 1)[0]
+                out.append(f"{path}: last edit {last['ts']} on {last['branch'] or '?'} ({(last['commit_id'] or '?')[:7]}), exchange {last['node']}")
+        if len(out) >= limit:
+            break
+    return out[:limit]
+
+
+def start_sync(cfg, store):
+    """At proxy start, tie recorded edits to commits in a background thread when `code.sync_on_start` is on and the
+    folder is a git repository. Returns the thread, or None when nothing was started."""
+    if not cfg.get("code", {}).get("sync_on_start", True):
+        return None
+    from .project import describe, repo_root
+
+    def run():
+        try:
+            key, _, folder = describe(os.getcwd())
+            if key and repo_root(folder):
+                sync(store, key, folder)
+        except Exception as exc:
+            report.log_error("codemem:sync", exc)
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    return thread
 
 
 def _lines(text):
