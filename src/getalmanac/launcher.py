@@ -13,6 +13,7 @@ from pathlib import Path
 
 from . import config
 from . import proxy as proxy_mod
+from . import report
 
 
 def find_claude():
@@ -215,8 +216,8 @@ def run(args, cfg) -> int:
 
         build.launch_check(cfg)
         build.keep_checking()
-    except Exception:  # the playbook miner is an extra: it must never stop Claude Code from starting
-        pass
+    except Exception as exc:  # the playbook miner is an extra: it must never stop Claude Code from starting
+        report.log_error("launcher:playbook", exc)
     # A base URL the user already set (a company gateway) becomes the upstream.
     outer = os.environ.get("ANTHROPIC_BASE_URL")
     if outer and not os.environ.get("ALMANAC_UPSTREAM"):

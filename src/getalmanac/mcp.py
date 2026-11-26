@@ -7,7 +7,7 @@ import os
 import sys
 import time
 
-from . import __version__, config, library
+from . import __version__, config, library, report
 from .memory import _BREAK, QUOTED, READ_CHARS, READ_LINES, Memory, _quote, ended, unreviewed
 from .store import Store
 
@@ -73,6 +73,12 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["verdict"], "properties": {
          "conversation": {"type": "integer", "minimum": 1, "description": "One sub-agent's conversation number; leave out for all of this conversation's"},
          "verdict": {"type": "string", "description": "Short: what was checked and whether the work holds"}}}},
+    {"name": "errors",
+     "description": "Recent errors Almanac carried on past (a failed summary, a layer that raised and was skipped), newest first: "
+                    "time, where, the sub-agent if any, and the error. Read-only.",
+     "inputSchema": {"type": "object", "properties": {
+         "since": {"type": "string", "description": "How far back: 30m, 24h or 7d (default 24h)"},
+         "limit": {"type": "integer", "minimum": 1, "maximum": 100}}}},
 ]
 
 
@@ -270,6 +276,9 @@ def call(memory, name, args, cwd) -> str:
             query=str(args.get("query") or ""), limit=max(1, min(100, int(args.get("limit") or 30)))))
     if name == "library_find":
         return library.render_found(library.search(memory.store, str(args.get("query") or ""), memory.projects.see(cwd, touch=False) or "", limit=3, min_tools=library.min_tools()))
+    if name == "errors":
+        return report.render_errors(report.recent_errors(report.Log(config.home() / "logs" / "requests.jsonl"), str(args.get("since") or "24h"),
+                                                         max(1, min(100, int(args.get("limit") or 20)))))
     if name == "memory_review":  # the proxy files the review: it sees the model, this process does not
         return "Review noted. It counts only if an Opus model made this call."
     raise KeyError(name)

@@ -6,6 +6,8 @@ import threading
 import time
 from pathlib import Path
 
+from getplaybook.text import redact
+
 from . import config
 from .cheatsheet import family
 
@@ -111,6 +113,47 @@ class Log:
             except ValueError:
                 pass
         return records
+
+
+def log_error(where, exc, ctx=None, log=None):
+    """Record a failure the code carries on past, as `type: message`. Callable from any thread, with or without a request
+    context. Never writes headers or credentials; never raises."""
+    try:
+        record = {"ts": time.time(), "kind": "error", "where": where, "error": redact(f"{type(exc).__name__}: {exc}")[:500]}
+        if getattr(ctx, "agent", ""):
+            record["agent"] = ctx.agent  # sub-agents share the proxy, so their errors land in the same log
+        log = log or getattr(getattr(ctx, "proxy", None), "log", None) or Log(config.home() / "logs" / "requests.jsonl")
+        log.write(record)
+    except Exception:
+        pass  # the error log itself failing has nowhere left to be reported
+
+
+def window_seconds(text) -> int:
+    """`30m`, `24h` or `7d` as seconds."""
+    found = re.fullmatch(r"(\d+)([mhd])", str(text).strip().lower())
+    if not found:
+        raise ValueError(f"cannot read the window {text!r}: use a number and m, h or d, such as 24h")
+    return int(found[1]) * {"m": 60, "h": 3600, "d": 86400}[found[2]]
+
+
+def recent_errors(log, since="24h", limit=20) -> list:
+    """The error records of the last `since`, newest first, at most `limit`."""
+    cutoff = time.time() - window_seconds(since)
+    found = [r for r in log.tail(10 ** 9) if r.get("kind") == "error" and r.get("ts", 0) >= cutoff]
+    return sorted(found, key=lambda r: r["ts"], reverse=True)[:limit]
+
+
+def render_errors(records) -> str:
+    if not records:
+        return "no errors"
+    return "\n".join(f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(r['ts']))}  {r.get('where', '?')}"
+                     f"{'  agent ' + r['agent'] if r.get('agent') else ''}  {r.get('error', '')}" for r in records)
+
+
+def error_line(log) -> str:
+    """One status line for the last 24 hours' errors, or "" when there were none."""
+    found = recent_errors(log, limit=10 ** 9)
+    return f"{len(found)} error(s) in the last 24 hours, newest in {found[0].get('where', '?')}: see `almanac errors`" if found else ""
 
 
 def _tokens(usage) -> int:

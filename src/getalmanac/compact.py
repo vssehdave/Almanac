@@ -53,7 +53,7 @@ import json
 import time
 
 from . import request as rq
-from . import sse, summarize
+from . import report, sse, summarize
 from .memory import QUOTED, _first_line, clean, exchange, result_text, transcript
 
 CHARS_PER_TOKEN = 3.0  # conservative: real text runs a little over 3 characters a token
@@ -284,7 +284,8 @@ def build_prefix(messages, covered, ids, budget_chars, told=None, statuses=None,
             if len(digest) >= (1 if kind == "rollup" else SYNTH_MIN):
                 try:
                     found, why = synth(kind, "\n".join(digest))
-                except Exception:  # fail open: the rule-written outline stands
+                except Exception as exc:  # fail open: the rule-written outline stands
+                    report.log_error("compact:synth", exc)
                     found, why = [], "error"
         if synth:
             info["rollup_synth" if kind == "rollup" else "synth"] = "ok" if found else (why or "empty")
@@ -454,7 +455,8 @@ class CompactLayer:
         had, size = self._stubs(ctx), self._size_if_cold(body, ctx, messages)
         try:
             out = self._outline_agent(body, ctx, cfg)
-        except Exception:  # fail open: the request goes out with its stubs only
+        except Exception as exc:  # fail open: the request goes out with its stubs only
+            report.log_error("compact:outline", exc, ctx)
             out = messages
         stubbed = self._relieve(body, ctx, cfg, out, False)
         if stubbed:
@@ -595,7 +597,8 @@ class CompactLayer:
                 if tokens - freed <= limit * RELIEF_TO or keep <= floor:
                     break
                 keep = max(floor, keep - 4)
-        except Exception:  # fail open: the request goes out with the stubs it already had
+        except Exception as exc:  # fail open: the request goes out with the stubs it already had
+            report.log_error("compact:relieve", exc, ctx)
             return len(same)
         for block, n in fresh:
             if "{id}" in tpl and ctx.cfg["memory"]["enabled"]:  # save it whole before it is replaced; a result that cannot be saved stays as it is

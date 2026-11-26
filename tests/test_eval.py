@@ -1,7 +1,10 @@
 import json
 import os
 import tempfile
+import contextlib
+import io
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import helpers  # noqa: F401  (sets ALMANAC_HOME for the test run)
@@ -52,6 +55,15 @@ class EvalTest(unittest.TestCase):
         self.assertEqual((run["requests"], run["input_tokens"], run["output_tokens"], run["cache_read_input_tokens"],
                           run["tool_calls"], run["spawns"], run["check"], run["cache_creation_input_tokens"]),
                          (2, 20, 10, 200, 3, 1, False, 14))
+
+    def test_locked_cleanup_is_one_line_not_a_traceback(self):
+        err = io.StringIO()
+        with mock.patch.object(evaluate, "rm", side_effect=PermissionError(32, "in use")), contextlib.redirect_stderr(err):
+            code = evaluate.main(["--yes", "--variants", "off", "--out", str(self.out)], self.runner)
+        self.assertEqual(code, 0)
+        self.assertIn("could not remove", err.getvalue())
+        self.assertNotIn("Traceback", err.getvalue())
+        self.assertEqual(sum("could not remove" in line for line in err.getvalue().splitlines()), 1)  # stray ResourceWarnings from other tests may share stderr
 
     def test_outer_almanac_is_not_inherited(self):
         old = dict(os.environ)

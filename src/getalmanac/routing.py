@@ -26,7 +26,7 @@ import re
 import time
 
 from . import request as rq
-from . import summarize
+from . import report, summarize
 from .compact import COLD_FLOOR, estimate
 from .memory import clean
 
@@ -279,8 +279,8 @@ class RoutingLayer:
                 self._apply(body, ctx, cfg, dec, first)
         try:
             self._hold(body, ctx, cfg, messages, turns[turn], text)
-        except Exception:  # fail open: the request goes out as the client sent it
-            pass
+        except Exception as exc:  # fail open: the request goes out as the client sent it
+            report.log_error("routing:hold", exc, ctx)
 
     @staticmethod
     def _hold(body, ctx, cfg, messages, at, text):

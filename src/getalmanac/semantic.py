@@ -14,7 +14,7 @@ import importlib.util
 import os
 import threading
 
-from . import config, embed
+from . import config, embed, report
 
 MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 REVISION = "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"  # the commit that was tested
@@ -82,7 +82,8 @@ def _build():
             tok = tok.compile()
         sess = ort.InferenceSession(_cached("onnx/model.onnx"), providers=["CPUExecutionProvider"])
         wants_types = "token_type_ids" in {i.name for i in sess.get_inputs()}
-    except Exception:  # a broken install or a damaged file: keyword search still works
+    except Exception as exc:  # a broken install or a damaged file: keyword search still works
+        report.log_error("semantic:load", exc)  # load() calls this once per process
         return None
 
     def encode(texts):

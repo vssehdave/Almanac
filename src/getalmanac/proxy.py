@@ -28,7 +28,7 @@ from . import request as rq
 from . import sse
 from . import upstream
 from .memory import redact
-from .report import Log, cache_marks, is_cold, sections
+from .report import Log, cache_marks, is_cold, log_error, sections
 
 REQUEST_SKIP = {"host", "connection", "keep-alive", "transfer-encoding", "te", "upgrade",
                 "proxy-authorization", "proxy-connection", "content-length"}
@@ -53,8 +53,8 @@ def _tell(proxy, method, *args):
         if hasattr(layer, method):
             try:
                 getattr(layer, method)(*args)
-            except Exception:
-                pass
+            except Exception as exc:
+                log_error("tell:" + method, exc, args[0] if args else None, proxy.log)
 
 
 class Replay:

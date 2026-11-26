@@ -222,4 +222,7 @@ def main(rest, runner=run_claude):
         Path(args.out).write_text(json.dumps({"ref": ref, "model": args.model, "runs": runs}, indent=2), encoding="utf-8")
         return 0
     finally:
-        rm(scratch)
+        try:
+            rm(scratch)
+        except OSError as exc:  # a file Windows still holds open must not turn a finished eval into a traceback
+            print(f"almanac eval: could not remove {scratch} ({exc}); delete it by hand.", file=sys.stderr)
