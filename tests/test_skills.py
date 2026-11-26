@@ -621,6 +621,52 @@ class Update(Base):
         self.assertIn("no adopted skill named nope", text)
 
 
+class Integrate(Base):
+    def setUp(self):
+        super().setUp()
+        self.bundle = self.tmp / "home" / "bundle"
+        self.dest = self.bundle / "new"
+
+    def skill(self, root, name, desc, body="body\n"):
+        folder = Path(root) / "skills" / name
+        folder.mkdir(parents=True)
+        (folder / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {desc}\n---\n{body}")
+
+    def test_report_finds_links_root_paths_overlaps_and_layout(self):
+        self.skill(self.bundle / "old", "reviewer", "Review python code for bugs and style problems before merge")
+        self.skill(self.dest, "checker", "Review python code for bugs and style problems before merge",
+                   "[gone](../../docs/x.md) [ok](../../skills/checker/SKILL.md) [web](https://x.io/a)\n"
+                   "run ${CLAUDE_PLUGIN_ROOT}/scripts/run.js\n```\n[example](nope.md)\n```\n")
+        (self.dest / ".claude-plugin" / "agents").mkdir(parents=True)
+        (self.dest / ".claude-plugin" / "agents" / "a.md").write_text("---\nname: a\ndescription: zzz\n---\n")
+        first = skills.integration_report(self.dest, self.bundle)
+        text = "\n".join(first)
+        self.assertIn("links to ../../docs/x.md", text)
+        self.assertIn("${CLAUDE_PLUGIN_ROOT}/scripts/run.js", text)
+        self.assertIn("new/skills/checker/SKILL.md and old/skills/reviewer/SKILL.md do the same job", text)
+        self.assertIn("layout: new/.claude-plugin/agents/a.md", text)
+        self.assertNotIn("nope.md", text)
+        self.assertEqual(len(first), 4, text)
+        self.assertEqual(first, skills.integration_report(self.dest, self.bundle))
+
+    def test_integrate_exit_codes_and_pending(self):
+        self.skill(self.dest, "checker", "x", "[gone](missing.md)\n")
+        lines = []
+        self.assertEqual(skills.integrate("new", out=lines.append), 1)
+        self.assertEqual(skills.pending(), ["new"])
+        (self.dest / "skills" / "checker" / "missing.md").write_text("here\n")
+        self.assertEqual(skills.integrate("new", out=lines.append), 0)
+        self.assertEqual((skills.pending(), lines[-1]), ([], "new: integrated"))
+        self.assertEqual(skills.integrate("nope", out=lines.append), skills.ERROR)
+
+    def test_bundle_install_marks_a_plugin_pending(self):
+        make_skill(self.src, "inner", None, {"SKILL.md": "---\nname: inner\n---\n[x](../gone.md)\n"})
+        rc, text = self.add(str(self.src), bundle=True, name="mine")
+        self.assertEqual(rc, 0, text)
+        self.assertIn("integration pending", text)
+        self.assertEqual(skills.pending(), ["mine"])
+
+
 class ImportBundle(Base):
     def test_copies_plugin_folders_without_links_and_keeps_existing_ones(self):
         old = self.tmp / "old"

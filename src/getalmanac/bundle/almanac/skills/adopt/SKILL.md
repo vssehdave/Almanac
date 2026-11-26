@@ -8,11 +8,10 @@ description: Add any skill or plugin, rewired to use Almanac
 Use this whenever the user asks to add, install or adopt a skill, plugin or
 agent pack, in any domain.
 
-Adopting means three things in order: fetch and scan the original, install a
-copy into the user's own Almanac bundle, then rewire that copy so it works
-through Almanac instead of keeping its own notes and state. The copy is the
-user's. Edit it freely; never edit the original or anything outside the bundle
-folder the command prints.
+Adopting means integrating: fetch and scan the original, install a copy into
+the user's own Almanac bundle, then make that copy part of one coherent skills
+layer that works through Almanac. The copy is the user's. Edit it freely; never
+edit the original or anything outside the bundle folder the command prints.
 
 Never run anything you fetched: no install script, no setup command, no hook,
 no generated tool. You only read and edit text.
@@ -31,41 +30,49 @@ larger repository. Read what it prints.
   lists any hooks (not installed: tell the user and let them decide) and MCP
   servers (kept only when pinned to an exact version; any left out are named).
 
-## 2. Rewire the installed copy
+## 2. Integrate (mandatory)
 
-Work only inside that folder. Make each of these edits where it applies.
+The install prints an integration report, and the plugin is "integration
+pending" until it is clean. Run `almanac skill integrate NAME` to see it again.
+Work only inside the bundle folder. Its three kinds of line:
 
-1. **Memory and state.** Where the skill keeps its own notes, memory, journal,
-   progress file or state file, replace that with Almanac memory: before
-   re-deriving something, call `memory_search`; finished work is kept
-   automatically, so delete steps that save it by hand.
-2. **Repeatable procedures.** Where the skill describes a procedure that will
-   recur, point it at playbooks: `playbook_find` before starting, and
-   `playbook_save` when a run taught something new.
-3. **Agents.** Give every shipped agent a `model:` line (`haiku` for lookup and
-   mechanical work, `sonnet` for building, `opus` for planning and review) and
-   a "Skills to use" section naming the user's adopted skills that fit its
-   job, as `plugin:skill`. Add one line that its output falls under the Opus
-   review gate: the main Opus session checks it and calls `memory_review`
-   before using it.
-4. **Descriptions.** Almanac lists a skill or agent by the first 60 characters
-   of its description, so make the first sentence say what it is, then when to
-   use it.
-5. **The original's own world.** Remove references to its slash commands,
-   install or update steps, marketplace, CLI helper, and any outside service
-   the skill would send data to (a catalog, a telemetry or sync endpoint).
-   Where an outside service is optional, make the local-only path the only one.
-6. **Scanner wording.** If the scan flagged a line, rephrase only that line,
-   keeping its meaning. Do not delete content to pass a scan.
-7. **Anything that runs code.** Leave scripts, templates and generators out of
-   the copy or as plain reference text. If the skill's job needs a package
-   installed, make it ask the user first and install only into a virtual
-   environment the user names.
+1. **overlap:** read both files. Decide keep, merge or delete: fold the better
+   parts into the skill or agent that already existed, then delete the
+   duplicate. Never keep two skills for one job.
+2. **outside reference / layout:** inline the content a link or
+   `${CLAUDE_PLUGIN_ROOT}` path needs, or drop the reference; move agents to
+   `agents/NAME.md` and skills to `skills/NAME/SKILL.md`.
+3. **Rule conflicts** the report cannot see: where the skill's rules contradict
+   an existing skill or how Almanac behaves (memory, playbooks, cheatsheets,
+   model routing, the 6-agent cap), the existing rule wins; edit the copy.
+
+Then make each remaining item fit Almanac:
+
+- **Memory and state.** Replace its own notes, journal or state file with
+  `memory_search` before re-deriving; finished work is kept automatically.
+- **Repeatable procedures.** Point them at `playbook_find` before starting and
+  `playbook_save` when a run taught something new.
+- **Agents.** Give each a `model:` line (`haiku` for lookup and mechanical
+  work, `sonnet` for building, `opus` for planning and review), a "Skills to
+  use" section naming adopted skills as `plugin:skill`, and one line that its
+  output falls under the Opus review gate (`memory_review` before use).
+- **Descriptions.** Almanac lists a skill by the first 60 characters of its
+  description: say what it is, then when to use it.
+- **The original's own world.** Remove its slash commands, install or update
+  steps, marketplace, CLI helper and any outside service it would send data
+  to; keep only the local path.
+- **Scanner wording.** Rephrase only a flagged line, keeping its meaning.
+- **Code.** Leave scripts and generators out or as plain text. If the job
+  needs a package, ask first and install only into a virtual environment the
+  user names.
+
+Rerun `almanac skill integrate NAME` until it exits 0. It exits 1 while
+anything is open, and `almanac doctor` lists plugins still pending.
 
 ## 3. Log it
 
 Open `SOURCES.md` in the bundle folder's parent. Find this plugin's row and
-extend its "Changed" cell with each edit you made, in a few words each. Then
+extend its "Changed" cell with each edit and each merge or deletion you made, in a few words each. Then
 tell the user the plugin loads in the next session started through `almanac`,
 and what you changed.
 
@@ -75,7 +82,7 @@ Run `almanac skill update`. It changes nothing; it lists adopted skills with a
 newer upstream commit. For each newer one: first note the "Changed" cell it
 prints, since re-adopting overwrites the copy. Then run the printed command
 (that is step 1 above, and the scan rules apply). Redo the edits from the old
-Changed cell in step 2, and write the row's Changed cell again in step 3.
+Changed cell in step 2, then rerun `almanac skill integrate NAME`, and write the row's Changed cell again in step 3.
 
 ## Worked examples
 
