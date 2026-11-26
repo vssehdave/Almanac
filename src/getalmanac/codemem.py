@@ -458,8 +458,10 @@ def stale(store, project, limit):
     out = []
     paths = [r["path"] for r in store.run("select distinct path from codeedit where project = ? and kind != 'outside' and status in "
                                           "('ok', 'unknown') order by path", (project,))] if root else []
-    names = _git(root[0]["root"], "ls-files") if root else None  # None (no git, not a repository): only Claude's files
-    tracked = sorted({normalize(root[0]["root"] + "/" + n) for n in (names or "").splitlines()} - set(paths))
+    top = root[0]["root"] if root else ""
+    repo = os.path.isfile(top + "/.git/HEAD") or os.path.isfile(top + "/.git")  # a worktree has a .git file; skip the spawn otherwise
+    names = _git(top, "ls-files") if repo else None  # None (no git, not a repository): only Claude's files
+    tracked = sorted({normalize(top + "/" + n) for n in (names or "").splitlines()} - set(paths))
     for path in paths + tracked:
         if len(out) >= limit:
             break
