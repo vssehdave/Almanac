@@ -146,6 +146,9 @@ class LayerTest(Fresh):
         self.assertEqual(run(LARGE, mode="off")["system"], claude_system())
 
 
+NOTE = cheatsheet.HANDBACK_NOTE.format(agent_type="general-purpose")
+
+
 class NoteTest(Fresh):
     """The budget and cold-return notes: one fixed last system block, on from the first request that shows it."""
 
@@ -165,9 +168,9 @@ class NoteTest(Fresh):
 
     def test_budget_note_appears_past_the_limit_and_stays_identical(self):
         self.assertEqual(self.go(60000), self.go(60000))  # below: nothing
-        self.assertNotIn(cheatsheet.BUDGET_NOTE, json.dumps(self.go(60000)))
+        self.assertNotIn(NOTE, json.dumps(self.go(60000)))
         over = self.go(120000)
-        self.assertEqual(over[-1]["text"], cheatsheet.BUDGET_NOTE)
+        self.assertEqual(over[-1]["text"], NOTE)
         self.assertEqual(self.go(120000), over)
         self.assertEqual(self.go(50000), over)  # a stub pass that shrinks the body does not take it back
         self.assertEqual(cache_marks(over), cache_marks(claude_system()))
@@ -182,17 +185,25 @@ class NoteTest(Fresh):
             there.state, there.lane, there.stats = self.state, "cfg", {}
             self.state.put("usage:cfg", {"messages": len(work["messages"]), "tokens": 40000})
             transform(work, there)
-            self.assertEqual(work["system"][-1]["text"], cheatsheet.BUDGET_NOTE)
+            self.assertEqual(work["system"][-1]["text"], NOTE)
 
     def test_budget_note_is_off_with_zero_and_for_the_main_thread(self):
-        self.assertNotIn(cheatsheet.BUDGET_NOTE, json.dumps(self.go(120000, budget=0)))
-        self.assertNotIn(cheatsheet.BUDGET_NOTE, json.dumps(self.go(120000, sub=False)))
+        self.assertNotIn(NOTE, json.dumps(self.go(120000, budget=0)))
+        self.assertNotIn(NOTE, json.dumps(self.go(120000, sub=False)))
+
+    def test_the_note_carries_the_marker_and_the_lead_rule_answers_it(self):
+        self.assertIn("HANDOVER: continue with a fresh general-purpose agent", NOTE)
+        self.assertIn("almanac:handover", NOTE)
+        rules = (Path(cheatsheet.__file__).parent / "cheatsheets" / "opus.md").read_text(encoding="utf-8")
+        self.assertIn("HANDOVER: continue with a fresh <type>", rules)
+        self.assertIn("do not resume the old agent", rules)
 
     def test_cold_note_follows_a_cold_compaction_only(self):
-        self.assertNotIn(cheatsheet.COLD_NOTE, json.dumps(self.go(1000, sub=False)))
+        self.assertNotIn(NOTE, json.dumps(self.go(1000, sub=False)))
         self.state.put("coldnote:a1", {"on": 1})
+        self.assertEqual(self.go(1000, sub=True)[-1]["text"], NOTE)  # a sub-agent returning cold gets it too
         first = self.go(1000, sub=False)
-        self.assertEqual(first[-1]["text"], cheatsheet.COLD_NOTE)
+        self.assertEqual(first[-1]["text"], NOTE)
         self.assertEqual(self.go(2000, sub=False), first)
 
 

@@ -22,11 +22,10 @@ LEVELS = {  # what the level adds to the lean rules; "full" is the rules as writ
 }
 ALIASES = {"mythos": "fable"}  # the same model under another name
 INDEX = 12  # playbooks listed
-BUDGET_NOTE = ("# Context budget reached\n\nThis agent has used up its context budget. Stop now: finish only the step in progress, "
-               "commit or save your work, then end with a hand-back that lists what is done and what is left, so the lead can "
-               "continue in a fresh agent of the same type. Write the hand-back in the format of the almanac:handover skill. Start no new work.")
-COLD_NOTE = ("# Status note\n\nThe earlier conversation was compacted after a pause. Before you continue, write a brief handover "
-             "status: what was being done, what is done, and what is next.")
+HANDBACK_NOTE = ("# Hand back now\n\nStop: finish only the step in progress, commit or save your work, and start no new work. "
+                 "Your final message is a hand-back in the format of the almanac:handover skill, listing what is done and what "
+                 "is left, so the lead can continue in a fresh agent of the same type. Its marker line is exactly: "
+                 "HANDOVER: continue with a fresh {agent_type} agent")
 
 
 def override_dir():
@@ -122,16 +121,17 @@ class CheatsheetLayer:
         request that first shows it every later one carries the same bytes in the same place. No breakpoint is touched."""
         if ctx.kind != "messages" or not ctx.thread or getattr(ctx, "state", None) is None:
             return
-        notes = []
+        handback = False
         limit = int(ctx.cfg["compaction"].get("sub_budget_tokens") or 0)
         key = f"budgetnote:{ctx.lane}"
         if ctx.thread == "sub" and limit > 0 and ctx.cfg["compaction"]["enabled"]:
             from . import compact
             if ctx.state.get(key) or compact.estimate(body, ctx, body.get("messages") or []) >= limit:
                 ctx.state.put(key, {"on": 1})
-                notes.append(BUDGET_NOTE)
+                handback = True
         if ctx.state.get(f"coldnote:{ctx.lane}"):
-            notes.append(COLD_NOTE)
+            handback = True
+        notes = [HANDBACK_NOTE.format(agent_type=ctx.agent_type or "general-purpose")] if handback else []
         system = body.get("system")
         if not notes or not system:
             return
