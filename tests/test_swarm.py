@@ -197,6 +197,29 @@ class ProxyGate(unittest.TestCase):
         modes = sorted(m.split(":")[0] for m in self.messages_modes(rig))
         self.assertEqual(modes, ["lead", "waited"])
 
+    def test_non_streamed_200_warms_the_gate_for_the_waiter(self):
+        release = threading.Event()
+
+        def respond(req):
+            if len(rig.upstream.requests) == 1:
+                release.wait(10)
+                return 200, {"content-type": "application/json"}, b'{"type":"message","content":[]}'
+            return 200, {"content-type": "text/event-stream"}, sse()
+
+        rig = Rig(respond=respond)
+        self.addCleanup(rig.close)
+        out = []
+        threads = [threading.Thread(target=lambda a=a: out.append(rig.messages(SUB_BODY, extra=sub(a)))) for a in ("a", "b")]
+        threads[0].start()
+        wait_for(lambda: len(rig.upstream.requests) == 1)
+        threads[1].start()
+        wait_for(lambda: any(e["waiters"] == 1 for e in rig.proxy.gate._entries.values()))
+        release.set()
+        join_all(threads)
+        self.assertEqual([status for status, _, _ in out], [200, 200])
+        modes = sorted(m.split(":")[0] for m in self.messages_modes(rig))
+        self.assertEqual(modes, ["lead", "waited"])
+
     def test_leader_error_still_sends_the_waiter_and_clears_the_lead(self):
         release = threading.Event()
         error = b'{"type":"error","error":{"type":"api_error","message":"boom"}}'

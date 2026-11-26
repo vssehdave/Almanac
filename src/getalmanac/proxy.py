@@ -646,7 +646,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
             body = json.loads(sent)
             digest = hashlib.sha256(json.dumps([body.get("tools"), body.get("system")], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-            key = hashlib.sha256((auth or self.headers.get("authorization") or "").encode()).hexdigest()
+            key = hashlib.sha256((auth or self.headers.get("authorization") or self.headers.get("x-api-key") or "").encode()).hexdigest()
             self.ticket = proxy.gate.enter((body.get("model"), key, digest), wait=wait, cap=3 * wait)
             ctx.stats["swarm"] = self.ticket.mode
         except Exception:  # fail open: a gate that breaks sends at once
@@ -741,6 +741,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     _tell(proxy, "outcome", ctx, orig, 502)
                 return self._reply(502, {"type": "error", "error": {"type": "api_error", "message": message}})
             final_resp = resp  # the response that goes back to the client, after any retry or switch
+            if self.ticket:
+                self.ticket.done(resp.status == 200)
             tee = self._pipe(resp, tee=ctx is not None)
             if ctx:
                 proxy.finish(ctx, orig, raw, sent, resp.status, tee, started)
