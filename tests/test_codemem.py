@@ -369,6 +369,20 @@ class PurposeTest(ts.Case):
         self.ask("Fix it more")
         self.assertEqual(len(self.purpose_calls()), 1)
 
+    def test_git_tracked_files_without_a_purpose_are_included_after_the_edited_ones(self):
+        self.edit("e1", "x = 1", "x = 2", "2026-01-01T10:00:00+00:00")
+        other = self.alpha + "/other.py"
+        with open(other, "w", encoding="utf-8") as handle:
+            handle.write("y = 1\n")
+        subprocess.run(["git", "-C", self.alpha, "init", "-q"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", self.alpha, "add", "other.py"], check=True, capture_output=True)
+        found = [p for p, _ in codemem.stale(self.store, self.key, 5)]
+        self.assertEqual(found, [self.file, codemem.normalize(other)])
+        codemem.set_purpose(self.store, self.key, codemem.normalize(other), "", "h")  # failed tries stop at MAX_TRIES
+        for _ in range(codemem.MAX_TRIES):
+            codemem.set_purpose(self.store, self.key, codemem.normalize(other), "", "h")
+        self.assertEqual([p for p, _ in codemem.stale(self.store, self.key, 5)], [self.file])
+
     def test_a_large_change_since_the_purpose_asks_again(self):
         self.edit("e1", "x = 1", "x = 2", "2026-01-01T10:00:00+00:00")
         codemem.set_purpose(self.store, self.key, self.file, "Old.", "h")
