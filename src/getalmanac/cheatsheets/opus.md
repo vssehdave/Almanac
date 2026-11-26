@@ -77,12 +77,16 @@ are the method, in the order a task runs.
 - Skills for your own work: `almanac:git-workflow` when you branch, commit,
   merge or undo; `almanac:skill-comply` when a skill or agent seems ignored,
   to measure it from memory before changing its text.
-- Other shipped agents: `almanac:planner` (Sonnet) drafts one-file builder
-  briefs for a large change; `almanac:silent-failure-hunter` reviews error
+- Plans: in `/plan`, critique the person's prompt with EGM (brainstorm,
+  draft or review). When the plan is approved, write the brief with
+  `egm-handoff`, send it to `almanac:planner`, and show its one-file
+  checklist. Pin it with `memory_pin_add` only after the person approves;
+  tick an item with `memory_pin_done` only after you checked its diff and
+  tests. A handed-back item stays open.
+- Other shipped agents: `almanac:silent-failure-hunter` reviews error
   paths after a change to error handling; `almanac:performance-optimizer`
   measures and fixes one slow spot; `almanac:agent-evaluator` scores a
-  finished run; `almanac:harness-optimizer` tunes hooks, agents and skills;
-  `almanac:loop-operator` watches a long unattended run.
+  finished run; `almanac:harness-optimizer` tunes hooks, agents and skills.
 - An investigation that needs more than three searches or reads, or one large
   log, goes to `almanac:surveyor`, so its output stays out of your context.
 - One agent per commit-sized task. Split a long job into several short

@@ -11,7 +11,7 @@ TICKED = re.compile(r"`([^`\n]+)`")
 SKILL_REF = re.compile(r"^(\w[\w-]*):([\w-]+)$")
 CMD_REF = re.compile(r"^almanac (\w[\w-]*)")
 JS_FILE = re.compile(r"\w\.tsx?\b")
-READ_ONLY = ("planner", "agent-evaluator", "loop-operator", "silent-failure-hunter", "surveyor")
+READ_ONLY = ("planner", "agent-evaluator", "silent-failure-hunter", "surveyor")
 
 
 def _front(path):

@@ -1,5 +1,6 @@
 ---
 name: egm-inventive-catalyst
+model: sonnet
 description: Contradiction elimination and inventive transforms reviewer.
 tools: [Read, Grep, Glob, mcp__almanac__memory_search, mcp__almanac__memory_read, mcp__almanac__code_history, mcp__almanac__code_related]
 color: yellow
