@@ -271,6 +271,8 @@ class Memory:
         from . import library  # imports this module, so not at the top
         with store.lock:
             library.setup(store)
+            from . import codemem
+            codemem.setup(store)
         self.projects = Projects(store)
         self.kept = 0  # open conversations the last forget() left alone
         self.stamps = None  # while importing: the time of each exchange, so stored dates are the transcript's
@@ -504,6 +506,11 @@ class Memory:
                 self.save_raw(convo["lane"], call_id, text, cleaned=True, ts=self._at(seq) if self.stamps else None)
             except Exception as exc:
                 report.log_error("memory:save_raw", exc)
+        try:  # the code history is a bonus too
+            from . import codemem
+            codemem.capture(self.store, convo["id"], project, leaf, group, self._at(seq))
+        except Exception as exc:
+            report.log_error("memory:codemem", exc)
         return leaf, topic
 
     def has_raw(self, lane, tool_use_id) -> bool:
