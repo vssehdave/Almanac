@@ -834,7 +834,7 @@ class McpTest(Case):
         self.assertEqual([t["name"] for t in self.ask("tools/list")["result"]["tools"]],
                          ["memory_search", "memory_read", "memory_projects",
                           "memory_list", "memory_handover", "memory_user_messages", "library_find", "code_history", "code_related", "memory_review", "errors",
-                          "memory_pins", "memory_pin_done"])
+                          "memory_pins", "memory_pin_done", "memory_pin_add"])
         self.assertIsNone(mcp.handle(self.memory, {"jsonrpc": "2.0", "method": "notifications/initialized"}, self.alpha))
         self.assertEqual(self.ask("nope")["error"]["code"], -32601)
 
@@ -915,6 +915,38 @@ class PinTest(Case):
         self.assertEqual(self.memory.pins(self.key), [])
         self.assertEqual(self.store.run("select count(*) n from pin_item")[0]["n"], 0)
         self.assertIn("No pin", self.memory.pin_done(self.key, pin, 1))
+
+    def test_memory_pin_add_stores_a_plan_visible_in_memory_pins(self):
+        reply = mcp.call(self.memory, "memory_pin_add", {"title": "Plan X", "items": ["a.py: do A", "b.py: do B"]}, self.alpha)
+        self.assertIn("Pinned plan", reply)
+        self.assertIn("2 items", reply)
+        listing = mcp.call(self.memory, "memory_pins", {}, self.alpha)
+        self.assertIn("Plan X", listing)
+        self.assertIn("a.py: do A", listing)
+        self.assertIn("b.py: do B", listing)
+
+    def test_memory_pin_add_refuses_an_empty_plan_and_creates_nothing(self):
+        reply = mcp.call(self.memory, "memory_pin_add", {"title": "t", "items": []}, self.alpha)
+        self.assertIn("at least one item", reply)
+        self.assertEqual(self.memory.pins(self.key), [])
+
+    def test_memory_pin_add_refuses_items_that_are_not_a_list(self):
+        reply = mcp.call(self.memory, "memory_pin_add", {"title": "t", "items": "notalist"}, self.alpha)
+        self.assertIn("needs items", reply)
+        self.assertEqual(self.memory.pins(self.key), [])
+
+    def test_memory_pin_add_refuses_non_string_and_oversized_items(self):
+        for items in ([{}], [1, "a"], ["x"] * 51, ["y" * 301]):
+            reply = mcp.call(self.memory, "memory_pin_add", {"title": "t", "items": items}, self.alpha)
+            self.assertIn("memory_pin_add", reply)
+        self.assertEqual(self.memory.pins(self.key), [])
+
+    def test_memory_pin_add_then_done_on_every_item_drops_the_pin(self):
+        mcp.call(self.memory, "memory_pin_add", {"title": "Plan X", "items": ["a.py: do A", "b.py: do B"]}, self.alpha)
+        pin = self.memory.pins(self.key)[0]["id"]
+        self.assertIn("item 1 done.", mcp.call(self.memory, "memory_pin_done", {"pin": pin, "item": 1}, self.alpha))
+        self.assertIn("dropped", mcp.call(self.memory, "memory_pin_done", {"pin": pin, "item": 2}, self.alpha))
+        self.assertIn("No pinned plans", mcp.call(self.memory, "memory_pins", {}, self.alpha))
 
     def test_unpin_drops_it_by_hand_and_only_in_its_project(self):
         pin = self.memory.add_pin(self.key, "Plan", ["a"], 1)

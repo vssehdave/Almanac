@@ -1,5 +1,6 @@
 ---
 name: egm-comprehension
+model: sonnet
 description: Naive reader and comprehension reviewer.
 tools: [Read, Grep, Glob, mcp__almanac__memory_search, mcp__almanac__memory_read, mcp__almanac__code_history, mcp__almanac__code_related]
 color: yellow

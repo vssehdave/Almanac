@@ -41,10 +41,12 @@ class EgmBundleLinks(unittest.TestCase):
             self.assertIn(f"name: egm-", f.read_text(encoding="utf-8"), f.name)
         self.assertFalse((EGM / ".claude-plugin" / "agents").exists())
 
-    def test_agents_have_no_model_pin(self):
+    def test_agents_set_their_model(self):
+        # reviewers on Sonnet so a full review is not ten Opus agents at once
+        want = {"synthesizer": "opus", "bootstrap_orchestrator": "haiku"}
         for f in sorted((EGM / "agents").glob("*.md")):
             head = f.read_text(encoding="utf-8").split("---")[1]
-            self.assertNotRegex(head, r"(?m)^model:", f.name)
+            self.assertRegex(head, r"(?m)^model: %s$" % want.get(f.stem, "sonnet"), f.name)
 
     def test_reviewers_list_memory_tools(self):
         reviewers = ["design_critic", "implementation_readiness", "zoom_out", "codebase_details",

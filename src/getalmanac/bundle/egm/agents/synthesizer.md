@@ -1,5 +1,6 @@
 ---
 name: egm-synthesizer
+model: opus
 description: Intermediate Swarm Compiler and Aggregator coordinating parallel Goldfish reviewers, deduplicating findings, and compiling deliverable reports.
 tools: [Agent, Read, Grep, Glob, Write]
 color: blue

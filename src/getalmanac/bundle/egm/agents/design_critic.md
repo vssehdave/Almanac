@@ -1,5 +1,6 @@
 ---
 name: egm-design
+model: sonnet
 description: Architecture and design critic.
 tools: [Read, Grep, Glob, mcp__almanac__memory_search, mcp__almanac__memory_read, mcp__almanac__code_history, mcp__almanac__code_related]
 color: yellow

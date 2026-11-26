@@ -1,5 +1,6 @@
 ---
 name: egm-style
+model: sonnet
 description: Technical writing reviewer.
 tools: [Read, Grep, Glob, mcp__almanac__memory_search, mcp__almanac__memory_read, mcp__almanac__code_history, mcp__almanac__code_related]
 color: yellow

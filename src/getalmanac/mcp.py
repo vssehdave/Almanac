@@ -99,6 +99,11 @@ TOOLS = [
      "description": "Mark one item of a pinned plan done (numbers from memory_pins). When every item of a pin is done the pin is dropped.",
      "inputSchema": {"type": "object", "required": ["pin", "item"], "properties": {
          "pin": {"type": "integer", "minimum": 1}, "item": {"type": "integer", "minimum": 1}}}},
+    {"name": "memory_pin_add",
+     "description": "Pin an approved plan to this folder's project: a title and its ordered items, one per task. Call only after the person approved the checklist. Returns the pin number.",
+     "inputSchema": {"type": "object", "required": ["title", "items"], "properties": {
+         "title": {"type": "string"},
+         "items": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"type": "string", "maxLength": 300}}}}},
 ]
 
 
@@ -320,12 +325,24 @@ def call(memory, name, args, cwd) -> str:
                                                          max(1, min(100, int(args.get("limit") or 20)))))
     if name == "memory_review":  # the proxy files the review: it sees the model, this process does not
         return "Review noted. It counts only if an Opus model made this call."
-    if name in ("memory_pins", "memory_pin_done"):
+    if name in ("memory_pins", "memory_pin_done", "memory_pin_add"):
         project = memory.projects.see(cwd, touch=False)
         if not project:
             return "No project is known for this folder."
         if name == "memory_pins":
             return render_pins(memory.pins(project))
+        if name == "memory_pin_add":
+            items = args.get("items")
+            if not isinstance(items, list) or not all(isinstance(i, str) for i in items):
+                return "memory_pin_add needs items: a list of strings."
+            if len(items) > 50 or any(len(i) > 300 for i in items):
+                return "memory_pin_add takes at most 50 items of at most 300 characters each."
+            try:
+                pin = memory.add_pin(project, str(args.get("title") or ""), items)
+            except ValueError as e:
+                return str(e)
+            n = len([i for i in items if str(i).strip()])
+            return f"Pinned plan {pin} with {n} items. memory_pin_done ticks them off."
         return memory.pin_done(project, int(args.get("pin") or 0), int(args.get("item") or 0))
     raise KeyError(name)
 

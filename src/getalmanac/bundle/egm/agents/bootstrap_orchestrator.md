@@ -1,5 +1,6 @@
 ---
 name: egm-bootstrap-orchestrator
+model: haiku
 description: Orchestrates directory README documentation, partitions subtrees, and coordinates worker subagents.
 tools: [Agent, Bash, Read, Grep, Glob, Write, Edit]
 color: blue
