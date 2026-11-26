@@ -40,6 +40,26 @@ use direct dispatch instead of the synthesizer.
 If you cannot spawn agents, stop and tell the user: a review in the same
 context is not a Goldfish review.
 
+## Default roster
+
+Small changes get no EGM review. Otherwise run `egm-design`,
+`egm-implementation-readiness` and `egm-zoom-out`, plus `egm-codebase-details`
+when the plan changes existing code, then `egm-synthesizer` to merge their
+findings. Run the full set (all seven reviewers, then the synthesizer) only
+when the user asks for it or the work is large architecture. The other
+reviewers stay installed for that.
+
+## Shared context packet
+
+Before each round's dispatch, build ONE packet in this session and give every reviewer
+the identical text, placed first in each brief so the prompt cache hits:
+
+*   the active pinned plan (`memory_pins`);
+*   prior decisions and findings on the touched files (`memory_search`);
+*   `code_history` for each touched file.
+
+If a memory tool is unavailable, say so in the packet and go on without it.
+
 ## Inputs
 
 The caller or user provides exactly these parameters:

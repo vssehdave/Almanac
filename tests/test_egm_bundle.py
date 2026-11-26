@@ -46,6 +46,28 @@ class EgmBundleLinks(unittest.TestCase):
             head = f.read_text(encoding="utf-8").split("---")[1]
             self.assertNotRegex(head, r"(?m)^model:", f.name)
 
+    def test_reviewers_list_memory_tools(self):
+        reviewers = ["design_critic", "implementation_readiness", "zoom_out", "codebase_details",
+                     "comprehension", "inventive_catalyst", "structural", "style"]
+        for name in reviewers:
+            text = (EGM / "agents" / f"{name}.md").read_text(encoding="utf-8")
+            tools = re.search(r"(?m)^tools: \[(.*)\]$", text).group(1)
+            for tool in ("memory_search", "memory_read", "code_history", "code_related"):
+                with self.subTest(agent=name, tool=tool):
+                    self.assertIn(f"mcp__almanac__{tool}", tools)
+            self.assertIn("open files only for what memory cannot answer", " ".join(text.split()), name)
+
+    def test_review_skills_name_roster_and_shared_packet(self):
+        for skill in ("egm-review", "egm-review-loop"):
+            text = (EGM / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")
+            with self.subTest(skill=skill):
+                self.assertIn("## Default roster", text)
+                for agent in ("egm-design", "egm-implementation-readiness", "egm-zoom-out", "egm-codebase-details", "egm-synthesizer"):
+                    self.assertIn(agent, text)
+                self.assertIn("## Shared context packet", text)
+                for tool in ("memory_pins", "memory_search", "code_history"):
+                    self.assertIn(tool, text)
+
 
 if __name__ == "__main__":
     unittest.main()
