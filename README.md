@@ -1490,6 +1490,10 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `profile.off_skills` | `["logbook"]` | User skills switched off |
 | `skills.always_full` | `[]` | Skills never collapsed |
 | `startup.agent_chars` | `60` | Characters kept for a listed agent type (`0` leaves the agent list alone) |
+| `startup.sub_skill_chars` | `0` | Description characters kept per listed skill in a sub-agent thread (`0`: names only; the full text shows on a match) |
+| `startup.sub_cold` | `["Agent", "Task"]` | Tools also deferred in sub-agent threads |
+| `startup.sub_ttl` | `"1h"` | Cache life of a sub-agent's tools and system prompt (`""` keeps the client's 5 minutes) |
+| `memory.sub_recall_chars` | `800` | Most characters of memory added to a sub-agent's first message |
 | `startup.system_prefix` | `false` | Move the stable session sections to the end of the system prompt so new conversations read them from cache |
 | `skills.scan_on_launch` | `true` | Scan new or changed skills and plugins in the background at each start, and warn about flagged ones |
 | `tools.enabled` | `true` | Defer cold tool schemas |
