@@ -91,6 +91,8 @@ DEFAULTS = {
         "window_share": 0.85,  # inside one long turn, old tool results are removed from this share of the model's window; 0 turns it off
         "stub_tokens": 120000,  # inside one long turn or a sub-agent, old tool results are removed past this many tokens too; 0: only window_share
         "agent_stub_tokens": 100000,  # a sub-agent is outlined past this many tokens (stub_tokens when 0); each outline rewrites its cache once
+        "sub_stub_tokens": 40000,  # a sub-agent's old tool results are removed past this many tokens (below agent_stub_tokens, so stubs come first); 0: stub_tokens
+        "sub_budget_tokens": 60000,  # past this, a sub-agent is told to finish its step and hand back what is done and left; 0: off
         "agent_outline": True,  # past stub_tokens, a sub-agent's older steps become a stored outline (results kept in memory)
         "keep_results": 12,  # tool results of the current turn that are never removed (the newest ones)
         "own_the_context": True,  # also switch off Claude Code's own auto-compaction (DISABLE_AUTO_COMPACT=1)

@@ -878,6 +878,19 @@ class LongTurnTest(LayerCase):
         self.assertEqual(stubbed(json.loads(self.rig.upstream.requests[-1]["body"])["messages"]), [])
 
 
+    def test_a_sub_agent_is_stubbed_from_sub_stub_tokens_but_the_main_thread_is_not(self):
+        self.rig.cfg["routing"]["windows"]["m"] = 1000000
+        self.rig.cfg["compaction"].update(stub_tokens=10 ** 6, sub_stub_tokens=25000, agent_outline=False)
+        self.rig.messages(body(copy.deepcopy(long_turn(30))))
+        self.assertEqual(stubbed(json.loads(self.rig.upstream.requests[-1]["body"])["messages"]), [])
+        extra = {"x-claude-code-agent-id": "a1"}
+        self.rig.messages(body(copy.deepcopy(long_turn(30))), extra=extra)
+        first = json.loads(self.rig.upstream.requests[-1]["body"])["messages"]
+        self.assertTrue(stubbed(first))
+        self.rig.messages(body(copy.deepcopy(long_turn(31))), extra=extra)
+        second = json.loads(self.rig.upstream.requests[-1]["body"])["messages"]
+        self.assertEqual(json.dumps(second[:len(first)]), json.dumps(first))  # the same bytes on the next request
+
     def test_a_long_sub_agent_gets_an_outline_and_keeps_it(self):
         self.rig.cfg["routing"]["windows"]["m"] = 1000000
         self.rig.cfg["compaction"].update(stub_tokens=6000, agent_stub_tokens=6000)

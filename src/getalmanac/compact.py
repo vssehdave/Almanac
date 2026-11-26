@@ -576,6 +576,8 @@ class CompactLayer:
             hard = limit  # the window's own limit: holding the stubs never goes past it
             if cfg.get("stub_tokens"):  # a 1M window makes 85% far too late: every request re-reads the whole history
                 limit = min(limit, cfg["stub_tokens"])
+            if ctx.agent and cfg.get("sub_stub_tokens"):  # a sub-agent's steps each re-read its context: stub earlier than the main thread
+                limit = min(limit, cfg["sub_stub_tokens"])
             # The last reply's count may not be stored yet (it is written in the background): the count made when
             # the stubs were last changed stands in for it, so a second pass is not made for a body already shrunk.
             counts = [c for c in (ctx.state.get(f"usage:{ctx.lane}"), kept.get("est")) if c and 0 < c["messages"] <= len(body["messages"])]
