@@ -408,7 +408,7 @@ def _check(targets, accept_caution, ask, out, confirm=None):
         results.append(res)
     worst = max(code(r) for r in results)
     failed = any(r["error"] for r in results) or worst > VERDICTS["DO_NOT_INSTALL"]
-    if worst >= VERDICTS["DO_NOT_INSTALL"] and (failed or not (confirm and confirm("Install a DO_NOT_INSTALL item anyway? Type yes: "))):
+    if worst >= VERDICTS["DO_NOT_INSTALL"] and (failed or not (confirm and confirm("Install a DO_NOT_INSTALL item anyway? [y/N] "))):
         out("almanac: refused. Nothing was installed. A failed scan cannot be overridden; "
             "for a DO_NOT_INSTALL verdict only the owner can, with --accept-danger.")
         return results, worst
