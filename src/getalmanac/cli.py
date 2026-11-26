@@ -41,6 +41,7 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac skill add URL|PATH   fetch, scan, and install its skills only if SAFE (--skill NAME, --ref SHA)
   almanac skill add --bundle URL|PATH   the same, installed as a plugin in your Almanac bundle (the adopt skill continues)
   almanac skill import-bundle PATH      copy plugin folders from an old bundle into your Almanac bundle
+  almanac skill integrate NAME check an adopted plugin for outside links, overlaps and layout (exit 1 while open)
   almanac skill update [NAME]  list adopted skills with a newer upstream commit and the command to re-adopt (exit 1 if any)
   almanac skill audit          scan installed skills and plugins not scanned yet (--again: all), then a table
   almanac skill accept ITEM    stop the launch warning for this item at its current contents (`unaccept` undoes it)
@@ -205,6 +206,8 @@ def _doctor(_rest):
     from . import skills
     if not skills.scanner():
         print(f"  note SkillSpector: not installed, so skills cannot be scanned or adopted. Install it with: {skills.INSTALL}")
+    if todo := skills.pending():
+        print(f"  note integration pending: {', '.join(todo)}. Run: almanac skill integrate NAME")
     return 0 if ok else 1
 
 
@@ -557,6 +560,7 @@ def _skill(rest):
     sub.add_parser("import-bundle").add_argument("path", help="a folder of plugin folders, such as an old copy of the bundle")
     sub.add_parser("accept").add_argument("item", help="an installed skill or plugin, by name or path")
     sub.add_parser("unaccept").add_argument("item")
+    sub.add_parser("integrate").add_argument("name", help="a plugin folder in your bundle")
     sub.add_parser("update").add_argument("name", nargs="?", help="check only this adopted skill (its folder name in SOURCES.md)")
     audit = sub.add_parser("audit")
     audit.add_argument("--again", action="store_true", help="scan everything, even unchanged items")
@@ -566,6 +570,8 @@ def _skill(rest):
         return getattr(skills, args.cmd)(args.item, out=_print)
     if args.cmd == "import-bundle":
         return skills.import_bundle(args.path, out=_print)
+    if args.cmd == "integrate":
+        return skills.integrate(args.name, out=_print)
     if args.cmd == "update":
         return skills.update(args.name, out=_print)
     if args.cmd == "audit":
