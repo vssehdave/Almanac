@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [{"type": "command", "command": "\"${ALMANAC_PYTHON:-python}\" \"${CLAUDE_PLUGIN_ROOT}/scripts/plan_review.py\"", "timeout": 10}]
+      }
+    ]
+  }
+}

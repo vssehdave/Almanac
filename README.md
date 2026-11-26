@@ -797,6 +797,16 @@ ahead.
 false` turns it off too). The check is a pattern match on the command text, so
 it stops the usual forms, not a determined workaround.
 
+### EGM plan review
+
+The shipped `egm` plugin is loaded with the package plugins (a copy of `egm` in
+your own bundle is skipped). It carries one PreToolUse hook on `ExitPlanMode`:
+the first time a plan is about to be presented it blocks with exit code 2 and
+tells Claude to run the `egm-review` skill on the plan, fold in the findings and
+call `ExitPlanMode` again. A hash of the plan text is kept under
+`$CLAUDE_PLUGIN_DATA` (the temp folder when unset), so the second call passes.
+If the hook fails, the call goes ahead.
+
 ## Playbooks
 
 Playbooks are the [Playbook](https://github.com/vssehdave/Playbook) package (`getplaybook`), which Almanac depends on, so
