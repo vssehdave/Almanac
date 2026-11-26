@@ -95,11 +95,12 @@ class SandboxTest(unittest.TestCase):
         self.assertFalse(self._needs(True, []))
         self.assertFalse(self._needs(False, ["--print", "hi"]))
         with mock.patch("getalmanac.sandbox.needs_window", return_value=True),                 mock.patch("getalmanac.sandbox.subprocess.call") as call:
-            with mock.patch("getalmanac.sandbox.sys.platform", "linux"):
+            with mock.patch("getalmanac.sandbox.sys.platform", "linux"), mock.patch("builtins.print"):
                 self.assertEqual(sandbox.run([]), 2)
             call.assert_not_called()
-            with mock.patch("getalmanac.sandbox.sys.platform", "win32"),                     mock.patch("getalmanac.sandbox.subprocess.Popen") as popen,                     mock.patch("getalmanac.sandbox.subprocess.CREATE_NEW_CONSOLE", 16, create=True):
+            with mock.patch("getalmanac.sandbox.sys.platform", "win32"),                     mock.patch("getalmanac.sandbox.subprocess.Popen") as popen,                     mock.patch("getalmanac.sandbox.subprocess.CREATE_NEW_CONSOLE", 16, create=True),                     mock.patch("builtins.print") as out:
                 self.assertEqual(sandbox.run([]), 0)
+            self.assertIn("new window", out.call_args[0][0])
             self.assertEqual(popen.call_args[1]["creationflags"], 16)
 
     def _needs(self, tty, args):

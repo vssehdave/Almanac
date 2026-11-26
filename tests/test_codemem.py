@@ -128,6 +128,19 @@ class CodeMemoryTest(Case):
             self.assertEqual(cli.main(["code", "related", self.file]), 0)
         self.assertEqual(buffer.getvalue().strip(), text.strip())
 
+    def test_edits_are_recorded_when_the_proxy_stores_a_finished_exchange(self):
+        from helpers import Rig, sse
+        from getalmanac.memory import MemoryLayer, ProjectLayer
+        rig = Rig(layers=[ProjectLayer(self.memory), MemoryLayer(self.memory)], store=self.store, state=self.state)
+        self.addCleanup(rig.close)
+        rig.upstream.respond = lambda req: (200, {"content-type": "text/event-stream"}, sse("Done."))
+        env = {"role": "system", "content": [{"type": "text", "text": f"# Environment\n - Primary working directory: {self.alpha}\n"}]}
+        tools = [{"name": "Edit", "description": "x", "input_schema": {"type": "object"}}]
+        history = self.messages[:3] + [{"role": "assistant", "content": [{"type": "text", "text": "Fixed."}]}]
+        rig.messages({"model": "m", "tools": tools, "messages": [*history, human("Thanks, now run it"), env]})
+        rig.records()
+        self.assertEqual([r["tool_use_id"] for r in self.rows()], ["e1"])
+
     def test_cli(self):
         self.index()
         self.store.close()
@@ -355,6 +368,20 @@ class PurposeTest(ts.Case):
         self.assertIn("Purpose: Retries a call.", codemem.related(self.store, self.file))
         self.ask("Fix it more")
         self.assertEqual(len(self.purpose_calls()), 1)
+
+    def test_git_tracked_files_without_a_purpose_are_included_after_the_edited_ones(self):
+        self.edit("e1", "x = 1", "x = 2", "2026-01-01T10:00:00+00:00")
+        other = self.alpha + "/other.py"
+        with open(other, "w", encoding="utf-8") as handle:
+            handle.write("y = 1\n")
+        subprocess.run(["git", "-C", self.alpha, "init", "-q"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", self.alpha, "add", "other.py"], check=True, capture_output=True)
+        found = [p for p, _ in codemem.stale(self.store, self.key, 5)]
+        self.assertEqual(found, [self.file, codemem.normalize(other)])
+        codemem.set_purpose(self.store, self.key, codemem.normalize(other), "", "h")  # failed tries stop at MAX_TRIES
+        for _ in range(codemem.MAX_TRIES):
+            codemem.set_purpose(self.store, self.key, codemem.normalize(other), "", "h")
+        self.assertEqual([p for p, _ in codemem.stale(self.store, self.key, 5)], [self.file])
 
     def test_a_large_change_since_the_purpose_asks_again(self):
         self.edit("e1", "x = 1", "x = 2", "2026-01-01T10:00:00+00:00")

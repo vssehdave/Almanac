@@ -74,11 +74,11 @@ def with_bundle(args, cfg):
     if not cfg["bundle"]["enabled"]:
         return args
     here = Path(__file__).parent / "bundle"
-    own = [here / "almanac"] + ([here / "guard"] if cfg.get("guard", {}).get("enabled", True) else [])
+    own = [here / "almanac", here / "egm"] + ([here / "guard"] if cfg.get("guard", {}).get("enabled", True) else [])
     mine = config.home() / "bundle"
     folders = [p for p in own if p.is_dir()]
     if mine.is_dir():
-        folders += sorted(p for p in mine.iterdir() if p.name not in ("almanac", "guard") and (p / ".claude-plugin" / "plugin.json").is_file())
+        folders += sorted(p for p in mine.iterdir() if p.name not in ("almanac", "egm", "guard") and (p / ".claude-plugin" / "plugin.json").is_file())
     return [arg for folder in folders for arg in ("--plugin-dir", str(folder))] + list(args)
 
 

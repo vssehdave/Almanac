@@ -14,6 +14,7 @@ When a new conversation starts, the exchanges from earlier conversations in the
 same project that match its first message are added to that message once, and
 kept byte for byte from then on.
 """
+import functools
 import hashlib
 import json
 import re
@@ -96,8 +97,17 @@ _TAG = re.compile(r"""</?[a-zA-Z][\w-]{0,40}(?:\s+[\w-]+=(?:"[^"\n]{0,80}"|'[^'\
 _REMINDER = re.compile(r"(?i)<\s*(?:/\s*)?system-reminder\s*>?")  # the spellings _TAG misses; only the tag name goes, so a stray one cannot eat prose
 
 
+def _clean(text: str) -> str:
+    return redact(_REMINDER.sub(" ", _TAG.sub(" ", text))).strip()
+
+
+_clean_short = functools.lru_cache(maxsize=1024)(_clean)
+
+
 def clean(text: str) -> str:
-    return redact(_REMINDER.sub(" ", _TAG.sub(" ", text or ""))).strip()
+    text = text or ""
+    # every request re-sends the whole history, so the same texts are cleaned again; long ones are not kept, to bound memory
+    return _clean_short(text) if len(text) <= 8000 else _clean(text)
 
 
 _BREAK = re.compile(r"\r\n?|[\n\x0b\x0c\x1c-\x1e\x85\u2028\u2029]")  # every break str.splitlines() sees
