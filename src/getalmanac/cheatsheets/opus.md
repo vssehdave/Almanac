@@ -56,7 +56,7 @@ are the method, in the order a task runs.
 - All building goes to `almanac:builder` (Haiku), one file per agent: plan
   a change across ten files as ten briefs and run them in parallel in the
   same worktree. Builders do not commit: once all have reported and the
-  review passes, you commit and push; CI runs the tests. Mechanical changes
+  review passes, you commit and push; CI runs the full suite. Mechanical changes
   across many files (renames, moved imports, reference updates) go to
   `almanac:handyman` (Haiku). `almanac:architect` (Sonnet) is only for
   debugging and for edits that must land in several files at once, such as
@@ -65,16 +65,23 @@ are the method, in the order a task runs.
   it kept failing at the task, so start a fresh `almanac:builder` on the
   same file with the model set to sonnet. "HANDOVER: bug report": the file
   has a bug in how it works, so start a fresh `almanac:architect` from the
-  report. Never switch a running agent's model. The lead never fixes a
-  failure itself.
+  report. Never switch a running agent's model. A builder runs the test
+  file for its own file once and reports; the lead never re-runs it; a failure it reports goes to a fresh
+  `almanac:architect` with the failure text. The lead never fixes it.
 - Handyman commits its own mechanical change and reports in full; read its
   report and diff, no Sonnet re-review. On "HANDOVER: retry handyman at
   higher effort", start a fresh `almanac:handyman` with effort high, then
   xhigh if that fails too. Never move handyman to another model.
+- Every builder and handyman brief carries one test command for the file
+  it touches, in this form: `PYTHONPATH=src python -m unittest discover
+  -s tests -p test_x.py` (PYTHONPATH=src makes the worktree's code load,
+  not the main checkout's).
 - A builder brief has these parts, in order: the worktree path and branch;
   the one file to edit; "no git, no commit"; the exact change, with names,
   signatures, return shapes and limits (max items, lengths, timeouts) spelled
-  out; a "Not this:" line for what must stay untouched; "run no tests". End with "Your last message must be the
+  out; a "Not this:" line for what must stay untouched; the one test
+  command; and what to do if a test in a file it does not own fails (name
+  the file and line, then stop). End with "Your last message must be the
   report." Builders run in parallel, so tell each one what the others are
   changing and what interface they share.
 - Swarm by default. One file per builder, always, including a builder
@@ -87,11 +94,12 @@ are the method, in the order a task runs.
   file's full interface (class, functions, return values) pasted in the
   brief; test files as their own builder, briefed with the same
   interface; and the Bash path form `/c/Users/...`, not `C:\...`.
-- No local tests. After the builders: commit, push the branch and open
-  the pull request (never merge without the owner), then
-  `almanac:inspector` with the CI result (`gh pr checks`). A red CI is
-  an inspector finding like any other. Merge only when the inspector
-  has passed and CI is green.
+- After the builders: read their test results, commit,
+  push and open the pull request (never merge without the owner), then
+  `almanac:inspector` with the CI result (`gh pr checks`). The lead runs
+  no tests itself: builders test their own file, CI runs the full suite.
+  A red CI is an inspector finding like any other. Merge only when the
+  inspector has passed and CI is green.
 - At once: any number of Haiku agents, at most two Sonnet and one Opus. You
   keep the decisions, the briefs, the review and the report; a one-line
   edit you do yourself.
