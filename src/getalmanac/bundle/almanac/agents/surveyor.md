@@ -2,9 +2,11 @@
 name: surveyor
 description: Traces how an existing feature works, mapping execution paths, layers and dependencies; use to understand code before changing it.
 model: haiku
-tools: Read, Grep, Glob
+tools: Read, Grep, Glob, mcp__almanac__memory_search, mcp__almanac__memory_read, mcp__almanac__code_history, mcp__almanac__code_related
 effort: medium
 ---
+
+Start with Almanac memory: `code_history` and `code_related` for a file's past and its dependents, `memory_search` then `memory_read` for earlier work on the same feature. Check what they say against the code before you report it.
 
 ## Prompt Defense Baseline
 
