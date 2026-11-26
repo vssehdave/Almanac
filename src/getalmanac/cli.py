@@ -53,6 +53,7 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac library list|show|forget   the prompt library: how past prompts were solved (list --project NAME; show ID; forget ID)
   almanac lessons [clear AGENT]   lessons per sub-agent type, from review verdicts; clear drops one type's
   almanac projects             projects seen; `projects merge FROM INTO`, `projects rename NAME NEW`
+  almanac errors [--since 24h] [--limit N] [--json]   recent errors the proxy carried on past
   almanac status               settings, files and recent activity
   almanac doctor               check that everything needed is in place
   almanac config [set KEY VALUE | path]
@@ -111,6 +112,23 @@ def _report(rest):
                           "meter": report.meter(records)}, indent=2))
     else:
         print(report.render(records))
+        if line := report.error_line(_log()):
+            print(f"\n{line}")
+    return 0
+
+
+def _errors(rest):
+    parser = argparse.ArgumentParser(prog="almanac errors")
+    parser.add_argument("--since", default="24h", help="how far back, such as 30m, 24h or 7d (default 24h)")
+    parser.add_argument("--limit", type=int, default=20)
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(rest)
+    try:
+        found = report.recent_errors(_log(), args.since, args.limit)
+    except ValueError as exc:
+        print(f"almanac: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(found, indent=2) if args.json else report.render_errors(found))
     return 0
 
 
@@ -125,6 +143,8 @@ def _status(_rest):
     print(f"  routing    {cfg['routing']['mode']}")
     if cfg["accounts"]["fallback"]:
         print(f"  accounts   {accounts.status_line(cfg, records)}")
+    if line := report.error_line(_log()):
+        print(f"  errors     {line}")
     if records:
         last = time.strftime("%Y-%m-%d %H:%M", time.localtime(records[-1].get("ts", 0)))
         totals = report.summary(records)
@@ -740,8 +760,8 @@ def _review_gate(_rest):
         reason = _memory_handle().gate(session) if session else ""
         if reason:
             print(json.dumps({"decision": "block", "reason": reason}))
-    except Exception:  # a broken gate must never stop Claude Code from finishing
-        pass
+    except Exception as exc:  # a broken gate must never stop Claude Code from finishing
+        report.log_error("review-gate", exc)
     return 0
 
 
@@ -751,8 +771,8 @@ def _banner(_rest):
         text = _memory_handle().banner(os.getcwd()) if profile.banner_on(config.load()) else ""
         if text:
             print(json.dumps({"systemMessage": text}))
-    except Exception:  # a broken banner must never block a session start
-        pass
+    except Exception as exc:  # a broken banner must never block a session start
+        report.log_error("banner", exc)
     return 0
 
 
@@ -767,7 +787,7 @@ def _version(_rest):
     return 0
 
 
-COMMANDS = {"sandbox": _sandbox, "serve": _serve, "report": _report, "status": _status, "doctor": _doctor, "config": _config,
+COMMANDS = {"sandbox": _sandbox, "serve": _serve, "report": _report, "errors": _errors, "status": _status, "doctor": _doctor, "config": _config,
             "version": _version, "memory": _memory, "projects": _projects, "route": _route, "cheatsheet": _cheatsheet, "eval": _eval, "mcp": _mcp,
             "semantic": _semantic, "cloud": _cloud, "skill": _skill, "pack": _pack,
             "playbook": _playbook, "library": _library, "lessons": _lessons, "review-gate": _review_gate}

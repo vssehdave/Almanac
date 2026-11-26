@@ -630,8 +630,8 @@ class HandoffLayer:
             self.wake.clear()
             try:
                 self.beat()
-            except Exception:  # a dead thread would look like a stalled machine to the watchdog
-                pass
+            except Exception as exc:  # a dead thread would look like a stalled machine to the watchdog
+                self._error(f"beat failed: {type(exc).__name__}: {exc}")
 
     def beat(self, now=None):
         """Push what is due: "working" once per interval while a task runs, "idle" once when it stops."""

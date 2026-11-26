@@ -22,7 +22,7 @@ import zlib
 
 from getplaybook.text import redact  # noqa: F401  (the one redaction list; other modules import it from here)
 
-from . import embed, semantic
+from . import embed, report, semantic
 from .cheatsheet import family
 from . import request as rq
 from .match import STOP, tokens
@@ -421,7 +421,8 @@ class Memory:
             return 0
         try:
             blobs = model.encode([f"{r['title']}\n{r['summary'] or r['text']}"[:semantic.MAX_TEXT] for r in rows] + [f["text"] for f in facts])
-        except Exception:  # a failing model leaves them waiting, and search falls back to words
+        except Exception as exc:  # a failing model leaves them waiting, and search falls back to words
+            report.log_error("memory:embed", exc)
             return 0
         with self.store.lock:
             for row, blob in zip(rows, blobs):  # the summary guard drops a vector made from text that has since changed
@@ -501,8 +502,8 @@ class Memory:
         for call_id, text in texts["raw"]:
             try:  # keeping a result whole is a bonus: a failure here must not lose the exchange
                 self.save_raw(convo["lane"], call_id, text, cleaned=True, ts=self._at(seq) if self.stamps else None)
-            except Exception:
-                pass
+            except Exception as exc:
+                report.log_error("memory:save_raw", exc)
         return leaf, topic
 
     def has_raw(self, lane, tool_use_id) -> bool:

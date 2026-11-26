@@ -18,7 +18,7 @@ import time
 from collections import OrderedDict
 
 from . import request as rq
-from .report import TTL_SECONDS, cache_marks
+from .report import TTL_SECONDS, cache_marks, log_error
 
 FACTOR = 0.9  # ping at this share of the shortest ttl, so the entry is read before it lapses
 MAX_FAILS = 3
@@ -101,8 +101,8 @@ class Keepalive:
                     self.drop(next(iter(self.lanes)))
                 self.lanes[ctx.lane] = entry
                 self._schedule(entry, delay_for(ttls))
-        except Exception:
-            pass
+        except Exception as exc:
+            log_error("keepalive:arm", exc, ctx, self.proxy.log)
 
     def _schedule(self, entry, seconds):
         entry.timer = self.timer(seconds, lambda: self.tick(entry))
@@ -146,7 +146,8 @@ class Keepalive:
                     if entry.fails >= MAX_FAILS:
                         return self.drop(entry.lane)
                 self._schedule(entry, delay_for(entry.ttls))
-        except Exception:
+        except Exception as exc:
+            log_error("keepalive:tick", exc, log=self.proxy.log)
             self.drop(entry.lane)
 
     def _send(self, entry):
@@ -170,7 +171,8 @@ class Keepalive:
             except (ValueError, AttributeError):
                 usage = None
             return resp.status, usage if isinstance(usage, dict) else None
-        except Exception:
+        except Exception as exc:
+            log_error("keepalive:ping", exc, log=self.proxy.log)
             return 0, None
         finally:
             if conn:

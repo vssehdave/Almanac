@@ -14,7 +14,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import accounts, lessons, profile
+from . import accounts, lessons, profile, report
 from .memory import MemoryLayer, clean
 from .status import STATUSES
 
@@ -233,7 +233,8 @@ def call(ctx, body, timeout=TIMEOUT, seen=None):
         tokens = sum(int(usage.get(k) or 0) for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
         store.update("summary:day", lambda kept: _day(kept, **{"in": tokens, "out": int(usage.get("output_tokens") or 0)}))
         return message
-    except (OSError, ValueError, http.client.HTTPException):
+    except (OSError, ValueError, http.client.HTTPException) as exc:
+        report.log_error("summarize:call", exc, ctx)
         return None
     finally:
         conn.close()
@@ -244,7 +245,7 @@ class Idle:
     proxy. The request body is not kept."""
 
     def __init__(self, ctx, orig):
-        self.cfg, self.state, self.proxy, self.lane = ctx.cfg, ctx.state, ctx.proxy, ctx.lane
+        self.cfg, self.state, self.proxy, self.lane, self.agent = ctx.cfg, ctx.state, ctx.proxy, ctx.lane, ctx.agent
         self.headers = _headers(ctx.headers)
         self.system = _identity(orig)
 
@@ -272,8 +273,8 @@ class SummaryLayer:
                 timer.daemon = True
                 self.pending[ctx.lane] = (timer, Idle(ctx, orig))
                 timer.start()
-        except Exception:  # no timer means no conversation summary, nothing else
-            pass
+        except Exception as exc:  # no timer means no conversation summary, nothing else
+            report.log_error("summarize:arm", exc, ctx)
 
     def _wake(self, lane):
         with self.lock:
@@ -293,8 +294,8 @@ class SummaryLayer:
                 continue
             try:
                 self._idle(job, left)
-            except Exception:
-                pass
+            except Exception as exc:
+                report.log_error("summarize:close", exc, job)
 
     def _idle(self, ctx, timeout=TIMEOUT, cap=True):
         """One call that summarizes a conversation, if it has grown since it was last summarized. `ctx` is an Idle."""
@@ -366,8 +367,8 @@ class SummaryLayer:
         if own:
             try:
                 lessons.distil(self.memory, ctx, orig, own["id"])
-            except Exception:  # lessons are extra: this turn's summaries still run
-                pass
+            except Exception as exc:  # lessons are extra: this turn's summaries still run
+                report.log_error("lessons", exc, ctx)
         store = ctx.state
         # Only this conversation's exchanges: the login on this request must not carry another conversation's text.
         rows = self.memory.store.run("select id from node where kind = 'leaf' and convo = (select id from convo where lane = ?) "

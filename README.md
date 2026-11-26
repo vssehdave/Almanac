@@ -1455,6 +1455,7 @@ almanac config set upstream_proxy http://proxy.example.com:3128
 | `almanac route [status]` | Routing mode, pin, unavailable tiers and the last 10 decisions |
 | `almanac route pin small\|medium\|large\|off` | Keep this project on one tier, or lift the pin |
 | `almanac cheatsheet show [opus\|sonnet\|haiku\|fable\|agent]` | The working rules added for that model (`agent`: what a sub-agent gets), and their size |
+| `almanac errors [--since 24h] [--limit N] [--json]` | Recent errors Almanac carried on past, newest first; `almanac status` and `report` show a count; Claude reads them with the `errors` tool |
 | `almanac lessons [clear AGENT]` | Lessons per sub-agent type, from review verdicts; `clear` drops one type's |
 | `almanac cheatsheet path` | Where your own copies of the rules go |
 | `almanac skill scan PATH\|URL` | Scan a skill or plugin (exit 0 SAFE, 1 CAUTION, 2 DO_NOT_INSTALL, 3 not scanned) |

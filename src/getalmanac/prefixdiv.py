@@ -10,7 +10,7 @@ import json
 import time
 
 from .compact import CHARS_PER_TOKEN
-from .report import _spans
+from .report import _spans, log_error
 
 
 def _entry(label, value):
@@ -67,8 +67,8 @@ class PrefixLayer:
     def transform(self, body, ctx):
         try:
             self._look(body, ctx)
-        except Exception:  # observation must never cost a request its rewrite
-            pass
+        except Exception as exc:  # observation must never cost a request its rewrite
+            log_error("prefixdiv", exc, ctx)
 
     @staticmethod
     def _look(body, ctx):

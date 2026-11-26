@@ -10,7 +10,7 @@ from getplaybook import run as pr
 from getplaybook import store as ps
 
 from . import _pbind  # noqa: F401  (getplaybook uses Almanac's home and settings)
-from . import library
+from . import library, report
 from . import request as rq
 from .memory import MemoryLayer
 from .routing import CONTINUE, _digest, handwritten, person_text, person_turns
@@ -49,7 +49,8 @@ class PlaybookLayer:
                 self._apply(body, ctx, books, entries)
             if books and cfg.get("route", True):
                 self._route(body, ctx, main)
-        except Exception:  # fail open: a bad playbook folder must never block a turn
+        except Exception as exc:  # fail open: a bad playbook folder must never block a turn
+            report.log_error("playbook", exc, ctx)
             return
 
     def _apply(self, body, ctx, books=True, entries=False):
@@ -241,7 +242,8 @@ class PlaybookLayer:
             try:
                 head, out, err, code = pr._execute_auto(pb["name"], ctx.cwd, pr.AUTO_TIMEOUT)
                 text = po.ran_note(ps.bump(pb["name"]) or pb, head, out, err)
-            except Exception:  # a script that cannot run leaves the ordinary note
+            except Exception as exc:  # a script that cannot run leaves the ordinary note
+                report.log_error("playbook:script", exc, ctx)
                 return None
             ctx.stats["playbook"] = {"ran": pb["name"], **({"exit": code} if code is not None else {"timeout": True})}
             ctx.state.put(key, text)
