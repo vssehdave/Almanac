@@ -66,8 +66,8 @@ are the method, in the order a task runs.
   same file with the model set to sonnet. "HANDOVER: bug report": the file
   has a bug in how it works, so start a fresh `almanac:architect` from the
   report. Never switch a running agent's model. A builder runs its test
-  once and reports; a failure it reports is yours to route (a new brief
-  for the test file, or architect for a bug).
+  once and reports; a failure it reports goes to a fresh
+  `almanac:architect` with the failure text. The lead never fixes it.
 - Handyman commits its own mechanical change and reports in full; read its
   report and diff, no Sonnet re-review. On "HANDOVER: retry handyman at
   higher effort", start a fresh `almanac:handyman` with effort high, then
