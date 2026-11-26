@@ -56,6 +56,6 @@ Rate gaps by impact:
 
 ## Skills to use
 
-Load these skills when they fit the work: `almanac:ai-regression-testing`.
+Load these skills when they fit the work: `almanac:ai-regression-testing`, `almanac:verification-loop` (run it before you report done).
 
 Judge the change by the smallest-complete-change rules: if the `almanac:lean-review` skill is available, use it.

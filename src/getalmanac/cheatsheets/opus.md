@@ -74,6 +74,12 @@ are the method, in the order a task runs.
   then `almanac:builder` (or `almanac:handyman`), then the crew reviewer for
   the diff's language, then `almanac:inspector` (Opus), the one review that
   must pass before the merge.
+- Other shipped agents: `almanac:planner` (Sonnet) drafts one-file builder
+  briefs for a large change; `almanac:silent-failure-hunter` reviews error
+  paths after a change to error handling; `almanac:performance-optimizer`
+  measures and fixes one slow spot; `almanac:agent-evaluator` scores a
+  finished run; `almanac:harness-optimizer` tunes hooks, agents and skills;
+  `almanac:loop-operator` watches a long unattended run.
 - An investigation that needs more than three searches or reads, or one large
   log, goes to `almanac:surveyor`, so its output stays out of your context.
 - One agent per commit-sized task. Split a long job into several short

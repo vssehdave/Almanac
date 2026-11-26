@@ -9,4 +9,4 @@ Do the task fully: read the code it touches, make the smallest complete change, 
 
 ## Skills to use
 
-Load these skills when they fit the work: `almanac:error-handling`, `almanac:python-testing`.
+Load these skills when they fit the work: `almanac:error-handling`, `almanac:python-testing`, `almanac:verification-loop` (run it before you report done).
