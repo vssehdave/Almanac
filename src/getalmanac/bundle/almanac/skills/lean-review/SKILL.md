@@ -1,5 +1,5 @@
 ---
-name: ponytail-review
+name: lean-review
 description: Quality review of a change (logic, safety, load, tests, speed, lean); use to review a diff, commit, branch or PR, or to ask if code is over-built.
 ---
 
