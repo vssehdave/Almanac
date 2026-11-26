@@ -54,6 +54,7 @@ USAGE = """almanac: a local proxy for Claude Code
   almanac playbook mine        find tasks you repeat in past sessions, no model (--days 30, --min 3)
   almanac playbook compile     have one Claude Code session write the best repeat up as a playbook (--top N, --dry-run)
   almanac playbook dedupe      merge playbooks that do the same route into one (--include-approved to touch approved ones)
+  almanac code history PATH [-n N]   the recorded changes to a file, newest first, with the exchange that made each
   almanac library list|show|forget   the prompt library: how past prompts were solved (list --project NAME; show ID; forget ID)
   almanac lessons [clear AGENT]   lessons per sub-agent type, from review verdicts; clear drops one type's
   almanac projects             projects seen; `projects merge FROM INTO`, `projects rename NAME NEW`
@@ -682,6 +683,20 @@ def _playbook(rest):
     return playbook_cli.main(rest)
 
 
+def _code(rest):
+    from . import codemem
+
+    parser = argparse.ArgumentParser(prog="almanac code")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    history = sub.add_parser("history", help="the recorded changes to a file, newest first")
+    history.add_argument("path")
+    history.add_argument("-n", type=int, default=10)
+    args = parser.parse_args(rest)
+    path = os.path.abspath(args.path)
+    _print(codemem.render(codemem.history(_memory_handle().store, path, max(1, args.n)), path))
+    return 0
+
+
 def _library(rest):
     from . import library
 
@@ -818,7 +833,7 @@ def _version(_rest):
 COMMANDS = {"sandbox": _sandbox, "serve": _serve, "report": _report, "errors": _errors, "status": _status, "doctor": _doctor, "config": _config,
             "version": _version, "memory": _memory, "projects": _projects, "route": _route, "cheatsheet": _cheatsheet, "eval": _eval, "mcp": _mcp,
             "semantic": _semantic, "cloud": _cloud, "skill": _skill, "pack": _pack,
-            "playbook": _playbook, "library": _library, "lessons": _lessons, "review-gate": _review_gate}
+            "playbook": _playbook, "library": _library, "code": _code, "lessons": _lessons, "review-gate": _review_gate}
 
 
 def main(argv=None):

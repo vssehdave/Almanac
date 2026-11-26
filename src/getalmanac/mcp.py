@@ -7,7 +7,7 @@ import os
 import sys
 import time
 
-from . import __version__, config, library, report
+from . import __version__, codemem, config, library, report
 from .memory import _BREAK, QUOTED, READ_CHARS, READ_LINES, Memory, _quote, ended, unreviewed
 from .store import Store
 
@@ -66,6 +66,13 @@ TOOLS = [
                     "done already, and read the exchange named in an entry with memory_read.",
      "inputSchema": {"type": "object", "required": ["query"], "properties": {
          "query": {"type": "string", "description": "The request, or the words that describe it"}}}},
+    {"name": "code_history",
+     "description": "The recorded changes (edits and writes) to one file, newest first: time, kind, a short summary and the "
+                    "exchange that made it (read it with memory_read for the reason). Use it instead of grep or git log "
+                    "to see what happened to a file.",
+     "inputSchema": {"type": "object", "required": ["path"], "properties": {
+         "path": {"type": "string", "description": "The file; a relative path is taken from the current folder"},
+         "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Default 10"}}}},
     {"name": "memory_review",
      "description": "Record your review of sub-agent work after checking it against the code. Without a conversation number it "
                     "covers every unreviewed sub-agent of this conversation; with one (memory_search marks it "
@@ -294,6 +301,12 @@ def call(memory, name, args, cwd) -> str:
             query=str(args.get("query") or ""), limit=max(1, min(100, int(args.get("limit") or 30)))))
     if name == "library_find":
         return library.render_found(library.search(memory.store, str(args.get("query") or ""), memory.projects.see(cwd, touch=False) or "", limit=3, min_tools=library.min_tools()))
+    if name == "code_history":
+        path = str(args.get("path") or "")
+        if not path:
+            return "code_history needs a path."
+        path = os.path.abspath(os.path.join(cwd or "", path))
+        return codemem.render(codemem.history(memory.store, path, max(1, min(50, int(args.get("limit") or 10)))), path)
     if name == "errors":
         return report.render_errors(report.recent_errors(report.Log(config.home() / "logs" / "requests.jsonl"), str(args.get("since") or "24h"),
                                                          max(1, min(100, int(args.get("limit") or 20)))))
