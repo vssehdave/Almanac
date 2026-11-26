@@ -5,6 +5,7 @@ never read, stored or logged. Only the JSON body of a Claude Code model request
 is ever changed, and if a layer fails or the upstream rejects the changed body,
 the original bytes are sent instead.
 """
+import hashlib
 import http.client
 import hmac
 import http.server
@@ -23,7 +24,7 @@ import threading
 import time
 from urllib.parse import parse_qs, urlsplit
 
-from . import accounts, autoimport, config, keepalive
+from . import accounts, autoimport, config, keepalive, swarm
 from . import request as rq
 from . import sse
 from . import upstream
@@ -123,6 +124,7 @@ class Proxy:
         self.hop = self.hop_for(self.host)
         self.ctx = upstream.context(cfg, self.env) if self.secure else None
         self.token = secrets.token_urlsafe(16)  # the first path segment every client request must carry
+        self.gate = swarm.Gate()
         self.key = secrets.token_urlsafe(32)  # proves this process to `almanac`; never sent in any request
         self.last_seen = {}  # lane -> start time of its previous request; state.db keeps it across a restart
         self.fused = {}  # lane -> why its rewrites were switched off
@@ -525,6 +527,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     continue
                 self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk) if chunked else chunk)
                 self.wfile.flush()
+                if getattr(self, "ticket", None) and resp.status == 200 and b"message_start" in chunk:
+                    self.ticket.done(True)
                 if tee and size < TEE_LIMIT:
                     kept.append(chunk)
                     size += len(chunk)
@@ -632,100 +636,120 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if value:
             self.headers["anthropic-beta"] = value
 
+    def _gate(self, proxy, ctx, sent, auth):
+        """Hold a sub-agent's first send until its sibling's first reply has warmed the cache (fails open)."""
+        try:
+            if not (ctx and ctx.thread == "sub" and ctx.lane and proxy.seen(ctx.lane) is None):
+                return
+            wait = proxy.cfg["startup"].get("swarm_wait_seconds", 0)
+            if isinstance(wait, bool) or not isinstance(wait, (int, float)) or wait <= 0:
+                return
+            body = json.loads(sent)
+            digest = hashlib.sha256(json.dumps([body.get("tools"), body.get("system")], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            self.ticket = proxy.gate.enter((body.get("model"), auth or "", digest), wait=wait, cap=3 * wait)
+            ctx.stats["swarm"] = self.ticket.mode
+        except Exception:  # fail open: a gate that breaks sends at once
+            pass
+
     def _forward(self, proxy, ctx, raw, sent, orig, started):
-        self.hold, self.switched = None, None
+        self.hold, self.switched, self.ticket = None, None, None
         try:
             seconds = proxy.cfg["offline"]["hold_minutes"] * 60 if ctx else 0
             if seconds > 0:
                 self.hold = Hold(started, seconds, bool(orig) and orig.get("stream") is True, ctx.stats)
         except Exception:  # a setting that is not a number turns the wait off, never the request
             pass
-        try:
-            auth, used, folder = self._account(ctx)  # a login known to be out of usage is skipped from the start
-            resp = self._send(sent, identity=ctx is not None, authorization=auth)
-            if ctx and sent is not raw and (resp.status == 400 or (resp.status in ROUTE_REFUSED and ("route" in ctx.stats or "beta" in ctx.stats))):
-                detail = resp.read()[:400].decode("utf-8", "replace")
-                routed = ctx.stats.get("route")  # kept: the loop below removes it from the stats
-                ctx.stats["fallback"] = detail
-                limit = SIZE_LIMIT.search(detail)
-                if limit and proxy.state is not None:
-                    # The window table can be wrong for this conversation (the same model id has a 200k and a 1M form).
-                    # Keep the upstream's own number, and let the retry below relieve the turn against it.
-                    try:
-                        proxy.state.put(f"window:{ctx.lane}", int(limit.group(1)))
-                        ctx.stats.setdefault("compaction", {})
-                    except Exception:  # without it the request falls back to the original, as before
-                        pass
-                retry, resent = raw, False
-                # The changes most likely to be refused go first, one at a time, so the other savings stay.
-                for mark in ("beta", "route", "compaction"):
-                    if mark not in ctx.stats or proxy.state is None:
-                        continue
-                    if mark == "compaction":
-                        ctx.stats.pop("cold", None)  # the compacted body is the one refused: nothing was saved
-                    if mark == "beta":  # only the effort message: routing says the effort in output_config instead
-                        ctx.beta = ""
-                        self._beta("")
-                        _tell(proxy, "unbeta", ctx)
-                    elif mark == "route":
-                        ctx.beta = ""
-                        self._beta("")
-                        _tell(proxy, "refused", ctx, resp.status, detail)
-                    else:
+        try:  # the outer try releases the gate's ticket on every exit
+            try:
+                auth, used, folder = self._account(ctx)  # a login known to be out of usage is skipped from the start
+                self._gate(proxy, ctx, sent, auth)
+                resp = self._send(sent, identity=ctx is not None, authorization=auth)
+                if ctx and sent is not raw and (resp.status == 400 or (resp.status in ROUTE_REFUSED and ("route" in ctx.stats or "beta" in ctx.stats))):
+                    detail = resp.read()[:400].decode("utf-8", "replace")
+                    routed = ctx.stats.get("route")  # kept: the loop below removes it from the stats
+                    ctx.stats["fallback"] = detail
+                    limit = SIZE_LIMIT.search(detail)
+                    if limit and proxy.state is not None:
+                        # The window table can be wrong for this conversation (the same model id has a 200k and a 1M form).
+                        # Keep the upstream's own number, and let the retry below relieve the turn against it.
                         try:
-                            if SIZE_ERROR.search(detail):  # too long says nothing against the rewrite: estimate by size next time
-                                proxy.state.run("delete from state where key = ?", (f"usage:{ctx.lane}",))
-                            else:
-                                proxy.state.put(f"nocompact:{ctx.lane}", {"detail": detail, "at": len((ctx.orig or {}).get("messages") or [])})
-                        except Exception:  # without the mark the retry may compact again, be refused again, and go out raw
+                            proxy.state.put(f"window:{ctx.lane}", int(limit.group(1)))
+                            ctx.stats.setdefault("compaction", {})
+                        except Exception:  # without it the request falls back to the original, as before
                             pass
-                    del ctx.stats[mark]
-                    try:
-                        retry, _ = proxy.rewrite(raw, ctx)
-                    except Exception:  # fail open on the retry too
+                    retry, resent = raw, False
+                    # The changes most likely to be refused go first, one at a time, so the other savings stay.
+                    for mark in ("beta", "route", "compaction"):
+                        if mark not in ctx.stats or proxy.state is None:
+                            continue
+                        if mark == "compaction":
+                            ctx.stats.pop("cold", None)  # the compacted body is the one refused: nothing was saved
+                        if mark == "beta":  # only the effort message: routing says the effort in output_config instead
+                            ctx.beta = ""
+                            self._beta("")
+                            _tell(proxy, "unbeta", ctx)
+                        elif mark == "route":
+                            ctx.beta = ""
+                            self._beta("")
+                            _tell(proxy, "refused", ctx, resp.status, detail)
+                        else:
+                            try:
+                                if SIZE_ERROR.search(detail):  # too long says nothing against the rewrite: estimate by size next time
+                                    proxy.state.run("delete from state where key = ?", (f"usage:{ctx.lane}",))
+                                else:
+                                    proxy.state.put(f"nocompact:{ctx.lane}", {"detail": detail, "at": len((ctx.orig or {}).get("messages") or [])})
+                            except Exception:  # without the mark the retry may compact again, be refused again, and go out raw
+                                pass
+                        del ctx.stats[mark]
+                        try:
+                            retry, _ = proxy.rewrite(raw, ctx)
+                        except Exception:  # fail open on the retry too
+                            retry = raw
+                        resp = self._send(retry, identity=True, authorization=auth)
+                        if mark == "route" and resp.status < 400:  # only now is the model known to be the cause
+                            _tell(proxy, "blame", ctx, routed)
+                        if retry is raw or resp.status not in ROUTE_REFUSED + (400,):
+                            resent = retry is raw  # the original has just been sent: never send it twice
+                            break
+                        resp.read()
                         retry = raw
-                    resp = self._send(retry, identity=True, authorization=auth)
-                    if mark == "route" and resp.status < 400:  # only now is the model known to be the cause
-                        _tell(proxy, "blame", ctx, routed)
-                    if retry is raw or resp.status not in ROUTE_REFUSED + (400,):
-                        resent = retry is raw  # the original has just been sent: never send it twice
-                        break
-                    resp.read()
-                    retry = raw
-                if retry is raw:  # the rewrite was refused: send the original
-                    if not resent:
-                        self._beta("")  # the original goes out with the client's own header too
-                        resp = self._send(raw, identity=True, authorization=auth)
-                        if resp.status < 400:
-                            proxy.fuse(ctx.lane, detail, len((ctx.orig or {}).get("messages") or []))
-                    ctx.after = None
-                if resp.status in ROUTE_REFUSED + (400,) and routed:  # the original fails too, so the model was not the cause
-                    _tell(proxy, "forgive", ctx, routed)
-                sent = retry
-            if ctx and used and resp.status == 429:
-                resp, folder = self._switch(ctx, resp, sent, used, folder)
-            if ctx and folder:
-                ctx.stats["account"] = {"switched": accounts.name(folder), "reason": "usage limit",
-                                        "until": accounts.cooling_until((self.headers.get("authorization") or "")[7:].strip())}
-        except (OSError, http.client.HTTPException) as exc:
-            self._drop()
-            if self.hold and self.hold.begun:  # the 200 is out, so no 502 can follow: cut the stream and let the client re-issue
-                self.close_connection = True
-                return proxy.finish(ctx, orig, raw, sent, 502, b"", started)
-            via = f" through the proxy {proxy.hop.label}" if proxy.hop else ""
-            message = f"almanac could not reach the upstream{via}: {type(exc).__name__}: {exc}"
+                    if retry is raw:  # the rewrite was refused: send the original
+                        if not resent:
+                            self._beta("")  # the original goes out with the client's own header too
+                            resp = self._send(raw, identity=True, authorization=auth)
+                            if resp.status < 400:
+                                proxy.fuse(ctx.lane, detail, len((ctx.orig or {}).get("messages") or []))
+                        ctx.after = None
+                    if resp.status in ROUTE_REFUSED + (400,) and routed:  # the original fails too, so the model was not the cause
+                        _tell(proxy, "forgive", ctx, routed)
+                    sent = retry
+                if ctx and used and resp.status == 429:
+                    resp, folder = self._switch(ctx, resp, sent, used, folder)
+                if ctx and folder:
+                    ctx.stats["account"] = {"switched": accounts.name(folder), "reason": "usage limit",
+                                            "until": accounts.cooling_until((self.headers.get("authorization") or "")[7:].strip())}
+            except (OSError, http.client.HTTPException) as exc:
+                self._drop()
+                if self.hold and self.hold.begun:  # the 200 is out, so no 502 can follow: cut the stream and let the client re-issue
+                    self.close_connection = True
+                    return proxy.finish(ctx, orig, raw, sent, 502, b"", started)
+                via = f" through the proxy {proxy.hop.label}" if proxy.hop else ""
+                message = f"almanac could not reach the upstream{via}: {type(exc).__name__}: {exc}"
+                if ctx:
+                    _tell(proxy, "outcome", ctx, orig, 502)
+                return self._reply(502, {"type": "error", "error": {"type": "api_error", "message": message}})
+            tee = self._pipe(resp, tee=ctx is not None)
             if ctx:
-                _tell(proxy, "outcome", ctx, orig, 502)
-            return self._reply(502, {"type": "error", "error": {"type": "api_error", "message": message}})
-        tee = self._pipe(resp, tee=ctx is not None)
-        if ctx:
-            proxy.finish(ctx, orig, raw, sent, resp.status, tee, started)
-            if ctx.kind == "messages":  # remember what went upstream, in memory only, for a keepalive ping
-                kept = {k: v for k, v in self.headers.items() if k.lower() not in REQUEST_SKIP and k.lower() != "accept-encoding"}
-                for k in kept:
-                    if k.lower() == "authorization" and (self.switched or auth):
-                        kept[k] = self.switched or auth
-                proxy.keepalive.arm(ctx, sent, kept, self.path, resp.status)
+                proxy.finish(ctx, orig, raw, sent, resp.status, tee, started)
+                if ctx.kind == "messages":  # remember what went upstream, in memory only, for a keepalive ping
+                    kept = {k: v for k, v in self.headers.items() if k.lower() not in REQUEST_SKIP and k.lower() != "accept-encoding"}
+                    for k in kept:
+                        if k.lower() == "authorization" and (self.switched or auth):
+                            kept[k] = self.switched or auth
+                    proxy.keepalive.arm(ctx, sent, kept, self.path, resp.status)
+        finally:
+            if self.ticket:
+                self.ticket.done(False)
 
     do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = do_HEAD = do_OPTIONS = do_CONNECT = _handle
 
