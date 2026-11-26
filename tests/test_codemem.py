@@ -94,6 +94,24 @@ class CodeMemoryTest(Case):
         self.assertIn("needs a path", mcp.call(self.memory, "code_history", {}, self.alpha))
         self.assertIn("code_history", [t["name"] for t in mcp.TOOLS])
 
+    def test_recall_names_the_last_edit_of_a_file_the_prompt_mentions(self):
+        self.index()
+        key = self.memory.projects.see(self.alpha)
+        node = self.rows()[0]["node"]
+        note = self.memory.recall(key, "why did src/app.py change?", "elsewhere", 2400)
+        self.assertIn(f"{self.file}: last edit ", note)
+        self.assertIn(f"exchange {node}", note)
+        self.assertEqual(self.memory.recall(key, "why did src/app.py change?", "elsewhere", 2400), note)
+        self.assertNotIn("last edit", self.memory.recall(key, "why did src/other.py change?", "elsewhere", 2400))
+        self.assertNotIn("last edit", self.memory.recall(key, "explain the app", "elsewhere", 2400))
+
+    def test_start_sync_follows_the_setting(self):
+        with mock.patch.object(codemem, "sync") as sync:
+            self.assertIsNone(codemem.start_sync({"code": {"sync_on_start": False}}, self.store))
+            sync.assert_not_called()
+            codemem.start_sync({"code": {"sync_on_start": True}}, self.store).join()
+            self.assertTrue(sync.called)
+
     def test_related_tool_and_cli_print_the_same_text(self):
         self.index()
         text = mcp.call(self.memory, "code_related", {"path": "src/app.py"}, self.alpha)

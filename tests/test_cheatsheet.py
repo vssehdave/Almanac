@@ -70,6 +70,11 @@ class TextTest(Fresh):
         self.assertTrue(cheatsheet.read("haiku").startswith("# How to work here (Haiku)"))
         self.assertEqual(cheatsheet.text_for("Claude-OPUS-4-1"), cheatsheet.text_for(LARGE))
 
+    def test_every_sheet_points_at_the_code_tools(self):
+        for model in (LARGE, MEDIUM, SMALL, "claude-fable-1"):
+            for sub in (False, True):
+                self.assertIn("call code_history / code_related before running git log", " ".join(cheatsheet.text_for(model, sub).split()))
+
     def test_other_models_get_nothing(self):
         for model in ("some-model", ""):
             self.assertEqual(cheatsheet.text_for(model), "")

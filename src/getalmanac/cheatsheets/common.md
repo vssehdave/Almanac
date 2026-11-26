@@ -21,6 +21,12 @@
 - When unsure of a fact (an API, a flag, a version), check the source or the
   docs. Do not answer from memory and present it as certain.
 
+## Code history
+
+- For a file's history (when, why, which commit or branch) or what depends on
+  it, call code_history / code_related before running git log, git blame or
+  grepping for importers. Still read the file itself before editing it.
+
 ## Fix
 
 - When something fails, find the cause before you change anything. Read the

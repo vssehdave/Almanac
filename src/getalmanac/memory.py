@@ -1215,6 +1215,16 @@ class Memory:
             spent += len(item) + 1
         if body:
             lines.extend([title, *body])
+        if not sub:
+            try:
+                from . import codemem
+                for line in codemem.hints(self.store, project, first_text):
+                    if len(line) + 1 > room:
+                        break
+                    lines.append(line)
+                    room -= len(line) + 1
+            except Exception as exc:  # the hint is extra: a failure must not cost the note
+                report.log_error("memory:codehint", exc)
         if len(lines) == 1:
             return ""
         if hint:

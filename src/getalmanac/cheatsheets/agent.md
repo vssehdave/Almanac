@@ -16,3 +16,7 @@ instructions and your brief win where they differ.
   attribution, co-author or session lines to a commit unless the brief asks.
 - Report in the shape and length the brief asks for. Put the result first, in
   plain words, then anything the caller must know or decide.
+
+- For a file's history (when, why, which commit or branch) or what depends on
+  it, call code_history / code_related before running git log, git blame or
+  grepping for importers. Still read the file itself before editing it.

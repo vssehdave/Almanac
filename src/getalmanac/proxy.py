@@ -782,6 +782,8 @@ def build(cfg=None) -> Proxy:
     store = Store(config.home() / "almanac.db")
     memory = Memory(store)  # opens state.db beside it
     memory.prune(cfg["memory"]["keep_days"])
+    from . import codemem
+    codemem.start_sync(cfg, store)
     threading.Thread(target=semantic.active, daemon=True).start()  # the first recall should not wait a second for the model
     # The strip first: it only removes what an off plugin left, so every other layer sees the clean request.
     # Order matters: the project first, then the history is settled, then the parts inside it.
