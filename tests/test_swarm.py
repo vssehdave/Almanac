@@ -1,3 +1,4 @@
+import copy
 import threading
 import time
 import unittest
@@ -247,6 +248,35 @@ class ProxyGate(unittest.TestCase):
         self.assertEqual(len(rig.upstream.requests), 2)
         wait_for(lambda: all(e["leader_gen"] is None for e in rig.proxy.gate._entries.values()))
         self.assertEqual(len(self.messages_modes(rig)), 2)
+
+    def test_siblings_with_different_billing_lines_share_one_gate(self):
+        release = threading.Event()
+
+        def hold(req):
+            release.wait(10)
+            return 200, {"content-type": "text/event-stream"}, sse()
+
+        rig = Rig(respond=hold)
+        self.addCleanup(rig.close)
+        bodies = {}
+        for a in ("a", "b"):
+            body = copy.deepcopy(SUB_BODY)
+            body["system"] = [{"type": "text", "text": f"x-anthropic-billing-header: cch={a};"},
+                              {"type": "text", "text": "You are Claude Code", "cache_control": {"type": "ephemeral"}}]
+            bodies[a] = body
+        out = []
+        threads = [threading.Thread(target=lambda a=a: out.append(rig.messages(bodies[a], extra=sub(a)))) for a in ("a", "b")]
+        threads[0].start()
+        wait_for(lambda: len(rig.upstream.requests) == 1)
+        threads[1].start()
+        wait_for(lambda: any(e["waiters"] == 1 for e in rig.proxy.gate._entries.values()))
+        self.assertEqual(len(rig.upstream.requests), 1)  # the second is held while the first has no reply yet
+        release.set()
+        join_all(threads)
+        self.assertEqual([status for status, _, _ in out], [200, 200])
+        self.assertEqual(len(rig.upstream.requests), 2)
+        modes = sorted(m.split(":")[0] for m in self.messages_modes(rig))
+        self.assertEqual(modes, ["lead", "waited"])
 
     def test_swarm_wait_zero_sets_no_swarm_stat(self):
         rig = Rig(overrides={"startup.swarm_wait_seconds": 0})

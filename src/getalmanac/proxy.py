@@ -645,7 +645,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if isinstance(wait, bool) or not isinstance(wait, (int, float)) or wait <= 0:
                 return
             body = json.loads(sent)
-            digest = hashlib.sha256(json.dumps([body.get("tools"), body.get("system")], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            system = body.get("system")
+            system = [{"type": "text", "text": system}] if isinstance(system, str) else system or []
+            # the billing line differs per conversation but is not part of the cached prefix
+            shared = [{k: v for k, v in b.items() if k != "cache_control"} if isinstance(b, dict) else b for b in system
+                      if not (isinstance(b, dict) and str(b.get("text", "")).startswith("x-anthropic-billing-header:"))]
+            digest = hashlib.sha256(json.dumps([body.get("tools"), shared], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
             key = hashlib.sha256((auth or self.headers.get("authorization") or self.headers.get("x-api-key") or "").encode()).hexdigest()
             self.ticket = proxy.gate.enter((body.get("model"), key, digest), wait=wait, cap=3 * wait)
             ctx.stats["swarm"] = self.ticket.mode
