@@ -194,7 +194,8 @@ def respond(event):
     """The hook output dict for this event, or None when there is nothing to add."""
     name = event.get("hook_event_name")
     sid = _sid(event)
-    if sid and event.get("permission_mode") != "plan":  # leaving plan mode ends the chain's reuse
+    left = "permission_mode" in event and event["permission_mode"] != "plan"
+    if sid and name in ("UserPromptSubmit", "Stop") and left:  # leaving plan mode ends the chain's reuse
         state = _load(sid)
         if state is not None:
             state["plan_mode_left"] = True
@@ -225,7 +226,7 @@ def respond(event):
                 return _gate(event, sid, agent)
             except Exception:
                 return _deny("EGM state unreadable")
-    if name == "PostToolUse" and event.get("tool_name") == "Agent" and sid and _agent(event) in LAYERS:
+    if name == "PostToolUse" and event.get("tool_name") == "Agent" and sid and event.get("permission_mode") == "plan" and _agent(event) in LAYERS:
         agent = _agent(event)
         state = _load(sid) or _fresh()
         response = event.get("tool_response")

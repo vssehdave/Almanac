@@ -493,6 +493,43 @@ class PlanModeChain(unittest.TestCase):
             for cmd in commands(entries):
                 self.assertIn("scripts/plan_mode.py", cmd)
 
+    def test_layer_outside_plan_mode_is_not_recorded(self):
+        with tempfile.TemporaryDirectory() as data:
+            run(post_agent(SID, "egm:egm-zoom-out", mode="default"), data)
+            run(prompt("plan", SID), data)
+            path = transcript(data, [PROMPT])
+            result = run(stop(path, session_id=SID), data)
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(json.loads(result.stdout)["decision"], "block")
+
+    def test_event_without_mode_does_not_reset_chain(self):
+        with tempfile.TemporaryDirectory() as data:
+            run(prompt("plan", SID), data)
+            run(pre_agent(SID, "egm-zoom-out"), data)
+            run(post_agent(SID, "egm-zoom-out"), data)
+            event = json.loads(post_agent(SID, "egm-zoom-out"))
+            del event["permission_mode"]
+            run(json.dumps(event), data)
+            run(prompt("plan", SID), data)
+            self.assertAllowed(run(pre_agent(SID, "egm-implementation-readiness"), data))
+
+    def test_task_notification_prompt_is_ignored(self):
+        with tempfile.TemporaryDirectory() as data:
+            run(prompt("plan", SID), data)
+            run(pre_agent(SID, "egm-zoom-out"), data)
+            run(post_agent(SID, "egm-zoom-out"), data)
+            result = run(prompt("plan", SID, "<task-notification>done</task-notification>"), data)
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, "")
+            self.assertDenied(run(pre_agent(SID, "egm-implementation-readiness"), data), "one layer per owner message")
+
+    def test_failed_post_frees_the_claim(self):
+        with tempfile.TemporaryDirectory() as data:
+            run(prompt("plan", SID), data)
+            self.assertAllowed(run(pre_agent(SID, "egm-zoom-out"), data))
+            run(post_agent(SID, "egm-zoom-out", status="error"), data)
+            self.assertAllowed(run(pre_agent(SID, "egm-zoom-out"), data))
+
 
 if __name__ == "__main__":
     unittest.main()
