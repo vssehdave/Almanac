@@ -1,4 +1,4 @@
-"""PreToolUse: block commands that skip git hooks or signing, or that destroy work or data, until the user confirms."""
+"""PreToolUse: block commands that skip git hooks or signing, or ask first for commands that destroy work or data."""
 import re
 import sys
 
@@ -7,21 +7,31 @@ import guardlib
 REASON = ("Blocked: this command skips git hooks or commit signing ({what}). Fix what the hook or signing "
           "reports instead of bypassing it. If it really must be skipped, ask the user first.")
 
-DESTRUCTIVE_REASON = ("Blocked: this command destroys work or data ({what}). Ask the user first and run it only after "
-                      "they confirm.")
+DESTRUCTIVE_REASON = ("This command destroys work or data ({what}). Claude Code will ask the user to approve it "
+                      "before it runs.")
 
+_prefix = (r"(?:(?:[({!]|then\b|do\b|\w+=\S*|(?:sudo|env|command|time|nohup|nice|xargs)\b"
+           r"(?:\s+-\S+(?:\s+(?!-)\S+)?)*)\s*)*(?:\S*/)?[\\]?")
+_git = r"git(?:\s+-\S+(?:\s+(?!-)\S+)?)*\s+"
+_force = r"(?=.*(?:\s-[a-zA-Z]*f|\s--force\b))"
 _destructive = re.compile(
-    r"^\s*(?:(?:sudo|env|command)(?:\s+-\S+)*\s+)?(?:"
-    r"rm\b(?=.*(?:\s-[a-zA-Z]*[rR]|\s--recursive\b))(?=.*(?:\s-[a-zA-Z]*f|\s--force\b)).*"
-    r"|git\s+reset\s+--hard\b.*"
-    r"|git\s+clean\b(?=.*(?:\s-[a-zA-Z]*f|\s--force\b)).*"
-    r"|git\s+checkout\s+(?:--\s+)?\.(?!\S).*"
-    r"|git\s+restore\s+\.(?!\S).*"
-    r"|git\s+branch\s+-D\b.*"
-    r"|git\s+push\b(?=.*\s(?:--force\S*|-f)(?!\S)).*"
-    r"|(?i:remove-item)\b(?=.*\s-(?i:recurse)\b)(?=.*\s-(?i:force)\b).*"
+    r"^\s*" + _prefix + r"(?:"
+    r"rm\b(?=.*(?:\s-[a-zA-Z]*[rR]|\s--recursive\b))" + _force + r".*"
+    r"|(?i:remove-item|ri|rd|rmdir|del|erase|rm)\b(?=.*\s-(?i:r(?:ecurse)?)\b)(?=.*\s-(?i:fo(?:rce)?)\b).*"
+    r"|" + _git + r"(?:"
+    r"reset\s+--hard\b"
+    r"|clean\b" + _force +
+    r"|checkout\s+(?:(?!-)\S+\s+)?(?:--\s+)?\.(?!\S)"
+    r"|restore\b(?:(?!.*\s(?:--staged|-S)\b)|(?=.*\s(?:--worktree|-W)\b))\s+(?:-\S+\s+)*(?:\.|:/)(?!\S)"
+    r"|stash\s+(?:drop|clear)\b"
+    r"|branch\b(?:(?=.*\s-[a-zA-Z]*D)|(?=.*\s(?:-[a-zA-Z]*d|--delete)(?!-))(?=.*\s(?:-[a-zA-Z]*f|--force)(?!-)))"
+    r"|push\b(?:(?=.*\s(?:--force|-f)(?!\S))|(?=.*\s\+\S))"
+    r").*"
     r")")
+_sql_cmd = re.compile(r"^\s*" + _prefix + r"(?:sqlite3|psql|mysql|sqlcmd|duckdb)(?:\.exe)?\b")
 _sql = re.compile(r"(?i:DROP\s+(?:TABLE|DATABASE|SCHEMA)\b|ALTER\s+TABLE\b.*\bDROP\s+COLUMN\b)")
+_shell = re.compile(r"\b(?:ba|z|da|k)?sh\s+(?:-\S+\s+)*?-\w*c\s+([\"'])(.*?)\1", re.S)
+_subshell = re.compile(r"\$\((.*?)\)|`(.*?)`", re.S)
 _quoted = re.compile(r"\"[^\"]*\"|'[^']*'")
 _segment = re.compile(r"&&|\|\||[;|\n]")
 _override = re.compile(r"-c\s+(?:core\.hooksPath|commit\.gpgsign\s*=\s*false)", re.I)
@@ -40,11 +50,39 @@ def _short_n(args):
     return ""
 
 
+def _spans(text):
+    """Split on ; | && || newline outside quotes. Return (original, quote-masked) for each segment."""
+    masked = _quoted.sub(lambda m: m.group()[0] + "_" * (len(m.group()) - 2) + m.group()[-1], text)
+    start, spans = 0, []
+    for cut in list(_segment.finditer(masked)) + [re.search(r"$", masked)]:
+        spans.append((text[start:cut.start()], masked[start:cut.start()]))
+        start = cut.end()
+    return spans
+
+
+def _destroys(text):
+    for part, masked in _spans(text):
+        found = _destructive.search(masked)
+        if found:
+            return part[found.start():found.end()].strip()
+        found = _sql.search(part) if _sql_cmd.search(masked) else None
+        if found:
+            return found.group().strip()
+        inner = [m.group(2) for m in _shell.finditer(part)] + [m.group(1) or m.group(2) for m in _subshell.finditer(part)]
+        for body in inner:
+            found = _destroys(body)
+            if found:
+                return found
+    return ""
+
+
 def check(tool, args):
     if tool not in ("Bash", "PowerShell"):
         return ""
-    command = re.sub(r"(-c\s+)[\"']", r"\1", args.get("command", ""))  # -c "core.hooksPath=x" is still an override
-    for part in _segment.split(_quoted.sub('""', command)):  # quotes removed so a commit message cannot trigger it
+    original = args.get("command", "")
+    command = re.sub(r"(-c\s+)[\"']", r"\1", original)  # -c "core.hooksPath=x" is still an override
+    for part, _ in _spans(command):
+        part = _quoted.sub('""', part)  # quotes removed so a commit message cannot trigger it
         if re.search(r"\bgit\b", part):
             found = _override.search(part)
             if not found and not re.search(r"--(?:get|unset)", part):
@@ -56,13 +94,9 @@ def check(tool, args):
                 found = re.search(r"\S+", _short_n(commit.group(1)))
             if found:
                 return REASON.format(what=found.group().strip())
-        found = _destructive.search(part)
-        if found:
-            return DESTRUCTIVE_REASON.format(what=found.group().strip())
-    for part in _segment.split(command):  # SQL sits inside quotes, so it is checked on the original text
-        found = _sql.search(part)
-        if found and not re.match(r"\s*git\b", _quoted.sub('""', part)):
-            return DESTRUCTIVE_REASON.format(what=found.group().strip())
+    found = _destroys(original)  # after every segment is cleared of --no-verify, which blocks outright
+    if found:
+        return {"ask": DESTRUCTIVE_REASON.format(what=found)}
     return ""
 
 
