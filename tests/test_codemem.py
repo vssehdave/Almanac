@@ -224,6 +224,90 @@ class CodeSyncTest(Case):
         self.assertIsNotNone(row["commit_id"])
         self.assertEqual(row["branch"], "feat/x")
 
+    def commit_in(self, path, text, when):
+        with open(os.path.join(path, "a.py"), "w") as handle:
+            handle.write(text)
+        subprocess.run(["git", "-C", path, "commit", "-q", "-am", "wt"], check=True, capture_output=True,
+                       env={**os.environ, **GIT_ENV, "GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when})
+
+    def test_edit_in_a_removed_worktree_still_links_to_its_commit(self):
+        self.commit("a.py", "a = 1\n", "2026-01-01T09:00:00+00:00")
+        work = project.normalize(os.path.realpath(os.path.join(self.tmp, "wt")))
+        self.git("worktree", "add", "-q", "-b", "feat/x", work)
+        codemem.capture(self.store, 1, self.key, 1, [use("w1", "Edit", file_path=work + "/a.py", old_string="a = 1", new_string="a = 2"), out("w1")],
+                        datetime.fromisoformat("2026-01-01T10:00:00+00:00").timestamp())
+        self.commit_in(work, "a = 2\n", "2026-01-01T10:01:00+00:00")
+        self.git("worktree", "remove", "--force", work)
+        codemem.capture(self.store, 1, self.key, 1, [use("w1", "Edit", file_path=work + "/a.py", old_string="a = 1", new_string="a = 2"), out("w1")],
+                        datetime.fromisoformat("2026-01-01T10:00:00+00:00").timestamp())
+        self.assertEqual(self.store.run("select rel from codeedit where tool_use_id = 'w1'")[0][0], "a.py")
+        self.sync()
+        self.assertIsNotNone(self.store.run("select commit_id from codeedit where tool_use_id = 'w1'")[0][0])
+
+    @unittest.skipUnless(os.name == "nt", "case-insensitive file system")
+    def test_history_ignores_path_case(self):
+        self.record("e1", "a.py", "a = 1", "a = 2", "2026-01-01T10:00:00+00:00")
+        rows = codemem.history(self.store, self.repo[:3] + self.repo[3:].swapcase() + "/a.py")
+        self.assertEqual([r["tool_use_id"] for r in rows], ["e1"])
+
+    def test_history_from_main_checkout_shows_worktree_edits(self):
+        self.assertEqual(project.describe(self.repo)[0], self.key)
+        self.commit("a.py", "a = 1\n", "2026-01-01T09:00:00+00:00")
+        work = project.normalize(os.path.realpath(os.path.join(self.tmp, "wt")))
+        self.git("worktree", "add", "-q", "-b", "feat/x", work)
+        codemem.capture(self.store, 1, self.key, 1, [use("w1", "Edit", file_path=work + "/a.py", old_string="a = 1", new_string="a = 2"), out("w1")],
+                        datetime.fromisoformat("2026-01-01T10:00:00+00:00").timestamp())
+        self.assertIn("w1", [r["tool_use_id"] for r in self.rows("a.py")])
+
+    def test_old_row_without_rel_under_a_removed_worktree_links(self):
+        self.commit("a.py", "a = 1\n", "2026-01-01T09:00:00+00:00")
+        wts = project.normalize(os.path.realpath(os.path.join(self.tmp, "wts")))
+        self.git("worktree", "add", "-q", "-b", "live", wts + "/live")
+        gone = wts + "/gone"
+        self.git("worktree", "add", "-q", "-b", "gone", gone)
+        codemem.capture(self.store, 1, self.key, 1, [use("g1", "Edit", file_path=gone + "/a.py", old_string="a = 1", new_string="a = 2"), out("g1")],
+                        datetime.fromisoformat("2026-01-01T10:00:00+00:00").timestamp())
+        self.commit_in(gone, "a = 2\n", "2026-01-01T10:01:00+00:00")
+        self.git("worktree", "remove", "--force", gone)
+        self.store.run("update codeedit set rel = null")
+        self.sync()
+        self.assertIsNotNone(self.store.run("select commit_id from codeedit where tool_use_id = 'g1'")[0][0])
+
+    def test_old_row_without_rel_under_the_live_root_links(self):
+        self.commit("a.py", "a = 1\n", "2026-01-01T09:00:00+00:00")
+        self.record("e1", "a.py", "a = 1", "a = 2", "2026-01-01T10:00:00+00:00")
+        self.commit("a.py", "a = 2\n", "2026-01-01T11:00:00+00:00", "use two")
+        self.store.run("update codeedit set rel = null")
+        self.sync()
+        row = self.store.run("select rel, commit_id from codeedit where tool_use_id = 'e1'")[0]
+        self.assertEqual(row["rel"], "a.py")
+        self.assertIsNotNone(row["commit_id"])
+
+    def test_old_row_beside_a_worktree_but_not_one_does_not_link(self):
+        self.commit("a.py", "a = 1\n", "2026-01-01T09:00:00+00:00")
+        self.git("worktree", "add", "-q", "-b", "feat/x", project.normalize(os.path.realpath(os.path.join(self.tmp, "wt"))))
+        other = project.normalize(os.path.realpath(os.path.join(self.tmp, "other")))
+        os.makedirs(other)
+        with open(os.path.join(other, "a.py"), "w") as handle:
+            handle.write("a = 2\n")
+        codemem.capture(self.store, 1, self.key, 1, [use("o1", "Edit", file_path=other + "/a.py", old_string="a = 1", new_string="a = 2"), out("o1")],
+                        datetime.fromisoformat("2026-01-01T10:00:00+00:00").timestamp())
+        self.commit("a.py", "a = 2\n", "2026-01-01T11:00:00+00:00", "use two")
+        self.store.run("update codeedit set rel = null")
+        self.sync()
+        row = self.store.run("select rel, commit_id from codeedit where tool_use_id = 'o1'")[0]
+        self.assertIsNone(row["commit_id"])
+        self.assertEqual(row["rel"], "")
+
+    def test_edit_outside_any_repo_has_no_rel(self):
+        loose = project.normalize(os.path.realpath(os.path.join(self.tmp, "loose")))
+        os.makedirs(loose)
+        codemem.capture(self.store, 1, self.key, 1, [use("n1", "Edit", file_path=loose + "/notes.md", old_string="a", new_string="b"), out("n1")],
+                        datetime.fromisoformat("2026-01-01T10:00:00+00:00").timestamp())
+        self.assertIsNone(self.store.run("select rel from codeedit where tool_use_id = 'n1'")[0][0])
+        self.sync()
+        self.assertIsNone(self.store.run("select commit_id from codeedit where tool_use_id = 'n1'")[0][0])
+
     def test_outside_commit_on_a_merged_branch_gets_the_branch_from_the_merge(self):
         self.commit("a.py", "a = 1\n", "2026-01-01T09:00:00+00:00")
         self.record("e1", "a.py", "a = 1", "a = 1", "2026-01-01T09:30:00+00:00")
@@ -279,7 +363,7 @@ class CodeSyncTest(Case):
                        "edits text not null default '[]', content text, chash text not null, size integer not null default 0)")
         codemem.setup(self.store)
         codemem.setup(self.store)
-        self.assertEqual(self.store.run("select commit_id, branch from codeedit"), [])
+        self.assertEqual(self.store.run("select commit_id, branch, rel from codeedit"), [])
 
 
 class CodeRelatedTest(CodeSyncTest):
