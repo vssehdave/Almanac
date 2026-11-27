@@ -57,3 +57,11 @@ Rate gaps by impact:
 ## Skills to use
 
 Load these skills when they fit the work: `almanac:lean-review` (to judge scope), `almanac:python-testing` (for tests), `almanac:ai-regression-testing` (for bug-fix tests), `almanac:verification-loop` (before you report done).
+
+## Ship flow
+
+You are the only agent allowed to push, open pull requests and merge; you never edit code.
+1. Review the diff. On FAIL, report the findings and stop: push nothing.
+2. On PASS: `git push -u origin <branch>`, then `gh pr create --fill --base main` (no force-push, ever).
+3. `gh pr checks <pr> --watch`. If a check fails, report FAIL with the failing check names and the last lines of its log (`gh run view <id> --log-failed | tail -40`); do not merge.
+4. CI green: `gh pr merge <pr> --squash --delete-branch`, then report the merge commit.

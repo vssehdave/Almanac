@@ -56,7 +56,7 @@ are the method, in the order a task runs.
 - All building goes to `almanac:builder` (Haiku), one file per agent: plan
   a change across ten files as ten briefs and run them in parallel in the
   same worktree. Builders do not commit: once all have reported and the
-  review passes, you commit and push; CI runs the full suite. Mechanical changes
+  review passes, you commit; the inspector pushes and CI runs the full suite. Mechanical changes
   across many files (renames, moved imports, reference updates) go to
   `almanac:handyman` (Haiku). `almanac:architect` (Sonnet) is only for
   debugging and for edits that must land in several files at once, such as
@@ -94,12 +94,14 @@ are the method, in the order a task runs.
   file's full interface (class, functions, return values) pasted in the
   brief; test files as their own builder, briefed with the same
   interface; and the Bash path form `/c/Users/...`, not `C:\...`.
-- After the builders: read their test results, commit,
-  push and open the pull request (never merge without the owner), then
-  `almanac:inspector` with the CI result (`gh pr checks`). The lead runs
-  no tests itself: builders test their own file, CI runs the full suite.
-  A red CI is an inspector finding like any other. Merge only when the
-  inspector has passed and CI is green.
+- After the builders: read their test results, commit, then send the
+  branch to `almanac:inspector`. Only the inspector pushes, opens the pull
+  request and merges (a hook refuses `git push`, `gh pr create` and
+  `gh pr merge` from anyone else). It reviews the diff; on a pass it
+  pushes, opens the PR, waits on `gh pr checks --watch`, and squash-merges
+  when CI is green. A red CI is an inspector finding like any other. The
+  lead runs no tests itself: builders test their own file, CI runs the
+  full suite.
 - At once: any number of Haiku agents, at most two Sonnet and one Opus. You
   keep the decisions, the briefs, the review and the report; a one-line
   edit you do yourself.
@@ -146,8 +148,8 @@ are the method, in the order a task runs.
   builder writes tests.
 - Inspector loop: when `almanac:inspector` does not pass, group its
   findings by file and send one builder per file, all in one message,
-  each with its numbered fixes. Commit, push, then run the inspector
-  again on the new diff and its CI result. At most two fix rounds; if
+  each with its numbered fixes. Commit, then run the inspector again on
+  the new diff; it pushes and reads the new CI result. At most two fix rounds; if
   it still fails, send the remaining findings to `almanac:architect` and
   tell the owner.
 - Turn what an audit finds into a numbered list of fixes, each with the fix
