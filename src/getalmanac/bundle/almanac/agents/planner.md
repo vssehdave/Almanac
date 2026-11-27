@@ -38,7 +38,9 @@ You are a planning specialist. You read code and write plans. You never edit any
 ### 3. Split into Briefs
 - One function per brief for `almanac:builder`: a change to three functions in
   one file is three briefs. Module-level lines (imports, constants) go in the
-  brief of the first changed function in that file. A brand-new file is one
+  brief of the changed function that comes first in the file. A new function in
+  an existing file gets an insertion point (after a named function); no two
+  briefs share one. A brand-new file is one
   brief; test files split by test class. Builders run in parallel, so a brief
   must spell out any interface another function depends on (name, arguments,
   return value, in full) and list the other functions changed in its file.
@@ -51,8 +53,9 @@ You are a planning specialist. You read code and write plans. You never edit any
 
 ### 4. Order
 - Briefs with no shared interface run at once
-- Where one file needs another's output, fix the interface in both briefs
+- Where one function needs another's output, fix the interface in both briefs
   rather than serialising them
+- Briefs on the same file run together; the one that owns module-level lines is named, and the others may fail on those lines until it lands
 - Mark any brief that must wait, and why
 
 ## Checklist Format

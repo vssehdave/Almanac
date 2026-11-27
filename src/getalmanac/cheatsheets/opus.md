@@ -63,11 +63,15 @@ are the method, in the order a task runs.
   a live environment. An agent's file sets its model and effort.
 - A builder hands back in one of two ways. "HANDOVER: retry on sonnet":
   it kept failing at the task, so start a fresh `almanac:builder` on the
-  same file with the model set to sonnet. "HANDOVER: bug report": the file
-  has a bug in how it works, so start a fresh `almanac:architect` from the
-  report. Never switch a running agent's model. A builder runs the test
-  file for its own file once and reports; the lead never re-runs it; a failure it reports goes to a fresh
-  `almanac:architect` with the failure text. The lead never fixes it.
+  same function with the model set to sonnet. "HANDOVER: bug report": the
+  file has a bug in how it works, so start a fresh `almanac:architect` from
+  the report. Never switch a running agent's model. A builder runs the test
+  file for its own function once and reports; the lead never re-runs it (but see the next rule); a
+  failure it reports goes to a fresh `almanac:architect` with the failure
+  text. The lead never fixes it.
+- A failure a builder reports outside its own function may be a sibling
+  mid-edit. Once every builder on that file has reported, re-run that
+  test file once; only a failure that remains goes to `almanac:architect`.
 - Handyman commits its own mechanical change and reports in full; read its
   report and diff, no Sonnet re-review. On "HANDOVER: retry handyman at
   higher effort", start a fresh `almanac:handyman` with effort high, then
@@ -77,22 +81,24 @@ are the method, in the order a task runs.
   -s tests -p test_x.py` (PYTHONPATH=src makes the worktree's code load,
   not the main checkout's).
 - A builder brief has these parts, in order: the worktree path and branch;
-  the one file and the one function to edit; "no git, no commit"; the exact change, with names,
-  signatures, return shapes and limits (max items, lengths, timeouts) spelled
-  out; a "Not this:" line for what must stay untouched; the one test
-  command; and what to do if a test in a file it does not own fails (name
-  the file and line, then stop). End with "Your last message must be the
-  report." Builders run in parallel, so tell each one what the others are
-  changing and what interface they share.
+  the one file and the one function to edit; "no git, no commit"; the exact
+  change, with names, signatures, return shapes and limits (max items,
+  lengths, timeouts) spelled out; a "Not this:" line for what must stay
+  untouched; the one test command; and what to do if a test for a function
+  it does not own fails (name the file and line, then stop). End with "Your
+  last message must be the report." Builders run in parallel, so tell each
+  one what the others are changing and what interface they share.
 - Swarm by default. One function per builder, always: a function,
   method or class body is the unit, so a change to N functions is N
   builders, even when several sit in one file, all sent in one message.
-  Module-level lines (imports, constants) go to the builder of the first
-  changed function in that file, named in its brief. A brand-new file is
-  one builder. Test files split by test class. Never give one builder two
+  Module-level lines (imports, constants) go to the builder of the changed
+  function that comes first in the file, named in its brief; the others may
+  fail on them until it lands. A brand-new file is one builder. Test files split by test class. Never give one builder two
   functions, and never edit one yourself to save a spawn.
 - Builders sharing a file must use Edit on their own function only,
   never Write; tell each the other functions being changed in that file.
+  A new function gets an insertion point (after a named function); no two
+  briefs share one.
 - A builder also needs: the exact files and functions the others are
   writing, so it waits for their interfaces instead of guessing; any new
   file's full interface (class, functions, return values) pasted in the
@@ -104,16 +110,16 @@ are the method, in the order a task runs.
   `gh pr merge` from anyone else). It reviews the diff; on a pass it
   pushes, opens the PR, waits on `gh pr checks --watch`, and squash-merges
   when CI is green. A red CI is an inspector finding like any other. The
-  lead runs no tests itself: builders test their own file, CI runs the
-  full suite.
+  lead runs no tests itself beyond that one re-run: builders test their own function, CI runs
+  the full suite.
 - At once: any number of Haiku agents, at most two Sonnet and one Opus. You
   keep the decisions, the briefs, the review and the report; a one-line
   edit you do yourself.
 - Code work runs as a chain: `almanac:surveyor` first finds the exact files
-  (using code_history/code_related), the lead writes one brief per file,
-  then `almanac:builder` (or `almanac:handyman`), then the crew reviewer for
-  the diff's language, then `almanac:inspector` (Opus), the one review that
-  must pass before the merge.
+  (using code_history/code_related), the lead writes one brief per
+  function, then `almanac:builder` (or `almanac:handyman`), then the crew
+  reviewer for the diff's language, then `almanac:inspector` (Opus), the
+  one review that must pass before the merge.
 - Skills for your own work: `almanac:git-workflow` when you branch, commit,
   merge or undo; `almanac:skill-comply` when a skill or agent seems ignored,
   to measure it from memory before changing its text.
@@ -151,8 +157,8 @@ are the method, in the order a task runs.
   questions to answer and the failure modes to look for. It can run while the
   builder writes tests.
 - Inspector loop: when `almanac:inspector` does not pass, group its
-  findings by file and send one builder per file, all in one message,
-  each with its numbered fixes. Commit, then run the inspector again on
+  findings by function and send one builder per function, all in one
+  message, each with its numbered fixes. Commit, then run the inspector again on
   the new diff; it pushes and reads the new CI result. At most two fix rounds; if
   it still fails, send the remaining findings to `almanac:architect` and
   tell the owner.
