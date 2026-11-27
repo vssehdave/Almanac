@@ -170,4 +170,4 @@ Parallel execution result:
 
 ## Almanac agents
 
-Run lanes with Almanac agents: `almanac:surveyor` for reads, `almanac:builder` (one file per agent) for writes, `almanac:handyman` for mechanical multi-file edits. Cap: any number of Haiku, at most two Sonnet, one Opus. Record a procedure that worked with `playbook_save`; check `playbook_find` first.
+Run lanes with Almanac agents: `almanac:surveyor` for reads, `almanac:builder` (one function per agent) for writes, `almanac:handyman` for mechanical multi-file edits. Cap: any number of Haiku, at most two Sonnet, one Opus. Record a procedure that worked with `playbook_save`; check `playbook_find` first.
