@@ -26,11 +26,13 @@ class BuilderGitGuard(unittest.TestCase):
         self.assertEqual(self.run_bash(cmd, at)[0], 0, cmd)
 
     def test_builder_git_commands_are_blocked(self):
-        for cmd in ("git status", "git commit -m x", "cd a && git add .", "rtk git diff", "x; git.exe log"):
+        for cmd in ("git status", "git commit -m x", "cd a && git add .", "rtk git diff", "x; git.exe log",
+                    "PYTHONPATH=. git status", "env GIT_DIR=x git commit", '"C:/Program Files/Git/bin/git.exe" status',
+                    "/usr/bin/git log"):
             self.blocked(cmd)
 
     def test_builder_non_git_commands_are_allowed(self):
-        for cmd in ("python -m unittest discover -s tests -p test_x.py", "echo digit", "cat x/git_notes.txt"):
+        for cmd in ("python -m unittest discover -s tests -p test_x.py", "echo digit", "cat x/git_notes.txt", "echo gitlab"):
             self.allowed(cmd, "almanac:builder")
 
     def test_git_commit_is_allowed_for_other_agents_and_without_agent(self):

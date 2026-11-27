@@ -6,7 +6,7 @@ import guardlib
 
 REASON = ("Blocked: builders do not use git. Leave the changes in the worktree and report; the lead commits.")
 
-_git = re.compile(r"(^|[;&|(\n]\s*)(rtk\s+)?git(\.exe)?\b")
+_git = re.compile(r"(^|[;&|(\n]|\$\()\s*(?:rtk\s+)?(?:env\s+)?(?:\w+=\S*\s+)*(?:\"[^\"\n]*[\\/]|'[^'\n]*[\\/]|[^\s\"';&|]*[\\/])?[\"']?git(?:\.exe)?[\"']?(?=[\s;&|)]|$)")
 
 
 def check(tool_name, tool_input, payload):
