@@ -10,14 +10,15 @@ REASON = ("Blocked: this command skips git hooks or commit signing ({what}). Fix
 DESTRUCTIVE_REASON = ("This command destroys work or data ({what}). Claude Code will ask the user to approve it "
                       "before it runs.")
 
-_prefix = (r"(?:(?:[({!]|then\b|do\b|\w+=\S*|(?:sudo|env|command|time|nohup|nice|xargs)\b"
-           r"(?:\s+-\S+(?:\s+(?!-)\S+)?)*)\s*)*(?:\S*/)?[\\]?")
+_prefix = (r"(?:(?:[({!]|then\b|do\b|\w+=\S*|(?:sudo|env|command|time|nohup|nice|xargs|eval|exec)\b"
+           r"(?:\s+-\S+(?:\s+(?!-)\S+)?)*|find\b[^|;&]*?\s-exec(?:dir)?\b)\s*)*(?:\S*/)?[\\]?")
 _git = r"git(?:\s+-\S+(?:\s+(?!-)\S+)?)*\s+"
 _force = r"(?=.*(?:\s-[a-zA-Z]*f|\s--force\b))"
 _destructive = re.compile(
     r"^\s*" + _prefix + r"(?:"
     r"rm\b(?=.*(?:\s-[a-zA-Z]*[rR]|\s--recursive\b))" + _force + r".*"
-    r"|(?i:remove-item|ri|rd|rmdir|del|erase|rm)\b(?=.*\s-(?i:r(?:ecurse)?)\b)(?=.*\s-(?i:fo(?:rce)?)\b).*"
+    r"|(?i:remove-item|ri|rd|rmdir|del|erase|rm)\b(?=.*\s-(?i:r(?:e(?:c(?:u(?:r(?:s(?:e)?)?)?)?)?)?)\b)(?=.*\s-(?i:fo(?:r(?:c(?:e)?)?)?)\b).*"
+    r"|(?i:(?:rd|rmdir)\b(?=.*\s/s\b)).*"
     r"|" + _git + r"(?:"
     r"reset\s+--hard\b"
     r"|clean\b" + _force +
@@ -30,10 +31,13 @@ _destructive = re.compile(
     r")")
 _sql_cmd = re.compile(r"^\s*" + _prefix + r"(?:sqlite3|psql|mysql|sqlcmd|duckdb)(?:\.exe)?\b")
 _sql = re.compile(r"(?i:DROP\s+(?:TABLE|DATABASE|SCHEMA)\b|ALTER\s+TABLE\b.*\bDROP\s+COLUMN\b)")
-_shell = re.compile(r"\b(?:ba|z|da|k)?sh\s+(?:-\S+\s+)*?-\w*c\s+([\"'])(.*?)\1", re.S)
+_shell = re.compile(r"\b(?:(?:ba|z|da|k)?sh\s+(?:-\S+\s+)*?-\w*c|(?i:pwsh|powershell)(?:\.exe)?\s+(?:-\S+\s+)*?-(?i:c|command)"
+                    r"|(?i:cmd)(?:\.exe)?\s+(?:/\S+\s+)*?/(?i:c|k)|eval|exec)\s+([\"'])(.*?)\1", re.S)
+_heredoc = re.compile(r"(<<-?\s*([\"'])(\w+)\2[^\n]*\n)(.*?)(?=\n\s*\3\s*(?:\n|$)|\Z)", re.S)
+_lead = re.compile(r"""^\s*([\"'])[\w./\-]+\1""")
 _subshell = re.compile(r"\$\((.*?)\)|`(.*?)`", re.S)
 _quoted = re.compile(r"\"[^\"]*\"|'[^']*'")
-_segment = re.compile(r"&&|\|\||[;|\n]")
+_segment = re.compile(r"&&|\|\||[;|\n]|(?<![&>])&(?![&>])")
 _override = re.compile(r"-c\s+(?:core\.hooksPath|commit\.gpgsign\s*=\s*false)", re.I)
 _config = re.compile(r"\bgit\b.*\bconfig\b.*\bcore\.hooksPath\b", re.I)
 _commit = re.compile(r"\bgit(?:\s+-\S+(?:\s+\S+)?)*\s+commit\b(.*)", re.S)
@@ -61,7 +65,12 @@ def _spans(text):
 
 
 def _destroys(text):
+    text = _heredoc.sub(lambda m: m.group(1) + re.sub(r"[`$]", "_", m.group(4)), text)  # quoted heredoc is data
+    text = text.replace(chr(92) + "`", "__")
     for part, masked in _spans(text):
+        lead = _lead.match(part)
+        if lead:  # "rm" -rf x is rm
+            masked = masked[:lead.start(1)] + " " + part[lead.start(1) + 1:lead.end() - 1] + " " + masked[lead.end():]
         found = _destructive.search(masked)
         if found:
             return part[found.start():found.end()].strip()
