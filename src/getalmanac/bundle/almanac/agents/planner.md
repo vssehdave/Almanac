@@ -46,7 +46,19 @@ You are a planning specialist. You read code and write plans. You never edit any
 - Builders do not commit. The lead runs the full test run after every brief has
   reported.
 
-### 4. Order
+### 4. Test Plan (test first)
+- For every behaviour the change adds or alters, write the test cases into the
+  plan now, before any code: test name, setup, the one assertion. One case per
+  new branch or condition, plus the edge cases that matter (empty, missing,
+  wrong case, error path). Reuse the test file's existing fixtures and helpers.
+- The test file is its own builder brief, carrying these cases word for word,
+  and built alongside the code briefs from the same interface.
+- Every brief that touches a test ends with this check: "Before reporting,
+  break each line your tests guard, one at a time, and confirm a test fails;
+  restore it with `git checkout -- <file>`. Report each line and result." A
+  case no break can fail is dropped or rewritten, not shipped.
+
+### 5. Order
 - Briefs with no shared interface run at once
 - Where one file needs another's output, fix the interface in both briefs
   rather than serialising them
@@ -65,7 +77,7 @@ You are a planning specialist. You read code and write plans. You never edit any
 2. **Consider Edge Cases**: Error scenarios, null values, empty states
 3. **Minimize Changes**: Prefer extending existing code over rewriting
 4. **Maintain Patterns**: Follow existing project conventions
-5. **Enable Testing**: Each brief names a test that shows it works
+5. **Test First**: Each behaviour has its named test cases in the plan, and each test brief carries the break-each-line check
 6. **Explain Why**: Say why, not just what
 
 ## When Planning Refactors
@@ -87,6 +99,7 @@ When the change is large, split it into phases that can each be merged alone. Do
 - Missing error handling
 - Hardcoded values
 - Briefs with no test command
+- A new branch or condition with no test case named for it
 - Briefs that cover more than one file for a builder
 - Interfaces left for the builder to guess
 
