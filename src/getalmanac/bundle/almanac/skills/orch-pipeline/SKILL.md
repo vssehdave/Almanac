@@ -63,13 +63,13 @@ Each phase hands off; none is done inline by the lead.
 - **5. Review.** `almanac:lean-review` on the diff. If the diff
   touches a security trigger, weigh its safety checks first.
 - **6. Commit and gate.** Conventional commits, one per logical chunk. -> GATE 2.
-  Then send `almanac:inspector` once, last, on the committed change. It pushes
-  and opens the PR.
+  Then tell the owner to run `/inspect` once, last, on the committed change. It
+  pushes and opens the PR.
 
 ## Concurrency cap
 
 Any number of Haiku agents (builder, handyman, surveyor), at most two Sonnet
-(architect, tdd-guide, planner), one Opus (inspector). Never more than 6
+(architect, tdd-guide, planner). Never more than 6
 sub-agents at once.
 
 ## The two gates
@@ -94,6 +94,6 @@ external API calls, cryptography, or secrets.
 
 - the size tier was stated and matched the work
 - both gates were honored
-- the inspector ran once, last, on the committed change
+- `/inspect` ran once, last, on the committed change
 - new or changed behavior has tests that ran
 - commits are conventional and scoped to one logical change

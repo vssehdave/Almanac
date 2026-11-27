@@ -104,7 +104,7 @@ You are done when:
 - Surveyors report no issues worth fixing.
 - Intended behavior is the same as when you started, apart from bugs the refactor fixed. Test this at the end.
 
-Your decision log and fix list fall under the Opus review gate: run `memory_review` before the lead relies on them. Never commit; the lead sends `almanac:inspector` once, last, on the committed change.
+Your decision log and fix list fall under the Opus review gate: run `memory_review` before the lead relies on them. Never commit; the owner runs `/inspect` once, last, on the committed change.
 
 ## Skills to use
 
