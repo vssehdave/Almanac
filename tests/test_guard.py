@@ -106,5 +106,70 @@ class NoVerifyGuard(unittest.TestCase):
         self.assertIn("skips git hooks", run("no_verify_guard.py", "Bash", command="git commit -n")[1])
 
 
+class DestructiveGuard(unittest.TestCase):
+    def run_full(self, command, tool="Bash"):
+        done = subprocess.run([sys.executable, os.path.join(SCRIPTS, "no_verify_guard.py")],
+                              input=json.dumps({"tool_name": tool, "tool_input": {"command": command}}),
+                              capture_output=True, text=True)
+        return done.returncode, done.stdout, done.stderr
+
+    def asks(self, command, tool="Bash"):
+        code, out, _ = self.run_full(command, tool)
+        self.assertEqual(code, 0, command)
+        return json.loads(out)["hookSpecificOutput"]["permissionDecision"]
+
+    def test_destructive_commands_ask(self):
+        for command in ("rm -rf build", "rm -fr x", "rm -r -f x", "sudo rm -rf /tmp/x", "env git reset --hard",
+                        "git reset --hard HEAD~1", "git clean -fd", "git clean -xdf", "git checkout -- .",
+                        "git restore .", "git branch -D feat", "git push --force origin main", "git push -f",
+                        'sqlite3 a.db "DROP TABLE t"', 'psql -c "drop database x"',
+                        'sqlite3 a.db "ALTER TABLE t DROP COLUMN c"', "cd x && rm -rf y",
+                        "git -C . reset --hard", "git -c x=y clean -fd", "bash -c 'rm -rf x'", "echo $(rm -rf x)",
+                        "FOO=1 rm -rf x", "env FOO=1 rm -rf x", "sudo -u root rm -rf x", "(rm -rf x)",
+                        "/bin/rm -rf x", "ri -r -fo x", "rm -Recurse -Force x", "git branch -Df x",
+                        "git branch --delete --force x", "git restore -- .", "git stash clear",
+                        "git push origin +main", 'sqlite3 db "DROP TABLE x"', "true & rm -rf x",
+                        "sleep 1 & git reset --hard", "Remove-Item -rec -for x", 'eval "rm -rf x"', "exec rm -rf x",
+                        '"rm" -rf x', "find . -exec rm -rf {} +", 'pwsh -c "Remove-Item -Recurse -Force x"',
+                        'cmd /c "rmdir /s /q x"', "rd /s x", "cmd /c rmdir /s /q x",
+                        "pwsh -c Remove-Item -Recurse -Force x", "find . -delete", "find . -name '*.o' -delete",
+                        "cat <<'EOF'\nEOF\n`rm -rf x`", "echo \"<<'EOF'\"\n$(rm -rf x)\nEOF",
+                        "bash <<'EOF'\necho $(rm -rf x)\nEOF", "cat <<'EOF' | sh\nx=$(rm -rf y)\nEOF"):
+            with self.subTest(command=command):
+                self.assertEqual(self.asks(command), "ask")
+
+    def test_powershell_remove_item_recurse_force_asks(self):
+        self.assertEqual(self.asks("Remove-Item -Recurse -Force build", "PowerShell"), "ask")
+
+    def test_safe_commands_are_allowed(self):
+        for command in ("rm file.txt", "rm -r build", "git reset --soft HEAD~1", "git clean -n", "git push",
+                        "git push origin main", "git branch -d feat", 'echo "rm -rf /"', "git restore src/a.py",
+                        "git checkout main", "grep -rn 'DROP TABLE' src", 'gh pr create --body "removes DROP TABLE call"',
+                        'git commit -m "fix; drop table users"', "git push --force-with-lease", "echo rm -rf",
+                        "docker rm -f c", "git commit -F - <<'EOF'\nfix: avoid `git reset --hard` here\nEOF",
+                        "echo a & echo b", "cmd 2>&1 | tail", "cmd &> out.log", "curl 'http://x/?a=1&b=2'",
+                        "eval $(ssh-agent)", "find . -name x",
+                        "cat <<'EOF'\nEOF\necho ok", "git commit -F - <<'EOF'\nnote: $(git reset --hard)\nEOF"):
+            with self.subTest(command=command):
+                code, out, _ = self.run_full(command)
+                self.assertEqual(code, 0, command)
+                self.assertEqual(out.strip(), "", command)
+
+    def test_order_no_verify_after_destructive_returns_the_no_verify_reason(self):
+        code, err = run("no_verify_guard.py", "Bash", command="rm -rf x; git commit --no-verify")
+        self.assertEqual(code, 2)
+        self.assertIn("skips git hooks", err)
+
+    def test_guardlib_script_prints_ask_and_no_verify_exits_2(self):
+        code, out, _ = self.run_full("rm -rf x")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["hookSpecificOutput"]["permissionDecision"], "ask")
+        self.assertEqual(run("no_verify_guard.py", "Bash", command="git commit --no-verify -m x")[0], 2)
+
+    def test_reason_asks_the_user(self):
+        code, out, _ = self.run_full("git reset --hard")
+        self.assertIn("ask the user to approve it", out)
+
+
 if __name__ == "__main__":
     unittest.main()
