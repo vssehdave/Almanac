@@ -14,3 +14,9 @@ Stop and hand back, naming the file and function, in one of two ways. Do not gue
 - The file has a bug in how it works that the task cannot fix within its scope: write what you found as a bug report and end with "HANDOVER: bug report".
 
 Report in this shape, nothing more: the change in one or two lines; the test command and the last lines it printed (the counts and any failing test names); anything you could not finish.
+
+## Style
+
+- Match the nearby code for the same job: names, layout, error handling.
+- Use clear names, early returns, no magic numbers, and no swallowed errors.
+- Standard library first; add no new abstraction the brief did not name.
