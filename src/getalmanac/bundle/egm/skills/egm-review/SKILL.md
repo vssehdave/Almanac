@@ -44,6 +44,19 @@ the identical text, placed first in each brief so the prompt cache hits:
 
 If a memory tool is unavailable, say so in the packet and go on without it.
 
+## Plan mode
+
+Plan mode EGM (egm-review): layers run in order zoom-out, implementation-readiness, design, codebase-details. One layer per owner message, never two at once, never pass a model. Show findings in chat with a proposed answer to each, and rewrite the plan file. Use egm-brainstorm or egm-draft first only if the idea has no shape yet.
+
+In plan mode, skip the presets, Steps 1-4, stages 5-9, the loop, egm-resolve, the synthesizer and the report files.
+
+Each layer applies its standard:
+
+- zoom-out: zoom-out-standard
+- implementation-readiness: implementation-readiness-standard
+- codebase-details: implementation-readiness-standard
+- design: feature-spec-standard
+
 ## Execution Constraints (CRITICAL)
 
 1.  **Artifact-First Delivery (MANDATORY)**: You are **STRICTLY FORBIDDEN** from

@@ -12,6 +12,8 @@ description: >-
 
 # Goldfish Review: Loop (Orchestration Driver)
 
+In plan mode, do not run this loop; see the Plan mode section of egm-review.
+
 Read `${CLAUDE_PLUGIN_ROOT}/docs/claude.md` first.
 
 ## Overview
