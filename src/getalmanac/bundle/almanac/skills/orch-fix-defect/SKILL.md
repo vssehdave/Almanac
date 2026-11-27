@@ -22,5 +22,5 @@ Thin wrapper over `orch-pipeline`.
 
 1. Run the `orch-pipeline` engine with the settings above (agent map, concurrency cap and the two gates are there). Run `playbook_find` first.
 2. If the root cause is unclear, `memory_search` then `almanac:surveyor` before the red test. Debugging, and any bug report a builder hands back, goes to `almanac:architect`.
-3. Stop at Gate 1 (only if a plan was produced) and Gate 2 (pre-commit); `almanac:inspector` runs once, last. Commit as `fix:`.
+3. Stop at Gate 1 (only if a plan was produced) and Gate 2 (pre-commit); the owner runs `/inspect` once, last. Commit as `fix:`.
 4. Run the safety checks of `almanac:lean-review` if the defect sits in a security-sensitive path.
