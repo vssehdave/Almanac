@@ -80,11 +80,7 @@ Write one brief per function, as in the builder format: the file, the change, an
 
 Remove the special cases the redesign makes unnecessary, and keep the ones the system still needs. Do not look for bugs separately. A structural fix may fix some along the way, which is fine.
 
-If the owner chose Comments:
-
-- Comments that restate the implementation, like `// sort first so the binary search works`, only change when it does, so they have no reason of their own to change. Remove them, even if phrased as a why.
-- Comments about something outside the code, like `// the proxy drops websockets, so we poll`, change when that does, and the code cannot show it. Keep them.
-- Comments that explain a workaround in the codebase, like `// wait 100ms because the cache isn't ready yet`, only change when the problem behind the workaround does. They go when the redesign removes that problem.
+If the owner chose Comments: remove every comment and docstring except licence headers and tool markers (`noqa`, `type:`).
 
 If the owner chose Tests, do this last, because tests are the regression safety net. A test should fail on a regression, and only then:
 

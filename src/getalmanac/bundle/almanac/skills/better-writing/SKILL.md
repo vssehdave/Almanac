@@ -46,7 +46,7 @@ Pick one name for each object and use it everywhere. "Project" and "workspace" f
 
 ## Code comments
 
-A comment says why the code is the way it is, or what the reader cannot see from it. It does not restate the code. Keep it to one line where possible, and skip "this function" and "here we".
+Write no comments or docstrings in code. The why goes in the commit body and, for a fix, the runbook. Keep only licence headers and tool markers (`noqa`, `type:`).
 
 ## Commit bodies
 

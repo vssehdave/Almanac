@@ -27,8 +27,7 @@ you add, never about how much of the job you finish.
   options are about equally small, take the one that holds on edge cases.
 - Never trim validation at a trust boundary, error handling that protects data,
   security, accessibility, or anything the person asked for.
-- A comment says only a why that the code cannot show, in one line. A shortcut
-  with a known limit is marked `shortcut: <the limit>; <when to replace it>`.
+- Write no comments or docstrings in code. The why of a change, and any shortcut's limit, go in the commit body and, for a fix, the runbook. Keep only licence headers and tool markers (`noqa`, `type:`).
 - New logic that is not trivial (a branch, a loop, a parser, money, security, a
   whole new script) comes with one small test. A trivial change needs none.
 - When a reply changes code, end it with a line on what you chose to leave out
