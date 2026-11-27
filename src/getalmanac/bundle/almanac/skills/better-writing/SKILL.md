@@ -50,9 +50,9 @@ A comment says why the code is the way it is, or what the reader cannot see from
 
 ## Commit bodies
 
-- Subject: short and imperative, such as "Add retry to upload".
+- Subject: follow the repository's own commit rules (for example Conventional Commits, `type(scope): description`); imperative and short.
 - Body: what changed and why, in plain sentences, wrapped near 72 columns.
-- Leave out the file list; the diff already shows it. Leave out tool or session names unless the reader needs them.
+- Leave out the file list; the diff already shows it. Leave out tool, session and attribution lines.
 
 ## Errors and failures
 

@@ -12,8 +12,8 @@ Measure before you change anything. A number without a baseline proves nothing.
 1. **Pick the target.** One function, one script, or the test suite. Write down
    the exact input, the machine, the Python version, and whether the run is
    warm (after one throwaway run) or cold (fresh process).
-2. **Measure the baseline first** and save it to `benchmarks/baseline.json`
-   (commit it, so the team compares against the same numbers).
+2. **Measure the baseline first** and record it (for example `benchmarks/baseline.json`)
+   and hand it to the lead, who decides whether to commit it.
 3. **Time it** with the standard library:
    - One function: `timeit.repeat(...)`, or `time.perf_counter()` around the call.
    - A whole script: `time.perf_counter()` around `subprocess.run([...])`.
