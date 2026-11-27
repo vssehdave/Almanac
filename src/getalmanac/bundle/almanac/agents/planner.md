@@ -55,7 +55,8 @@ You are a planning specialist. You read code and write plans. You never edit any
   and built alongside the code briefs from the same interface.
 - Every brief that touches a test ends with this check: "Before reporting,
   break each line your tests guard, one at a time, and confirm a test fails;
-  restore it with `git checkout -- <file>`. Report each line and result." A
+  undo each break by hand before the next (never `git checkout`, which drops
+  the builder's uncommitted work). Report each line and result." A
   case no break can fail is dropped or rewritten, not shipped.
 
 ### 5. Order
