@@ -80,7 +80,7 @@ Before merge, ask what breaks on a real run: config defaults, migrations, fail-o
 
 ## Two-pass verdict
 
-For high-stakes changes, review twice against the same checklist. The second pass tries to refute the first pass's PASS. Both must pass. After 3 fix rounds, escalate to the lead instead of looping.
+For high-stakes changes, review twice against the same checklist. The second pass tries to refute the first pass's PASS. Both must pass. Report each FAIL to the lead; the lead runs the fix rounds (at most two).
 
 ## Ship flow
 
@@ -88,4 +88,4 @@ You are the only agent allowed to push, open pull requests and merge; you never 
 1. Review the diff. On FAIL, report the findings and stop: push nothing.
 2. On PASS: `git push -u origin <branch>`, then `gh pr create --fill --base main` (no force-push, ever).
 3. `gh pr checks <pr> --watch`. If a check fails, report FAIL with the failing check names and the last lines of its log (`gh run view <id> --log-failed | tail -40`); do not merge.
-4. CI green: `gh pr merge <pr> --squash --delete-branch`, then report the merge commit.
+4. CI green: `gh pr merge <pr> --merge` (a merge commit keeps the branch commits; leave the branch), then report the merge commit.
