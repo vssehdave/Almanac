@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 from . import report
 from .memory import clean
-from .project import normalize
+from .project import describe, normalize
 
 SCHEMA = """
 create table if not exists codeedit (
@@ -43,13 +43,16 @@ def setup(store):
     with store.lock:
         store.db.executescript(SCHEMA)
         have = {row["name"] for row in store.db.execute("pragma table_info(codeedit)")}
-        for column in ("commit_id", "branch"):  # added after the first release: nullable, filled by `code sync`
+        for column in ("commit_id", "branch", "rel"):  # added after the first release: nullable, filled by `code sync`
             if column not in have:
                 store.db.execute(f"alter table codeedit add column {column} text")
+        store.db.execute("create index if not exists codeedit_rel on codeedit (project, rel collate nocase)")
+        store.db.execute("create index if not exists codeedit_path_nocase on codeedit (path collate nocase)")
 
 
-def _head_branch(path):
-    """Branch checked out in the git checkout holding `path`, from files only; None if detached, none found or unreadable."""
+def _checkout(path):
+    """(top, branch) of the git checkout holding `path`: top is its normalized folder, branch is from files only and None if
+    detached; (None, None) if none found or unreadable."""
     folder = os.path.dirname(os.path.abspath(path))
     try:
         while True:
@@ -61,17 +64,31 @@ def _head_branch(path):
                 with open(dot, encoding="utf-8", errors="replace") as handle:
                     text = handle.read().strip()
                 if not text.startswith("gitdir:"):
-                    return None
+                    return None, None
                 gitdir = os.path.join(folder, text[7:].strip())
                 break
             if os.path.dirname(folder) == folder:
-                return None
+                return None, None
             folder = os.path.dirname(folder)
         with open(os.path.join(gitdir, "HEAD"), encoding="utf-8", errors="replace") as handle:
             head = handle.read().strip()
     except OSError:
+        return None, None
+    return normalize(folder), (head[16:] if head.startswith("ref: refs/heads/") else None)
+
+
+def _head_branch(path):
+    """Branch checked out in the git checkout holding `path`, from files only; None if detached, none found or unreadable."""
+    return _checkout(path)[1]
+
+
+def _relpath(path, top):
+    """`path` relative to the checkout `top`, in the spelling of `path`; None if it is not under `top`."""
+    if not top:
         return None
-    return head[16:] if head.startswith("ref: refs/heads/") else None
+    if _same(path).startswith(_same(top) + os.sep):
+        return path[len(top) + 1:]
+    return None
 
 
 def _pairs(tool, data):
@@ -118,19 +135,28 @@ def capture(store, convo, project, node, group, at):
             kind, pairs, content, whole = found
             path = normalize(path)
             digest = hashlib.sha1((path + "\0" + whole).encode("utf-8", "replace")).hexdigest()
+            top, branch = _checkout(path)
             store.run(
-                "insert into codeedit (tool_use_id, ts, project, convo, node, path, kind, tool, status, edits, content, chash, size, branch) "
-                "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict (tool_use_id) do update set "
+                "insert into codeedit (tool_use_id, ts, project, convo, node, path, kind, tool, status, edits, content, chash, size, branch, rel) "
+                "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict (tool_use_id) do update set "
                 "node = excluded.node, convo = excluded.convo, status = case when codeedit.status in ('reverted', 'duplicate') "
-                "then codeedit.status else excluded.status end",  # a finished exchange replaces a partial one
+                "then codeedit.status else excluded.status end, rel = coalesce(excluded.rel, codeedit.rel)",  # a finished exchange replaces a partial one
                 (call, stamp, project, convo, node, path, kind, block["name"], "ok" if call in failed else "unknown",
                  json.dumps([[clean(old[:KEEP]), clean(new[:KEEP])] for old, new in pairs]),
                  None if content is None else clean(content[:KEEP]) if len(content) <= KEEP else None, digest, len(whole),
-                 _head_branch(path)))
+                 branch, _relpath(path, top)))
 
 
 def history(store, path, limit=10):
-    return store.run("select * from codeedit where path = ? and status != 'duplicate' order by ts desc, rowid desc limit ?", (normalize(path), limit))
+    path = normalize(os.path.abspath(normalize(path)))
+    top, _ = _checkout(path)
+    rel = _relpath(path, top)
+    try:
+        key = describe(os.path.dirname(path))[0] if rel else None  # the project key; describe runs git, so any failure means no match by rel
+    except Exception:
+        key = None
+    return store.run("select * from codeedit where status != 'duplicate' and (path = ? collate nocase or (project = ? and rel = ? collate nocase)) "
+                     "order by ts desc, rowid desc limit ?", (path, key, rel, limit))
 
 
 def hints(store, project, text, limit=3):
@@ -224,12 +250,22 @@ def _rels(top):
     return sorted({_same(r) for r in roots}, key=len, reverse=True)
 
 
-def _rel(path, roots):
+def _legacy_rel(path, roots, top):
+    """Repo-relative spelling of a row stored before `rel` existed, or "" when the row has no repo-relative path. Removed worktrees
+    sit beside the live ones, so a path under a sibling folder is that worktree's file."""
     key = _same(path)
     for root in roots:
         if key.startswith(root + os.sep):
-            return key[len(root) + 1:]
-    return key
+            return key[len(root) + 1:].replace(os.sep, "/")
+    main = _same(top)
+    # worktrees kept beside the main checkout would claim every neighbouring repo, so their parent does not count
+    parents = {os.path.dirname(r) for r in roots if r != main} - {os.path.dirname(main)}
+    parts = key.split(os.sep)
+    for i in range(1, len(parts) - 1):  # from 1: the drive or root alone is never a worktree
+        folder = os.sep.join(parts[:i + 1])
+        if os.path.dirname(folder) in parents and folder not in roots:
+            return "/".join(parts[i + 1:])
+    return ""
 
 
 SLACK = timedelta(minutes=10)  # an edit is stamped with its exchange, which can end after the commit made in it
@@ -267,11 +303,11 @@ def _tidy(store, project):
             stack.append(row)
 
 
-def _outside(store, project, path, stamp, status, ident, chash, subject, sha, branch):
+def _outside(store, project, path, stamp, status, ident, chash, subject, sha, branch, rel):
     """One row for a change Claude did not make. Returns 1 if it is new."""
     store.run("insert or ignore into codeedit (tool_use_id, ts, project, convo, node, path, kind, tool, status, content, chash, size, "
-              "commit_id, branch) values (?, ?, ?, 0, 0, ?, 'outside', 'git', ?, ?, ?, 0, ?, ?)",
-              (ident, stamp, project, path, status, subject, chash, sha, branch))
+              "commit_id, branch, rel) values (?, ?, ?, 0, 0, ?, 'outside', 'git', ?, ?, ?, 0, ?, ?, ?)",
+              (ident, stamp, project, path, status, subject, chash, sha, branch, rel))
     return store.run("select changes() as n")[0]["n"]
 
 
@@ -286,6 +322,8 @@ def sync(store, project, folder):
     _tidy(store, project)
     head = _git(top, "rev-parse", "HEAD")
     roots = _rels(top)
+    for row in store.run("select rowid, path from codeedit where project = ? and rel is null and kind != 'outside'", (project,)):
+        store.run("update codeedit set rel = ? where rowid = ?", (_legacy_rel(row["path"], roots, top), row["rowid"]))
     made = {"linked": 0, "outside": 0, "uncommitted": 0}
     since = None
     marker = store.run("select sha, ts from codesync where project = ?", (project,))
@@ -297,24 +335,27 @@ def sync(store, project, folder):
         log = _git(top, "log", "--all", "--date-order", "--reverse", "--no-renames", "--name-only", "--format=%x1e%H%x1f%cI%x1f%s",
                    f"^{marker[0]['sha']}" if known else f"--since={(_when(first) - SLACK).isoformat()}")
         pending = {}
-        for row in store.run("select rowid, path, ts, branch, tool_use_id from codeedit where project = ? and commit_id is null and kind != 'outside' "
+        for row in store.run("select rowid, path, rel, ts, branch, tool_use_id from codeedit where project = ? and commit_id is null and kind != 'outside' "
                              "and status != 'duplicate' order by ts, rowid", (project,)):
-            pending.setdefault(_rel(row["path"], roots), []).append(row)
+            if row["rel"]:  # no repo-relative path: it can never link
+                pending.setdefault(os.path.normcase(row["rel"]), []).append(row)
         for chunk in (log or "").split("\x1e")[1:]:
             head_line, _, names = chunk.partition("\n")
             sha, stamp, subject = (head_line.split("\x1f") + ["", ""])[:3]
             for name in filter(None, names.splitlines()):
                 path = normalize(top + "/" + name)
-                took = [r for r in pending.get(_rel(path, roots), []) if _when(r["ts"]) <= _when(stamp) + SLACK]
+                key = os.path.normcase(name)
+                took = [r for r in pending.get(key, []) if _when(r["ts"]) <= _when(stamp) + SLACK]
                 for r in took:
                     store.run("update codeedit set commit_id = ?, branch = ? where rowid = ?",
                               (sha, r["branch"] or _branch(top, sha), r["rowid"]))
-                    pending[_rel(path, roots)].remove(r)
+                    pending[key].remove(r)
                 made["linked"] += len(took)
                 if not took and not store.run("select 1 from codeedit where commit_id = ? and path = ?", (sha, path)):
                     made["outside"] += _outside(
                         store, project, path, _when(stamp).astimezone(timezone.utc).isoformat(timespec="seconds"), "committed",
-                        f"outside:{sha}:{path}", hashlib.sha1((path + sha).encode("utf-8", "replace")).hexdigest(), clean(subject), sha, _branch(top, sha))
+                        f"outside:{sha}:{path}", hashlib.sha1((path + sha).encode("utf-8", "replace")).hexdigest(), clean(subject), sha,
+                        _branch(top, sha), name)
     parsed = _imports(store, project, top, since)
     for line in (_git(top, "status", "--porcelain", "-uall", "--no-renames") or "").splitlines():
         path = normalize(top + "/" + line[3:].strip('"'))
@@ -329,7 +370,8 @@ def sync(store, project, folder):
             stamp = datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(timespec="seconds")
         except OSError:
             digest, stamp = "deleted", datetime.now(timezone.utc).isoformat(timespec="seconds")
-        made["uncommitted"] += _outside(store, project, path, stamp, "uncommitted", f"uncommitted:{path}:{digest}", digest, None, None, _head_branch(path))
+        made["uncommitted"] += _outside(store, project, path, stamp, "uncommitted", f"uncommitted:{path}:{digest}", digest, None, None,
+                                        _head_branch(path), line[3:].strip('"'))
     if head:
         store.run("insert into codesync (project, sha, ts) values (?, ?, ?) "
                   "on conflict (project) do update set sha = excluded.sha, ts = excluded.ts",
