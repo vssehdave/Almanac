@@ -50,6 +50,7 @@ DEFAULTS = {
         "sub_skill_chars": 0,  # description characters kept per listed skill in a sub-agent thread (0: names only; the full text shows on a match)
         "sub_cold": ["Agent", "Task"],  # tools also deferred in sub-agent threads (none of 5,000 logged sub-agent requests spawned one)
         "sub_ttl": "1h",  # cache life of a sub-agent's tools and system prompt: "1h" costs 2x to write instead of 1.25x but survives a pause; "" keeps the client's 5 minutes
+        "swarm_wait_seconds": 10,  # sub-agents started together: the first sends, the rest wait up to this long for its first reply so they read its cached startup (0: off)
         "system_prefix": False,  # move the stable startup sections to the end of the system prompt so a new conversation can read them from cache (sysprefix.py)
     },
     "tools": {
