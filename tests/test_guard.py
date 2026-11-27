@@ -131,7 +131,10 @@ class DestructiveGuard(unittest.TestCase):
                         "git push origin +main", 'sqlite3 db "DROP TABLE x"', "true & rm -rf x",
                         "sleep 1 & git reset --hard", "Remove-Item -rec -for x", 'eval "rm -rf x"', "exec rm -rf x",
                         '"rm" -rf x', "find . -exec rm -rf {} +", 'pwsh -c "Remove-Item -Recurse -Force x"',
-                        'cmd /c "rmdir /s /q x"', "rd /s x"):
+                        'cmd /c "rmdir /s /q x"', "rd /s x", "cmd /c rmdir /s /q x",
+                        "pwsh -c Remove-Item -Recurse -Force x", "find . -delete", "find . -name '*.o' -delete",
+                        "cat <<'EOF'\nEOF\n`rm -rf x`", "echo \"<<'EOF'\"\n$(rm -rf x)\nEOF",
+                        "bash <<'EOF'\necho $(rm -rf x)\nEOF", "cat <<'EOF' | sh\nx=$(rm -rf y)\nEOF"):
             with self.subTest(command=command):
                 self.assertEqual(self.asks(command), "ask")
 
@@ -144,7 +147,9 @@ class DestructiveGuard(unittest.TestCase):
                         "git checkout main", "grep -rn 'DROP TABLE' src", 'gh pr create --body "removes DROP TABLE call"',
                         'git commit -m "fix; drop table users"', "git push --force-with-lease", "echo rm -rf",
                         "docker rm -f c", "git commit -F - <<'EOF'\nfix: avoid `git reset --hard` here\nEOF",
-                        "echo a & echo b", "cmd 2>&1 | tail"):
+                        "echo a & echo b", "cmd 2>&1 | tail", "cmd &> out.log", "curl 'http://x/?a=1&b=2'",
+                        "eval $(ssh-agent)", "find . -name x",
+                        "cat <<'EOF'\nEOF\necho ok", "git commit -F - <<'EOF'\nnote: $(git reset --hard)\nEOF"):
             with self.subTest(command=command):
                 code, out, _ = self.run_full(command)
                 self.assertEqual(code, 0, command)
