@@ -299,6 +299,46 @@ class CodeSyncTest(Case):
         self.assertIsNone(row["commit_id"])
         self.assertEqual(row["rel"], "")
 
+    def test_history_resolves_a_relative_path_against_the_working_folder(self):
+        self.record("e1", "a.py", "a = 1", "a = 2", "2026-01-01T10:00:00+00:00")
+        here = os.getcwd()
+        self.addCleanup(os.chdir, here)
+        os.chdir(self.repo)
+        self.assertEqual([r["tool_use_id"] for r in codemem.history(self.store, "a.py")], ["e1"])
+
+    def test_row_marked_without_a_repo_path_is_not_looked_at_again(self):
+        loose = project.normalize(os.path.realpath(os.path.join(self.tmp, "loose")))
+        os.makedirs(loose)
+        codemem.capture(self.store, 1, self.key, 1, [use("n1", "Edit", file_path=loose + "/notes.md", old_string="a", new_string="b"), out("n1")],
+                        datetime.fromisoformat("2026-01-01T10:00:00+00:00").timestamp())
+        self.commit("a.py", "a = 1\n", "2026-01-01T09:00:00+00:00")
+        self.sync()
+        self.assertEqual(self.store.run("select rel from codeedit where tool_use_id = 'n1'")[0][0], "")
+        with mock.patch.object(codemem, "_legacy_rel", return_value="") as legacy:
+            self.sync()
+        legacy.assert_not_called()
+        row = self.store.run("select rel, commit_id from codeedit where tool_use_id = 'n1'")[0]
+        self.assertEqual(row["rel"], "")
+        self.assertIsNone(row["commit_id"])
+
+    def test_outside_commit_row_stores_the_git_path_name_as_rel(self):
+        self.commit("a.py", "a = 1\n", "2026-01-01T09:00:00+00:00")
+        self.record("e1", "a.py", "a = 1", "a = 2", "2026-01-01T10:00:00+00:00")
+        self.commit("a.py", "a = 2\n", "2026-01-01T11:00:00+00:00", "use two")
+        self.commit("a.py", "a = 3\n", "2026-01-01T12:00:00+00:00", "by hand")
+        self.sync()
+        rows = self.store.run("select rel from codeedit where kind = 'outside' and content = 'by hand'")
+        self.assertEqual([r["rel"] for r in rows], ["a.py"])
+
+    @unittest.skipUnless(os.name == "nt", "links through os.path.normcase, which only folds case on Windows")
+    def test_sync_links_a_row_whose_rel_differs_from_git_only_by_case(self):
+        self.commit("a.py", "a = 1\n", "2026-01-01T09:00:00+00:00")
+        self.record("e1", "a.py", "a = 1", "a = 2", "2026-01-01T10:00:00+00:00")
+        self.commit("a.py", "a = 2\n", "2026-01-01T11:00:00+00:00", "use two")
+        self.store.run("update codeedit set rel = 'A.PY'")
+        self.sync()
+        self.assertIsNotNone(self.store.run("select commit_id from codeedit where tool_use_id = 'e1'")[0][0])
+
     def test_edit_outside_any_repo_has_no_rel(self):
         loose = project.normalize(os.path.realpath(os.path.join(self.tmp, "loose")))
         os.makedirs(loose)
