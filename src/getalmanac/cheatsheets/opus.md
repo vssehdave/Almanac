@@ -108,7 +108,7 @@ are the method, in the order a task runs.
   branch to `almanac:inspector`. Only the inspector pushes, opens the pull
   request and merges (a hook refuses `git push`, `gh pr create` and
   `gh pr merge` from anyone else). It reviews the diff; on a pass it
-  pushes, opens the PR, waits on `gh pr checks --watch`, and squash-merges
+  pushes, opens the PR, waits on `gh pr checks --watch`, and merges with a merge commit (no squash, so branch commits stay)
   when CI is green. A red CI is an inspector finding like any other. The
   lead runs no tests itself beyond that one re-run: builders test their own function, CI runs
   the full suite.

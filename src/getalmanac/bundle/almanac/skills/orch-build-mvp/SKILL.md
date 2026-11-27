@@ -21,6 +21,6 @@ Thin wrapper over `orch-pipeline`.
 
 1. Run the `orch-pipeline` engine with the settings above (agent map, concurrency cap and the two gates are there). Run `playbook_find` first.
 2. Plan with `almanac:planner`: one checklist of one-file builder briefs per slice.
-3. Build each slice test-first: `almanac:tdd-guide` for the tests, `almanac:builder` per file. After each slice, run the document's acceptance checks with the slice's test command; a failure goes back to a builder, or to `almanac:architect` if the cause is unclear. Repeat until the slice passes or stops improving, then report to the owner.
+3. Build each slice test-first: `almanac:tdd-guide` for the tests, `almanac:builder` per function. After each slice, run the document's acceptance checks with the slice's test command; a failure goes back to a builder, or to `almanac:architect` if the cause is unclear. Repeat until the slice passes or stops improving, then report to the owner.
 4. Stop at Gate 1 (slice plan) and Gate 2 (pre-commit). Commit the scaffold and each slice as separate `feat:` commits; `almanac:inspector` runs once, last, on the final committed change.
 5. Run the safety checks of `almanac:lean-review` for any slice touching a security trigger.

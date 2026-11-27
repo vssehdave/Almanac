@@ -50,12 +50,12 @@ Each phase hands off; none is done inline by the lead.
   trace the existing code. Use the `search-first` skill when a new dependency
   or utility is in play.
 - **2. Plan.** Send `almanac:planner`. Its output is a checklist of builder
-  briefs, one file per item (`path: the change; test: command`), in build
+  briefs, one function per item (`path::function: the change; test: command`), in build
   order. -> GATE 1.
 - **3. Scaffold.** `orch-build-mvp` only: build the first end-to-end slice the
   same way as phase 4.
 - **4. Implement (TDD).** Write the failing test first with `almanac:tdd-guide`,
-  then build to green: one `almanac:builder` per file (HANDOVER rules as in
+  then build to green: one `almanac:builder` per function (HANDOVER rules as in
   `agents/builder.md`: "HANDOVER: retry on sonnet" or "HANDOVER: bug report").
   Mechanical multi-file changes go to `almanac:handyman`. Debugging, a bug
   report a builder handed back, or edits that must land in several files at
