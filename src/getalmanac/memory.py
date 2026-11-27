@@ -62,6 +62,8 @@ create table if not exists fact (
 );
 create index if not exists fact_node on fact (node);
 create virtual table if not exists fact_fts using fts5(text, tokenize='porter unicode61');
+create table if not exists runbook (id integer primary key, project text not null, error text not null, symptom text not null, cause text not null, fix text not null, created real not null);
+create index if not exists runbook_project on runbook (project);
 create table if not exists raw (
     lane text not null, tool_use_id text not null, size integer not null, ts real not null, data blob not null,
     primary key (lane, tool_use_id)
@@ -127,6 +129,13 @@ def _first_line(text: str, limit=100) -> str:
         if len(line) > 2 and not _ROUTING.match(line):
             return line[:limit].rstrip() + ("…" if len(line) > limit else "")
     return ""
+
+
+RUNBOOK_MIN = 12
+
+
+def _errkey(text: str) -> str:
+    return " ".join(re.sub(r"\d+", "#", text.lower()).split())
 
 
 def exchange(group) -> dict:
@@ -1064,6 +1073,17 @@ class Memory:
             self.store.many("insert into pin_item (pin, seq, text) values (?, ?, ?)", [(pin, n, t) for n, t in enumerate(items, 1)])
         return pin
 
+    def runbook_add(self, project, error, symptom, cause, fix) -> int:
+        fields = [" ".join(str(x).split()) for x in (project, error, symptom, cause, fix)]
+        if not all(fields):
+            raise ValueError("a runbook needs a project, an error, a symptom, a cause and a fix")
+        first_line = next(line.strip() for line in str(error).splitlines() if line.strip())
+        project, _, symptom, cause, fix = fields
+        with self.store.lock:
+            runbook = self.store.db.execute("insert into runbook (project, error, symptom, cause, fix, created) values (?, ?, ?, ?, ?, ?)",
+                                            (project, first_line[:200], symptom[:500], cause[:500], fix[:500], time.time())).lastrowid
+        return runbook
+
     def pins(self, project) -> list:
         """The active pins of `project`, oldest first, each with its items (seq, text, done)."""
         out = []
@@ -1072,6 +1092,19 @@ class Memory:
             pin["items"] = [dict(r) for r in self.store.run("select seq, text, done from pin_item where pin = ? order by seq", (row["id"],))]
             out.append(pin)
         return out
+
+    def runbooks_for(self, project, text, limit=3) -> list:
+        if not project or not text:
+            return []
+        key = _errkey(text)
+        found = []
+        for row in self.store.run("select id, error, symptom, cause, fix, created from runbook where project = ? order by created desc, id desc", (project,)):
+            k = _errkey(row["error"])
+            if len(k) >= RUNBOOK_MIN and k in key:
+                found.append(dict(row))
+                if len(found) == limit:
+                    break
+        return found
 
     def pin_done(self, project, pin, item) -> str:
         """Mark item `item` (1-based) of pin `pin` done; the pin is dropped with its last open item. Returns a line for the person."""
@@ -1127,6 +1160,12 @@ class Memory:
             return text if len(text) <= n else text[:n - 1].rsplit(" ", 1)[0].rstrip(" ,;:-") + "…"
 
         lines, room = [head], limit_chars - len(head) - 1 - (len(hint) + 1 if hint else 0)
+        rb = self.runbooks_for(project, first_text)
+        if rb:
+            block = ("Runbooks matching this request:\n" + "\n".join(f"  {r['error']} → {r['cause']}; {r['fix']}" for r in rb))[:max(0, room - 1)]
+            if block:
+                lines.append(block)
+                room -= len(block) + 1
         pinned = "\n".join([] if sub else self.pin_lines(project))[:max(0, room - 1)]  # a pinned plan comes before the history; cut to the budget
         if pinned:
             lines.append(pinned)

@@ -24,3 +24,4 @@ Thin wrapper over `orch-pipeline`.
 2. If the root cause is unclear, `memory_search` then `almanac:surveyor` before the red test. Debugging, and any bug report a builder hands back, goes to `almanac:architect`.
 3. Stop at Gate 1 (only if a plan was produced) and Gate 2 (pre-commit); the owner runs `/inspect` once, last. Commit as `fix:`.
 4. Run the safety checks of `almanac:lean-review` if the defect sits in a security-sensitive path.
+5. After the fix is verified (the failing test now passes), call `memory_runbook_add` with the error line, the symptom, the cause and the fix.

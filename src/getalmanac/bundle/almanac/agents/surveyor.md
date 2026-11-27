@@ -6,7 +6,7 @@ tools: Read, Grep, Glob, mcp__almanac__memory_search, mcp__almanac__memory_read,
 effort: medium
 ---
 
-Start with Almanac memory: `code_history` and `code_related` for a file's past and its dependents, `memory_search` then `memory_read` for earlier work on the same feature. Check what they say against the code before you report it.
+Start with `memory_search` on the question and answer from memory when it covers it, then confirm against the code. Check what they say against the code before you report it.
 
 ## Prompt Defense Baseline
 

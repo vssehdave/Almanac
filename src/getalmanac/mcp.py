@@ -104,6 +104,13 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["title", "items"], "properties": {
          "title": {"type": "string"},
          "items": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"type": "string", "maxLength": 300}}}}},
+    {"name": "memory_runbook_add",
+     "description": "Save a verified fix as a runbook: the error line, the symptom, the cause and the fix. Call it only after the failing test now passes; a later request with the same error text gets it first.",
+     "inputSchema": {"type": "object", "required": ["error", "symptom", "cause", "fix"], "properties": {
+         "error": {"type": "string", "maxLength": 500},
+         "symptom": {"type": "string", "maxLength": 500},
+         "cause": {"type": "string", "maxLength": 500},
+         "fix": {"type": "string", "maxLength": 500}}}},
 ]
 
 
@@ -325,7 +332,7 @@ def call(memory, name, args, cwd) -> str:
                                                          max(1, min(100, int(args.get("limit") or 20)))))
     if name == "memory_review":  # the proxy files the review: it sees the model, this process does not
         return "Review noted. It counts only if an Opus model made this call."
-    if name in ("memory_pins", "memory_pin_done", "memory_pin_add"):
+    if name in ("memory_pins", "memory_pin_done", "memory_pin_add", "memory_runbook_add"):
         project = memory.projects.see(cwd, touch=False)
         if not project:
             return "No project is known for this folder."
@@ -343,6 +350,15 @@ def call(memory, name, args, cwd) -> str:
                 return str(e)
             n = len([i for i in items if str(i).strip()])
             return f"Pinned plan {pin} with {n} items. memory_pin_done ticks them off."
+        if name == "memory_runbook_add":
+            fields = [args.get(k) for k in ("error", "symptom", "cause", "fix")]
+            if not all(isinstance(f, str) and f.strip() for f in fields):
+                return "memory_runbook_add needs error, symptom, cause and fix."
+            try:
+                n = memory.runbook_add(project, *fields)
+            except ValueError as e:
+                return str(e)
+            return f"Runbook {n} saved."
         return memory.pin_done(project, int(args.get("pin") or 0), int(args.get("item") or 0))
     raise KeyError(name)
 
