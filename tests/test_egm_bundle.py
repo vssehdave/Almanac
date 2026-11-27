@@ -1,3 +1,4 @@
+import importlib.util
 import re
 import unittest
 from pathlib import Path
@@ -9,6 +10,13 @@ MD_LINK = re.compile(r"\]\(([^)\s]+)\)")
 
 def _md_files():
     return sorted(EGM.rglob("*.md"))
+
+
+def _load_plan_mode():
+    spec = importlib.util.spec_from_file_location("plan_mode", EGM / "scripts" / "plan_mode.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class EgmBundleLinks(unittest.TestCase):
@@ -69,6 +77,20 @@ class EgmBundleLinks(unittest.TestCase):
                 self.assertIn("## Shared context packet", text)
                 for tool in ("memory_pins", "memory_search", "code_history"):
                     self.assertIn(tool, text)
+
+    def test_egm_review_plan_mode_section_precedes_constraints(self):
+        text = (EGM / "skills" / "egm-review" / "SKILL.md").read_text(encoding="utf-8")
+        plan = text.find("## Plan mode")
+        self.assertNotEqual(plan, -1)
+        self.assertLess(plan, text.find("## Execution Constraints"))
+
+    def test_egm_review_plan_mode_section_carries_nudge(self):
+        text = (EGM / "skills" / "egm-review" / "SKILL.md").read_text(encoding="utf-8")
+        start = text.find("## Plan mode")
+        self.assertNotEqual(start, -1)
+        end = text.find("\n## ", start)
+        section = text[start:] if end == -1 else text[start:end]
+        self.assertIn(_load_plan_mode().NUDGE, section)
 
 
 if __name__ == "__main__":

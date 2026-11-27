@@ -18,6 +18,8 @@ user's prompt.
 
 ## Stage order
 
+In plan mode, the hook-enforced layer chain in egm-review replaces the stages.
+
 Review stages 5, 6, 7, 8 and 9 run in sequence. Only reviewers within one stage
 run in parallel, at most 6 agents at once. Wait for every reviewer of a stage,
 write its report and finish required fixes before the next stage. Uninterrupted

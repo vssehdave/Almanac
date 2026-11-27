@@ -500,7 +500,29 @@ class PlanModeChain(unittest.TestCase):
             path = transcript(data, [PROMPT])
             result = run(stop(path, session_id=SID), data)
             self.assertEqual(result.returncode, 0)
+            self.assertNotEqual(result.stdout, "")
             self.assertEqual(json.loads(result.stdout)["decision"], "block")
+
+    def test_agent_events_in_default_mode_do_not_reset_chain(self):
+        with tempfile.TemporaryDirectory() as data:
+            run(prompt("plan", SID), data)
+            run(pre_agent(SID, "egm-zoom-out"), data)
+            run(post_agent(SID, "egm-zoom-out"), data)
+            run(pre_agent(SID, "general-purpose", mode="default"), data)
+            run(post_agent(SID, "general-purpose", mode="default"), data)
+            run(prompt("plan", SID), data)
+            self.assertAllowed(run(pre_agent(SID, "egm-implementation-readiness"), data))
+
+    def test_stop_without_mode_does_not_reset_chain(self):
+        with tempfile.TemporaryDirectory() as data:
+            run(prompt("plan", SID), data)
+            run(pre_agent(SID, "egm-zoom-out"), data)
+            run(post_agent(SID, "egm-zoom-out"), data)
+            event = json.loads(stop(transcript(data, [PROMPT]), session_id=SID))
+            del event["permission_mode"]
+            run(json.dumps(event), data)
+            run(prompt("plan", SID), data)
+            self.assertAllowed(run(pre_agent(SID, "egm-implementation-readiness"), data))
 
     def test_event_without_mode_does_not_reset_chain(self):
         with tempfile.TemporaryDirectory() as data:
