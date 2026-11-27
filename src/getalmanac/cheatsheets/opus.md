@@ -56,7 +56,7 @@ are the method, in the order a task runs.
 - All building goes to `almanac:builder` (Haiku), one file per agent: plan
   a change across ten files as ten briefs and run them in parallel in the
   same worktree. Builders do not commit: once all have reported and the
-  review passes, you run the full tests and commit the change yourself. Mechanical changes
+  review passes, you commit; the inspector pushes and CI runs the full suite. Mechanical changes
   across many files (renames, moved imports, reference updates) go to
   `almanac:handyman` (Haiku). `almanac:architect` (Sonnet) is only for
   debugging and for edits that must land in several files at once, such as
@@ -65,8 +65,8 @@ are the method, in the order a task runs.
   it kept failing at the task, so start a fresh `almanac:builder` on the
   same file with the model set to sonnet. "HANDOVER: bug report": the file
   has a bug in how it works, so start a fresh `almanac:architect` from the
-  report. Never switch a running agent's model. A builder runs its test
-  once and reports; a failure it reports goes to a fresh
+  report. Never switch a running agent's model. A builder runs the test
+  file for its own file once and reports; the lead never re-runs it; a failure it reports goes to a fresh
   `almanac:architect` with the failure text. The lead never fixes it.
 - Handyman commits its own mechanical change and reports in full; read its
   report and diff, no Sonnet re-review. On "HANDOVER: retry handyman at
@@ -76,6 +76,32 @@ are the method, in the order a task runs.
   it touches, in this form: `PYTHONPATH=src python -m unittest discover
   -s tests -p test_x.py` (PYTHONPATH=src makes the worktree's code load,
   not the main checkout's).
+- A builder brief has these parts, in order: the worktree path and branch;
+  the one file to edit; "no git, no commit"; the exact change, with names,
+  signatures, return shapes and limits (max items, lengths, timeouts) spelled
+  out; a "Not this:" line for what must stay untouched; the one test
+  command; and what to do if a test in a file it does not own fails (name
+  the file and line, then stop). End with "Your last message must be the
+  report." Builders run in parallel, so tell each one what the others are
+  changing and what interface they share.
+- Swarm by default. One file per builder, always, including a builder
+  you start straight from the main chat for a quick fix. A change that
+  touches N files is N builders, all sent in one message so they start
+  together and share one cached startup. Never give one builder two
+  files, and never edit a second file yourself to save a spawn.
+- A builder also needs: the exact names of the files the others are
+  writing, so it waits for their interfaces instead of guessing; any new
+  file's full interface (class, functions, return values) pasted in the
+  brief; test files as their own builder, briefed with the same
+  interface; and the Bash path form `/c/Users/...`, not `C:\...`.
+- After the builders: read their test results, commit, then send the
+  branch to `almanac:inspector`. Only the inspector pushes, opens the pull
+  request and merges (a hook refuses `git push`, `gh pr create` and
+  `gh pr merge` from anyone else). It reviews the diff; on a pass it
+  pushes, opens the PR, waits on `gh pr checks --watch`, and squash-merges
+  when CI is green. A red CI is an inspector finding like any other. The
+  lead runs no tests itself: builders test their own file, CI runs the
+  full suite.
 - At once: any number of Haiku agents, at most two Sonnet and one Opus. You
   keep the decisions, the briefs, the review and the report; a one-line
   edit you do yourself.
@@ -120,6 +146,12 @@ are the method, in the order a task runs.
 - Give an audit to a model that did not write the code, read-only, with the
   questions to answer and the failure modes to look for. It can run while the
   builder writes tests.
+- Inspector loop: when `almanac:inspector` does not pass, group its
+  findings by file and send one builder per file, all in one message,
+  each with its numbered fixes. Commit, then run the inspector again on
+  the new diff; it pushes and reads the new CI result. At most two fix rounds; if
+  it still fails, send the remaining findings to `almanac:architect` and
+  tell the owner.
 - Turn what an audit finds into a numbered list of fixes, each with the fix
   you chose, and send that to the builder. Do not forward a report and hope.
 
