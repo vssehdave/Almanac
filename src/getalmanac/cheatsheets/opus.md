@@ -53,8 +53,8 @@ are the method, in the order a task runs.
 
 ## Hand out the work
 
-- All building goes to `almanac:builder` (Haiku), one file per agent: plan
-  a change across ten files as ten briefs and run them in parallel in the
+- All building goes to `almanac:builder` (Haiku), one function per agent: plan
+  a change to ten functions as ten briefs and run them in parallel in the
   same worktree. Builders do not commit: once all have reported and the
   review passes, you commit; the inspector pushes and CI runs the full suite. Mechanical changes
   across many files (renames, moved imports, reference updates) go to
@@ -77,19 +77,23 @@ are the method, in the order a task runs.
   -s tests -p test_x.py` (PYTHONPATH=src makes the worktree's code load,
   not the main checkout's).
 - A builder brief has these parts, in order: the worktree path and branch;
-  the one file to edit; "no git, no commit"; the exact change, with names,
+  the one file and the one function to edit; "no git, no commit"; the exact change, with names,
   signatures, return shapes and limits (max items, lengths, timeouts) spelled
   out; a "Not this:" line for what must stay untouched; the one test
   command; and what to do if a test in a file it does not own fails (name
   the file and line, then stop). End with "Your last message must be the
   report." Builders run in parallel, so tell each one what the others are
   changing and what interface they share.
-- Swarm by default. One file per builder, always, including a builder
-  you start straight from the main chat for a quick fix. A change that
-  touches N files is N builders, all sent in one message so they start
-  together and share one cached startup. Never give one builder two
-  files, and never edit a second file yourself to save a spawn.
-- A builder also needs: the exact names of the files the others are
+- Swarm by default. One function per builder, always: a function,
+  method or class body is the unit, so a change to N functions is N
+  builders, even when several sit in one file, all sent in one message.
+  Module-level lines (imports, constants) go to the builder of the first
+  changed function in that file, named in its brief. A brand-new file is
+  one builder. Test files split by test class. Never give one builder two
+  functions, and never edit one yourself to save a spawn.
+- Builders sharing a file must use Edit on their own function only,
+  never Write; tell each the other functions being changed in that file.
+- A builder also needs: the exact files and functions the others are
   writing, so it waits for their interfaces instead of guessing; any new
   file's full interface (class, functions, return values) pasted in the
   brief; test files as their own builder, briefed with the same
