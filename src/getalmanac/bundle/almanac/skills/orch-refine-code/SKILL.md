@@ -22,5 +22,5 @@ Thin wrapper over `orch-pipeline`.
 
 1. Run the `orch-pipeline` engine with the settings above (agent map, concurrency cap and the two gates are there). Run `playbook_find` first.
 2. Mechanical moves and renames across files go to `almanac:handyman`; extractions to `almanac:builder` as two briefs (new function, then its caller).
-3. Stop at Gate 1 (restructure plan) and Gate 2 (pre-commit); `almanac:inspector` runs once, last.
+3. Stop at Gate 1 (restructure plan) and Gate 2 (pre-commit); the owner runs `/inspect` once, last.
 4. Commit as `refactor:`; the diff must be behavior-neutral.

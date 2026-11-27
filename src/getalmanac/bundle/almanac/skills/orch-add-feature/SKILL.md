@@ -23,5 +23,5 @@ Thin wrapper over `orch-pipeline`.
 1. Run the `orch-pipeline` engine with the settings above (agent map, concurrency cap and the two gates are there). Run `playbook_find` first.
 2. Classify size first; small features collapse toward 4 -> 5 -> 6.
 3. Research is `memory_search`, then `almanac:surveyor`; plan is `almanac:planner`.
-4. Stop at Gate 1 (plan approval) and Gate 2 (pre-commit); `almanac:inspector` runs once, last.
+4. Stop at Gate 1 (plan approval) and Gate 2 (pre-commit); the owner runs `/inspect` once, last.
 5. Run the safety checks of `almanac:lean-review` if the feature touches a security trigger.

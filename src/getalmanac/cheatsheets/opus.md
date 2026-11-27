@@ -56,7 +56,7 @@ are the method, in the order a task runs.
 - All building goes to `almanac:builder` (Haiku), one function per agent: plan
   a change to ten functions as ten briefs and run them in parallel in the
   same worktree. Builders do not commit: once all have reported and the
-  review passes, you commit; the inspector pushes and CI runs the full suite. Mechanical changes
+  review passes, you commit; the owner runs `/inspect`, which pushes and CI runs the full suite. Mechanical changes
   across many files (renames, moved imports, reference updates) go to
   `almanac:handyman` (Haiku). `almanac:architect` (Sonnet) is only for
   debugging and for edits that must land in several files at once, such as
@@ -104,12 +104,14 @@ are the method, in the order a task runs.
   file's full interface (class, functions, return values) pasted in the
   brief; test files as their own builder, briefed with the same
   interface; and the Bash path form `/c/Users/...`, not `C:\...`.
-- After the builders: read their test results, commit, then send the
-  branch to `almanac:inspector`. Only the inspector pushes, opens the pull
-  request and merges (a hook refuses `git push`, `gh pr create` and
-  `gh pr merge` from anyone else). It reviews the diff; on a pass it
-  pushes, opens the PR, waits on `gh pr checks --watch`, and merges with a merge commit (no squash, so branch commits stay)
-  when CI is green. A red CI is an inspector finding like any other. The
+- After the builders: read their test results, commit, then tell the
+  owner the branch is ready for `/inspect`. Push, open a pull request or
+  merge only inside `/inspect` (a hook refuses `git push`, `gh pr create`
+  and `gh pr merge` from every sub-agent). `/inspect` makes you the
+  inspector: it reviews the diff; on a pass it pushes, opens the PR, waits
+  on `gh pr checks --watch`, and merges with a merge commit (no squash, so
+  branch commits stay) when CI is green. A red CI is an inspector finding
+  like any other. The
   lead runs no tests itself beyond that one re-run: builders test their own function, CI runs
   the full suite.
 - At once: any number of Haiku agents, at most two Sonnet and one Opus. You
@@ -118,7 +120,7 @@ are the method, in the order a task runs.
 - Code work runs as a chain: `almanac:surveyor` first finds the exact files
   (using code_history/code_related), the lead writes one brief per
   function, then `almanac:builder` (or `almanac:handyman`), then the crew
-  reviewer for the diff's language, then `almanac:inspector` (Opus), the
+  reviewer for the diff's language, then `/inspect` (run by the owner), the
   one review that must pass before the merge.
 - Skills for your own work: `almanac:git-workflow` when you branch, commit,
   merge or undo; `almanac:skill-comply` when a skill or agent seems ignored,
@@ -156,12 +158,11 @@ are the method, in the order a task runs.
 - Give an audit to a model that did not write the code, read-only, with the
   questions to answer and the failure modes to look for. It can run while the
   builder writes tests.
-- Inspector loop: when `almanac:inspector` does not pass, group its
-  findings by function and send one builder per function, all in one
-  message, each with its numbered fixes. Commit, then run the inspector again on
-  the new diff; it pushes and reads the new CI result. At most two fix rounds; if
-  it still fails, send the remaining findings to `almanac:architect` and
-  tell the owner.
+- Inspector loop: when `/inspect` does not pass, it sends its numbered
+  fixes to `almanac:planner`, then one builder per function, all in one
+  message. Commit, then review the new diff again; on a pass it pushes and
+  reads the new CI result. At most two fix rounds; if it still fails, send
+  the remaining findings to `almanac:architect` and tell the owner.
 - Turn what an audit finds into a numbered list of fixes, each with the fix
   you chose, and send that to the builder. Do not forward a report and hope.
 

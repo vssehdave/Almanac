@@ -66,7 +66,7 @@ Map intent and scope to what is installed:
 | Refactor | `almanac:handyman`, `almanac:builder` | `orch-refine-code` |
 | Research | `almanac:surveyor` | `search-first`, `iterative-retrieval` |
 | Testing | `almanac:tdd-guide` | `python-testing` |
-| Review | `almanac:lean-review`, `almanac:inspector` | its safety checks |
+| Review | `almanac:lean-review`, `/inspect` | its safety checks |
 
 Add language skills by stack (for example `python-testing` for Python) and
 `almanac:lean-review` on the diff.
