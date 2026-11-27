@@ -66,10 +66,10 @@ Map intent and scope to what is installed:
 | Refactor | `almanac:handyman`, `almanac:builder` | `orch-refine-code` |
 | Research | `almanac:surveyor` | `search-first`, `iterative-retrieval` |
 | Testing | `almanac:tdd-guide` | `python-testing` |
-| Review | crew:code-reviewer, `almanac:inspector` | crew:security-review |
+| Review | `almanac:lean-review`, `almanac:inspector` | its safety checks |
 
 Add language skills by stack (for example `python-testing` for Python) and
-crew:code-reviewer for the language of the diff.
+`almanac:lean-review` on the diff.
 
 ### Phase 4: Missing context detection
 
@@ -112,7 +112,7 @@ if you want execution instead of prompt optimization."
 Draft: "add login to the app". Diagnosis: no stack, no acceptance criteria, no
 scope boundary, and login touches a security trigger. The rewrite names the
 detected stack, lists acceptance criteria (valid login, invalid login, lockout),
-routes through `orch-add-feature`, calls for crew:security-review, and says
+routes through `orch-add-feature`, calls for the safety checks of `almanac:lean-review`, and says
 what is out of scope (password reset, social login).
 
 ## Related

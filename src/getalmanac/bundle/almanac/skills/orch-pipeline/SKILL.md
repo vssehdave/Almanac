@@ -60,8 +60,8 @@ Each phase hands off; none is done inline by the lead.
   Mechanical multi-file changes go to `almanac:handyman`. Debugging, a bug
   report a builder handed back, or edits that must land in several files at
   once go to `almanac:architect`.
-- **5. Review.** crew:code-reviewer for the language of the diff. If the diff
-  touches a security trigger, also load the crew:security-review skill.
+- **5. Review.** `almanac:lean-review` on the diff. If the diff
+  touches a security trigger, weigh its safety checks first.
 - **6. Commit and gate.** Conventional commits, one per logical chunk. -> GATE 2.
   Then send `almanac:inspector` once, last, on the committed change. It pushes
   and opens the PR.
@@ -86,7 +86,7 @@ falls under the Opus review gate (`memory_review` before use).
 
 ## Security trigger
 
-Load crew:security-review when the diff touches authentication or
+Run the safety checks of `almanac:lean-review` when the diff touches authentication or
 authorization, user-input handling, database queries, file-system paths,
 external API calls, cryptography, or secrets.
 

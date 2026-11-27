@@ -24,4 +24,4 @@ Thin wrapper over `orch-pipeline`.
 2. Classify size first; small features collapse toward 4 -> 5 -> 6.
 3. Research is `memory_search`, then `almanac:surveyor`; plan is `almanac:planner`.
 4. Stop at Gate 1 (plan approval) and Gate 2 (pre-commit); `almanac:inspector` runs once, last.
-5. Load crew:security-review if the feature touches a security trigger.
+5. Run the safety checks of `almanac:lean-review` if the feature touches a security trigger.
