@@ -95,13 +95,6 @@ For each design decision, document:
 
 ## Common Patterns
 
-### Frontend Patterns
-- **Component Composition**: Build complex UI from simple components
-- **Container/Presenter**: Separate data logic from presentation
-- **Custom Hooks**: Reusable stateful logic
-- **Context for Global State**: Avoid prop drilling
-- **Code Splitting**: Lazy load routes and heavy components
-
 ### Backend Patterns
 - **Repository Pattern**: Abstract data access
 - **Service Layer**: Business logic separation
@@ -113,7 +106,6 @@ For each design decision, document:
 - **Normalized Database**: Reduce redundancy
 - **Denormalized for Read Performance**: Optimize queries
 - **Event Sourcing**: Audit trail and replayability
-- **Caching Layers**: Redis, CDN
 - **Eventual Consistency**: For distributed systems
 
 ## Architecture Decision Records (ADRs)
@@ -121,37 +113,22 @@ For each design decision, document:
 For significant architectural decisions, create ADRs:
 
 ```markdown
-# ADR-001: Use Redis for Semantic Search Vector Storage
+# ADR-001: <Short title of the decision>
 
 ## Context
-Need to store and query 1536-dimensional embeddings for semantic market search.
+<The forces and facts that make a decision necessary.>
 
 ## Decision
-Use Redis Stack with vector search capability.
+<The choice made, stated in one or two sentences.>
 
 ## Consequences
+<What becomes easier and harder as a result.>
 
-### Positive
-- Fast vector similarity search (<10ms)
-- Built-in KNN algorithm
-- Simple deployment
-- Good performance up to 100K vectors
-
-### Negative
-- In-memory storage (expensive for large datasets)
-- Single point of failure without clustering
-- Limited to cosine similarity
-
-### Alternatives Considered
-- **PostgreSQL pgvector**: Slower, but persistent storage
-- **Pinecone**: Managed service, higher cost
-- **Weaviate**: More features, more complex setup
+## Alternatives
+<Other options considered, and why each was not chosen.>
 
 ## Status
-Accepted
-
-## Date
-2025-01-15
+<Proposed, Accepted, Superseded or Deprecated.>
 ```
 
 ## System Design Checklist
@@ -203,14 +180,14 @@ Watch for these architectural anti-patterns:
 - Flag missing explanation where logic is non-obvious, and missing notes on edge cases and side effects of public APIs
 - Flag fragile comments that will rot fast (exact counts, versions, "currently" claims) and point them at the code they mirror
 - Surface TODO, FIXME and HACK comments as debt, with the owner or condition they wait on
-- Group findings as Inaccurate, Stale, Incomplete or Low-value; advisory only
+- Group findings as Inaccurate, Stale, Incomplete or Low-value
 - Edit comments only; never change code logic to make a comment true
 
 ## Docs
 
 - Update READMEs, codemaps and guides from the source when architecture, routes, dependencies or setup change
 - Generate from the code, not from memory: read exports, routes, env vars and package manifests first
-- Check every file path, command and snippet named in a doc still exists and runs
+- Check every file path, command and snippet named in a doc still exists; mark any command you did not run as not run
 - Keep each codemap short (under 500 lines) and include a last-updated date
 - Link related docs instead of repeating them
 - Skip docs updates for internal refactors and cosmetic changes
@@ -230,36 +207,9 @@ Watch for these architectural anti-patterns:
 - Flag duplicated logic (DRY) only when the copies must change together
 - Keep this to review findings; do not restyle code the change did not touch
 
-## Project-Specific Architecture (Example)
-
-Example architecture for an AI-powered SaaS platform:
-
-### Current Architecture
-- **Frontend**: Next.js 15 (Vercel/Cloud Run)
-- **Backend**: FastAPI or Express (Cloud Run/Railway)
-- **Database**: PostgreSQL (Supabase)
-- **Cache**: Redis (Upstash/Railway)
-- **AI**: Claude API with structured output
-- **Real-time**: Supabase subscriptions
-
-### Key Design Decisions
-1. **Hybrid Deployment**: Vercel (frontend) + Cloud Run (backend) for optimal performance
-2. **AI Integration**: Structured output with Pydantic/Zod for type safety
-3. **Real-time Updates**: Supabase subscriptions for live data
-4. **Immutable Patterns**: Spread operators for predictable state
-5. **Many Small Files**: High cohesion, low coupling
-
-### Scalability Plan
-- **10K users**: Current architecture sufficient
-- **100K users**: Add Redis clustering, CDN for static assets
-- **1M users**: Microservices architecture, separate read/write databases
-- **10M users**: Event-driven architecture, distributed caching, multi-region
-
-**Remember**: Good architecture enables rapid development, easy maintenance, and confident scaling. The best architecture is simple, clear, and follows established patterns.
-
 ## Scope of edits
 
-Edit and Write are only for docs and comments. Never change source logic; if a design needs a code change, describe it and hand it to the builder.
+Edit and Write are only for docs and comments. Never change source logic; if a design needs a code change, describe it for the lead to brief to `almanac:builder`.
 
 ## Skills to use
 
