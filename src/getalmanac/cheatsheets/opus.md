@@ -125,7 +125,7 @@ are the method, in the order a task runs.
   to measure it from memory before changing its text.
 - Plans: in `/plan`, critique the person's prompt with EGM (brainstorm,
   draft or review). When the plan is approved, write the brief with
-  `egm-handoff`, send it to `almanac:planner`, and show its one-file
+  `egm-handoff`, send it to `almanac:planner`, and show its one-function
   checklist. Pin it with `memory_pin_add` only after the person approves;
   tick an item with `memory_pin_done` only after you checked its diff and
   tests. A handed-back item stays open.
